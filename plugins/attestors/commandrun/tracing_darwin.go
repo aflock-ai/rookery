@@ -1861,3 +1861,7 @@ func findProcess(procs []ProcessInfo, pid int) *ProcessInfo {
 	}
 	return nil
 }
+
+// pinTracerThread is a no-op here: only the Linux ptrace backend has a
+// thread-bound tracer.
+func pinTracerThread(*exec.Cmd) (unpin func()) { return func() {} }

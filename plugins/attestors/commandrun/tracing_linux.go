@@ -19,6 +19,7 @@ package commandrun
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -58,6 +59,14 @@ type ptraceContext struct {
 	// execRecorded marks pids whose current record already describes a
 	// successful exec.
 	execRecorded map[int]bool
+	// reaped marks tids whose exit the trace loop has waited for. Their ids
+	// are free for the kernel to reuse, so killTracees must never signal
+	// them.
+	reaped map[int]bool
+	// seen marks every tid a wait in the trace loop has reported, recorded
+	// or not. A tid whose stop the loop consumed and never resumed is
+	// reported no more, so killTracees can only reach it through this set.
+	seen map[int]bool
 
 	// fsVerityState is the opportunistic fs-verity sealing state for
 	// the trace. Set by runCmd before tracing starts when
@@ -219,6 +228,22 @@ func enableTracing(_ *exec.Cmd, _ ...bool) {
 	// WITHOUT PTRACE_TRACEME, ran untraced to completion, and runTrace then
 	// hit ESRCH on the reaped pid ("attestor command-run failed: no such
 	// process") in every unprivileged container.
+}
+
+// pinTracerThread locks the calling goroutine to its OS thread when c will
+// start under PTRACE_TRACEME, and returns the unlock. Call it before
+// c.Start() and unlock after the trace. A TRACEME child is traced by the
+// THREAD that forked it, and the kernel accepts ptrace requests for it from
+// that thread only (ptrace_check_attach: child->parent == current). Unpinned,
+// the scheduler could move the goroutine between the fork and runTrace's own
+// lock; every request then failed with ESRCH and the child was left in
+// ptrace-stop (#10481). syscall.SysProcAttr.Ptrace documents the same rule.
+func pinTracerThread(c *exec.Cmd) (unpin func()) {
+	if c.SysProcAttr == nil || !c.SysProcAttr.Ptrace {
+		return func() {}
+	}
+	runtime.LockOSThread()
+	return runtime.UnlockOSThread
 }
 
 // configureTraceeForMode is the single place the child's ptrace flag is
@@ -434,6 +459,10 @@ func (r *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([
 	err := pctx.runTrace()
 	r.ptraceSyscallStopsLost = pctx.syscallStopsLost
 	if err != nil {
+		// runCmd waits on the child next. A tracee left in ptrace-stop
+		// would hold that wait forever, and a half-traced build is no
+		// record to keep running for.
+		pctx.killTracees()
 		return nil, err
 	}
 
@@ -467,6 +496,12 @@ func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loo
 	if p.pendingExec == nil {
 		p.pendingExec = make(map[int]string)
 	}
+	// Only the thread that forked the tracee may send it requests. Say so
+	// by name rather than let the first request fail with a bare ESRCH.
+	if tracer, self := tracerPidOf(p.parentPid), unix.Gettid(); tracer != self {
+		return fmt.Errorf("ptrace: tracer thread %d is not the tracee's tracer (TracerPid %d); "+
+			"the command was started from another thread", self, tracer)
+	}
 
 	if err := unix.PtraceSetOptions(p.parentPid, unix.PTRACE_O_TRACESYSGOOD|unix.PTRACE_O_TRACEEXEC|unix.PTRACE_O_TRACEEXIT|unix.PTRACE_O_TRACEVFORK|unix.PTRACE_O_TRACEFORK|unix.PTRACE_O_TRACECLONE); err != nil {
 		return err
@@ -486,6 +521,12 @@ func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loo
 		if err != nil {
 			return err
 		}
+		p.markSeen(pid)
+		if ptraceLoopFault != nil {
+			if err := ptraceLoopFault(pid, p.tracedPids()); err != nil {
+				return err
+			}
+		}
 		// Record per-process exit code on the matching ProcessInfo so
 		// downstream policy can see which traced child exited with what.
 		// Issue #47: previously only the parent's exit was captured at
@@ -498,6 +539,7 @@ func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loo
 				p.exitCode = status.ExitStatus()
 				return nil
 			}
+			p.markReaped(pid)
 			continue
 		}
 		if status.Signaled() {
@@ -508,6 +550,7 @@ func (p *ptraceContext) runTrace() error { //nolint:gocognit // ptrace event loo
 				p.exitCode = 128 + int(status.Signal())
 				return nil
 			}
+			p.markReaped(pid)
 			continue
 		}
 
@@ -1411,6 +1454,131 @@ func (ctx *ptraceContext) readSyscallReg(pid int, addr uintptr, n int) (string, 
 
 func cleanString(s string) string {
 	return strings.TrimSpace(strings.ReplaceAll(s, "\x00", " "))
+}
+
+func (p *ptraceContext) markReaped(tid int) {
+	if p.reaped == nil {
+		p.reaped = make(map[int]bool)
+	}
+	p.reaped[tid] = true
+}
+
+// ptraceLoopFault, when set, runs after every wait in runTrace's loop with the
+// pid that wait reported and the pids the trace has recorded, and an error it
+// returns ends the trace there, leaving the reported pid in its stop. It is nil
+// in production; tests use it to fail a trace after its options are installed
+// and its tracees are running.
+var ptraceLoopFault func(reported int, known []int) error
+
+// tracedPids returns the root and every pid the trace has a record for.
+func (p *ptraceContext) tracedPids() []int {
+	pids := []int{p.parentPid}
+	for pid := range p.processes {
+		if pid != p.parentPid {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// killTracees SIGKILLs everything the trace still holds, so no tracee is left
+// in ptrace-stop when runTrace fails: the root's process group (runCmd makes
+// the root a group leader), the root itself, and every tid the trace recorded
+// and has not reaped. An unreaped tracee's id cannot have been reused, so this
+// never signals a stranger. Kill errors are ignored: ESRCH means the target is
+// already gone.
+//
+// Killing is not the end of it. With PTRACE_O_TRACEEXIT a killed tracee stops
+// at PTRACE_EVENT_EXIT, which do_exit reaches BEFORE it closes the task's
+// files, so it keeps the command's stdout pipe open until the tracer resumes
+// it; and a dead tracee that is not cilock's own child stays a zombie until the
+// tracer reaps it. So the kill is followed by a drain (drainTracees).
+func (p *ptraceContext) killTracees() {
+	_ = unix.Kill(-p.parentPid, unix.SIGKILL)
+	_ = unix.Kill(p.parentPid, unix.SIGKILL)
+	// Recorded tids, and every tid the loop saw even if it never recorded
+	// it: a descendant in another session escapes the group kill, and one
+	// left at a consumed stop is never reported again.
+	for _, tids := range []map[int]bool{p.seen, p.processTids()} {
+		for tid := range tids {
+			if !p.reaped[tid] {
+				_ = unix.Kill(tid, unix.SIGKILL)
+			}
+		}
+	}
+	p.drainTracees(time.Now().Add(tracerDrainBound))
+}
+
+func (p *ptraceContext) markSeen(tid int) {
+	if p.seen == nil {
+		p.seen = make(map[int]bool)
+	}
+	p.seen[tid] = true
+}
+
+func (p *ptraceContext) processTids() map[int]bool {
+	tids := make(map[int]bool, len(p.processes))
+	for tid := range p.processes {
+		tids[tid] = true
+	}
+	return tids
+}
+
+// tracerDrainBound caps drainTracees. A killed tracee reports within
+// milliseconds; the bound exists so the cleanup of a failed trace can never
+// itself become a hang.
+const tracerDrainBound = 5 * time.Second
+
+// drainTracees reaps the tracees killTracees killed, resuming any that reports
+// a stop (its PTRACE_EVENT_EXIT stop, or the first stop of a tid forked during
+// the kill, which is killed too) so it can finish dying. It runs until there
+// is nothing left to wait for (ECHILD) or the deadline, never merely until the
+// tids it knows are gone: a tid forked while the kill was in flight is known
+// to no one until it reports. Reaping the root here leaves runCmd's c.Wait()
+// to find it gone, exactly as after a normal trace, whose loop reaps the root
+// too. Like that loop it waits on any child: the only children cilock has
+// during a trace are the command and, through ptrace, its descendants.
+func (p *ptraceContext) drainTracees(deadline time.Time) {
+	for time.Now().Before(deadline) {
+		var status unix.WaitStatus
+		pid, err := unix.Wait4(-1, &status, unix.WALL|unix.WNOHANG, nil)
+		switch {
+		case errors.Is(err, unix.EINTR):
+			continue
+		case err != nil:
+			return // ECHILD: nothing traced or unreaped remains
+		case pid == 0:
+			time.Sleep(time.Millisecond)
+			continue
+		}
+		if status.Stopped() {
+			// A stop reported after the kill: EVENT_EXIT, or a tid that
+			// was forked while the kill was in flight. Kill it (a no-op
+			// for one already dying) and let it run to its death.
+			_ = unix.Kill(pid, unix.SIGKILL)
+			_ = unix.PtraceCont(pid, 0)
+			continue
+		}
+		// Exited or signalled: reaped.
+		p.markReaped(pid)
+	}
+}
+
+// tracerPidOf returns the TracerPid in /proc/<pid>/status, or -1 when it
+// cannot be read, which never equals a tid.
+func tracerPidOf(pid int) int {
+	status, err := os.ReadFile(fmt.Sprintf("/proc/%d/status", pid)) //nolint:gosec // G304: reading /proc/<pid>/status
+	if err != nil {
+		return -1
+	}
+	for _, line := range strings.Split(string(status), "\n") {
+		if v, ok := strings.CutPrefix(line, "TracerPid:"); ok {
+			if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+				return n
+			}
+		}
+	}
+	return -1
 }
 
 func getPPIDFromStatus(status []byte) (int, error) {

@@ -106,6 +106,26 @@ func runAutoTracedWithin(t *testing.T, dir string, argv []string, d time.Duratio
 	return rc, err, errors.Is(ctx.Err(), context.DeadlineExceeded)
 }
 
+// A command that never exits must come back as a timeout within the bound,
+// not hold the test binary to go test's 30-minute alarm.
+func TestAutoTracedDeadlineKillsAHungCommand(t *testing.T) {
+	forceEBPFUnavailable(t)
+	t.Setenv(EnvVarTraceMode, "")
+	t.Setenv(EnvVarFanotify, "off")
+	sleep, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no sleep")
+	}
+	start := time.Now()
+	_, _, timedOut := runAutoTracedWithin(t, t.TempDir(), []string{sleep, "3600"}, 2*time.Second)
+	if !timedOut {
+		t.Fatal("a command that never exits was not reported as timed out")
+	}
+	if took := time.Since(start); took > 45*time.Second {
+		t.Fatalf("the deadline fired after %s; the kill did not unblock the wait", took)
+	}
+}
+
 func copyExecutable(t *testing.T, name, dstDir string) string {
 	t.Helper()
 	src, err := exec.LookPath(name)
@@ -137,6 +157,96 @@ func findProgram(rc *CommandRun, base string) *ProcessInfo {
 		}
 	}
 	return nil
+}
+
+// TestAutoFallbackToPtraceTracesTheTree is the customer shape: default
+// CILOCK_TRACE_MODE (auto), no eBPF, fanotify off. Before the fix the child
+// was never put under ptrace and the attestor failed with ESRCH.
+func TestAutoFallbackToPtraceTracesTheTree(t *testing.T) {
+	forceEBPFUnavailable(t)
+	t.Setenv(EnvVarTraceMode, "")
+	t.Setenv(EnvVarFanotify, "off")
+
+	dir := t.TempDir()
+	input := filepath.Join(dir, "input.txt")
+	if err := os.WriteFile(input, []byte("unprivileged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Copy the images we exec into the test dir so their bytes are known and
+	// DISTINCT: a digest of one program recorded against another is the
+	// failure the exec-stop fix exists to prevent.
+	sh := copyExecutable(t, "sh", filepath.Join(dir, "bin"))
+	// sh, cat and ls run from COPIES in the test dir. When that dir is on a
+	// filesystem the kernel owns (tmpfs, ext4), the ptrace backend can claim
+	// a mapped-image digest; measured at execve ENTRY, /proc/<pid>/exe is
+	// still the shell, so the shell's digest would be signed as cat's.
+	catPath := copyExecutable(t, "cat", filepath.Join(dir, "bin"))
+	lsPath := copyExecutable(t, "ls", filepath.Join(dir, "bin"))
+	script := catPath + " " + input + " >/dev/null; " + lsPath + " >/dev/null"
+	rc, err := runAutoTraced(t, dir, []string{sh, "-c", script})
+	if err != nil {
+		t.Fatalf("auto-mode ptrace fallback must trace, not fail: %v", err)
+	}
+	if rc.resolvedTraceBackend != traceModePtrace.String() {
+		t.Fatalf("backend = %q, want %q", rc.resolvedTraceBackend, traceModePtrace.String())
+	}
+
+	for _, want := range []struct {
+		base, path string
+	}{{filepath.Base(sh), sh}, {"cat", catPath}, {"ls", lsPath}} {
+		p := findProgram(rc, want.base)
+		if p == nil {
+			got := make([]string, 0, len(rc.Processes))
+			for i := range rc.Processes {
+				got = append(got, rc.Processes[i].Program)
+			}
+			t.Fatalf("no process for %s; programs=%v", want.base, got)
+		}
+		if len(p.OpenedFiles) == 0 {
+			t.Errorf("%s: no openedfiles recorded", want.base)
+		}
+		if len(p.ExeDigest) == 0 {
+			t.Errorf("%s: no exedigest recorded", want.base)
+			continue
+		}
+		// The recorded image digest must be the digest of THIS program's
+		// bytes (resolved through symlinks, as execve does).
+		real, rerr := filepath.EvalSymlinks(want.path)
+		if rerr != nil {
+			t.Fatal(rerr)
+		}
+		wantHex := fileSHA256(t, real)
+		if got := firstHex(p.ExeDigest); got != wantHex {
+			t.Errorf("%s: exedigest %s (source %q) is not the digest of %s (%s)",
+				want.base, got, p.ExeDigestSource, real, wantHex)
+		}
+		// comm is read from the tracee: it must name the new image, not the
+		// shell that forked it.
+		if want.base != filepath.Base(sh) && p.Comm != want.base {
+			t.Errorf("%s: comm = %q, want the post-exec name", want.base, p.Comm)
+		}
+	}
+	if _, ok := findProgram(rc, "cat").OpenedFiles[input]; !ok {
+		t.Errorf("cat's open of %s was not recorded", input)
+	}
+
+	// Coverage states the tracer and that ptrace + fanotify-off is partial.
+	if rc.Summary == nil || rc.Summary.Coverage == nil {
+		t.Fatal("traced run carries no summary.coverage")
+	}
+	cov := rc.Summary.Coverage
+	if cov.Tracer != traceModePtrace.String() || cov.Complete {
+		t.Errorf("coverage = %+v, want tracer ptrace+seccomp, complete=false", cov)
+	}
+	kinds := map[string]bool{}
+	for _, g := range cov.Gaps {
+		kinds[g.Kind] = true
+	}
+	for _, k := range []string{GapFanotifyDisabled, GapSyscallsUntraced} {
+		if !kinds[k] {
+			t.Errorf("coverage gaps %v missing %q", cov.Gaps, k)
+		}
+	}
 }
 
 // TestRunTraceRefusesAnUntracedRoot: if the child was started WITHOUT ptrace

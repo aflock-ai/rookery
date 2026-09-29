@@ -69,6 +69,12 @@ const (
 // path; production never reassigns it.
 var commandWaitDelay = 30 * time.Second
 
+// afterTraceeStart, when set, runs on runCmd's goroutine between c.Start()
+// and the trace. It is nil in production. The ptrace thread-affinity test
+// uses it to try to move that goroutine off the thread that forked the
+// tracee (#10481).
+var afterTraceeStart func()
+
 // This is a hacky way to create a compile time error in case the attestor
 // doesn't implement the expected interfaces.
 var (
@@ -2757,6 +2763,8 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	r.traceStartTime = time.Now()
 	r.prePaths = snapshotPrePaths(r.traceeWorkdir, r.prewalkSkipDirs, r.prewalkIncludeDirs)
 
+	// Held from the fork until the trace is over (see pinTracerThread).
+	defer pinTracerThread(c)()
 	if err := c.Start(); err != nil {
 		// If eBPF was pre-opened but Start failed, release the consumer.
 		if r.ebpfConsumer != nil {
@@ -2780,6 +2788,9 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 	// a no-op on non-Linux.
 	if r.fanotifySession != nil && c.Process != nil {
 		r.fanotifySession.setBuildPgid(c.Process.Pid)
+	}
+	if afterTraceeStart != nil {
+		afterTraceeStart()
 	}
 
 	var err error

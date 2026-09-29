@@ -167,6 +167,11 @@ func parseHexCapMask(s string) (uint64, error) {
 // probePtrace runs `true` as a child with SysProcAttr.Ptrace=true. If
 // the child stops at exec and Wait4 returns the SIGTRAP, ptrace works.
 func probePtrace(r *probeReport) {
+	// The child is traced by the thread that forks it, and only that thread
+	// may detach it. Unpinned, a migration between Start and PtraceDetach
+	// made the detach fail (ignored) and the deferred Wait hang (#10481).
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
 	cmd := exec.Command("/bin/true")
 	cmd.SysProcAttr = &syscall.SysProcAttr{Ptrace: true}
 	if err := cmd.Start(); err != nil {

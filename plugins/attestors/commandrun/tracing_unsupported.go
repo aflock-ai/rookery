@@ -48,3 +48,7 @@ func (r *CommandRun) preStartTracingSetup(_ *exec.Cmd) error {
 func (rc *CommandRun) trace(c *exec.Cmd, actx *attestation.AttestationContext) ([]ProcessInfo, error) {
 	return nil, errors.New("tracing not supported on this platform")
 }
+
+// pinTracerThread is a no-op here: only the Linux ptrace backend has a
+// thread-bound tracer.
+func pinTracerThread(*exec.Cmd) (unpin func()) { return func() {} }
