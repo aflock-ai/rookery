@@ -66,8 +66,7 @@ demo_step() {
     rm -f "../evidence/$step".json*          # a new run of a step replaces its old receipt
     local cmd=("$CILOCK" run --step "$step"
         -k ../keys/build-machine.key         # the build machine's signing key
-        -a git                               # record the source commit (offline, no platform)
-        --platform-url ""                    # fully offline for the lesson
+        -a git                               # record the source commit
         --material-manifest                  # keep the input file list, needed for artifactsFrom
         -o "../evidence/$step.json"
         -- "$@")
@@ -94,7 +93,6 @@ demo_verify() {
         -p ../policy/policy.signed.json      # the signed rulebook
         -k ../keys/release-team.pub          # who signed the rulebook
         -s "sha1:$(git rev-parse HEAD)"      # the release: this commit
-        --offline
         "${EVIDENCE_ARGS[@]}")
     show_cmd "${cmd[@]}"
     "${cmd[@]}" >../logs/verify.log 2>&1
@@ -158,7 +156,7 @@ REPO_REL=$("$PY" -c 'import os,sys; print(os.path.relpath(sys.argv[1]).replace(o
 
 echo "${B}Build receipts with cilock: a small desktop app, checked before release${RS}"
 note "Working folder: $WORK"
-note "Compiler: $CC. Nothing in this lesson talks to the network."
+note "Compiler: $CC. cilock contacts a public timestamp server (TSA); nothing is uploaded."
 
 say "Step 0. The release team writes the policy (we call it the rulebook). Three rules:"
 note "1. The build ran and finished cleanly."
@@ -170,7 +168,7 @@ note "tools/make_policy.py puts the three rules and the build machine's public k
 run "$PY" "$LESSON_DIR/tools/make_policy.py" ../keys/build-machine.pub ../policy/policy.json
 run "$CILOCK" policy validate -p ../policy/policy.json
 say "The release team signs the policy, so nobody can change it quietly."
-run "$CILOCK" sign --offline -k ../keys/release-team.key -f ../policy/policy.json -o ../policy/policy.signed.json
+run "$CILOCK" sign -k ../keys/release-team.key -f ../policy/policy.json -o ../policy/policy.signed.json
 
 say "Step 1. Build, test, package. Each existing command is prefixed with 'cilock run --step <name> ... --'."
 demo_step build   "$CC" app/photo_lite.c -o "$BIN"

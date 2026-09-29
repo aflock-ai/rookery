@@ -1,6 +1,7 @@
 # Lesson 000: build receipts, and how to get a policy right
 
-Two parts, about 15 minutes, fully offline.
+Two parts, about 15 minutes. Runs on your machine; the only network use is cilock fetching a signed
+timestamp from a public timestamp server (TSA). Nothing is uploaded.
 
 - **Part 1:** a small desktop app goes through build, test and package. Every step leaves a signed receipt. One
   `cilock verify` before release answers **PASS** or **BLOCKED**, with the reason.
@@ -69,20 +70,20 @@ helpers that print and run these commands with the lesson's paths; they are not 
 # The rulebook: rules/*.rego plus the build machine's public key, validated and signed.
 python3 tools/make_policy.py keys/build-machine.pub policy/policy.json
 cilock policy validate -p policy/policy.json
-cilock sign --offline -k keys/release-team.key -f policy/policy.json -o policy/policy.signed.json
+cilock sign -k keys/release-team.key -f policy/policy.json -o policy/policy.signed.json
 
 # Receipts: each existing command is prefixed with `cilock run --step <name> ... --`.
-cilock run --step build   -k keys/build-machine.key -a git --platform-url "" --material-manifest \
+cilock run --step build   -k keys/build-machine.key -a git --material-manifest \
     -o evidence/build.json   -- cc app/photo_lite.c -o photo-lite
-cilock run --step test    -k keys/build-machine.key -a git --platform-url "" --material-manifest \
+cilock run --step test    -k keys/build-machine.key -a git --material-manifest \
     -o evidence/test.json    -- ./photo-lite
-cilock run --step package -k keys/build-machine.key -a git --platform-url "" --material-manifest \
+cilock run --step package -k keys/build-machine.key -a git --material-manifest \
     -o evidence/package.json -- tar czf photo-lite.tar.gz photo-lite
 
 # The check. Exit 0 is PASS; anything else is BLOCKED and the log says which step and rule.
 cilock verify photo-lite.tar.gz \
     -p policy/policy.signed.json -k keys/release-team.pub \
-    -s "sha1:$(git rev-parse HEAD)" --offline \
+    -s "sha1:$(git rev-parse HEAD)" \
     -a evidence/build.json -a evidence/test.json -a evidence/package.json
 ```
 

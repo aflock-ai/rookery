@@ -46,7 +46,7 @@ COMMIT=$(git rev-parse HEAD)
 fixture_step() {
     local fx=$1 name=$2; shift 2
     mkdir -p "$T/fixtures/$fx"
-    "$CILOCK" run --step "$name" -k "$T/keys/build-machine.key" -a git --platform-url "" \
+    "$CILOCK" run --step "$name" -k "$T/keys/build-machine.key" -a git \
         --material-manifest -o "$T/fixtures/$fx/$name.json" -- "$@" >/dev/null 2>&1
 }
 fixture_done() { cp photo-lite.tar.gz "$T/fixtures/$1/"; rm -f "$BIN" photo-lite.tar.gz; }
@@ -85,7 +85,7 @@ round() {
     "$PY" "$LESSON_DIR/tools/make_policy.py" "$T/keys/build-machine.pub" "$dir/policy.json" "$@"
     "$CILOCK" policy validate -p "$dir/policy.json" >"$dir/validate.log" 2>&1
     FINDINGS=$(grep -cE '^ +[0-9]+\. ' "$dir/validate.log")
-    "$CILOCK" sign --offline -k "$T/keys/release-team.key" -f "$dir/policy.json" \
+    "$CILOCK" sign -k "$T/keys/release-team.key" -f "$dir/policy.json" \
         -o "$dir/policy.signed.json" >/dev/null 2>&1
     CORRECT=0
     for fx in good swapped skipped failed; do
@@ -94,7 +94,7 @@ round() {
             case $f in *-material-inventory.json|*.detection.json) ;; *) att+=(-a "$f") ;; esac
         done
         if "$CILOCK" verify "$T/fixtures/$fx/photo-lite.tar.gz" -p "$dir/policy.signed.json" \
-            -k "$T/keys/release-team.pub" -s "sha1:$COMMIT" --offline "${att[@]}" \
+            -k "$T/keys/release-team.pub" -s "sha1:$COMMIT" "${att[@]}" \
             >"$dir/verify-$fx.log" 2>&1; then got=PASS; else got=BLOCKED; fi
         want=$(expected "$fx")
         [[ $got == "$want" ]] && CORRECT=$((CORRECT + 1))
