@@ -1095,22 +1095,11 @@ func deriveStepName(path string) string {
 // never an undefined comparison that denies nothing. RegoV0, as the verifier
 // parses it.
 var commandRunSucceededRego = policy.RegoPolicy{
-	Name: "command-succeeded",
-	Module: []byte(`package commandrun_succeeded
-
-readable_exit { is_number(input.exitcode) }
-
-deny[msg] {
-	not readable_exit
-	msg := "unreadable evidence: command-run has no numeric exitcode"
-}
-
-deny[msg] {
-	readable_exit
-	input.exitcode != 0
-	msg := sprintf("wrapped command exited %v, not 0", [input.exitcode])
-}
-`),
+	Name: ruleCommandSucceeded,
+	// The module is the authoring catalog's (policy_rules.go), so the
+	// rule from-bundles seeds and the one template seeds cannot drift, and
+	// it reads the predicate through the attestationsFrom-wrapped input too.
+	Module: []byte(commandSucceededModule),
 }
 
 // govulncheckReachableRego is attached to every govulncheck attestation a
@@ -1124,58 +1113,11 @@ deny[msg] {
 // already guarded: an undefined field inside sprintf makes the whole rule
 // undefined, which silently drops the denial. RegoV0, as the verifier parses it.
 var govulncheckReachableRego = policy.RegoPolicy{
-	Name: "govulncheck-no-reachable",
-	Module: []byte(`package govulncheck_no_reachable
-
-findings = [] { input.summary.findings == null }
-
-findings = fs {
-	is_array(input.summary.findings)
-	fs := input.summary.findings
-}
-
-readable {
-	is_number(input.summary.reachableCount)
-	is_number(input.summary.unreachableCount)
-	input.summary.reachableCount >= 0
-	input.summary.unreachableCount >= 0
-	input.summary.scanLevel == "symbol"
-	is_array(findings)
-}
-
-flagged(f) { is_boolean(f.reachable) }
-
-deny[msg] {
-	not readable
-	msg := "unreadable evidence: govulncheck needs a symbol-level scan with numeric counts and a findings list"
-}
-
-deny[msg] {
-	readable
-	input.summary.reachableCount > 0
-	msg := sprintf("govulncheck: %v vulnerabilities reachable from this code", [input.summary.reachableCount])
-}
-
-deny[msg] {
-	readable
-	f := findings[_]
-	not flagged(f)
-	msg := "unreadable evidence: a govulncheck finding has no reachable flag"
-}
-
-deny[msg] {
-	readable
-	f := findings[_]
-	f.reachable == true
-	msg := sprintf("govulncheck: %v is reachable from this code", [object.get(f, "osvId", "a finding with no osvId")])
-}
-
-deny[msg] {
-	readable
-	count(findings) != input.summary.reachableCount + input.summary.unreachableCount
-	msg := "inconsistent evidence: govulncheck counts disagree with its findings list"
-}
-`),
+	Name: ruleGovulncheckReachable,
+	// The module is the authoring catalog's (policy_rules.go), so the
+	// rule from-bundles seeds and the one template seeds cannot drift, and
+	// it reads the predicate through the attestationsFrom-wrapped input too.
+	Module: []byte(govulncheckReachableModule),
 }
 
 // checkInventoryGaps decides what a missing file inventory costs. One step has

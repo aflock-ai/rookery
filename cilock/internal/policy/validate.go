@@ -195,6 +195,11 @@ func ValidateRawPolicy(ctx context.Context, policyJSON []byte) *ValidationResult
 	return result
 }
 
+// FillSlotMarker opens every place in a `cilock policy template` draft the
+// author still has to fill. A slot is only this string prefix: a hand-written
+// draft that uses it is treated the same way.
+const FillSlotMarker = "__FILL__"
+
 func validatePolicyContent(policy *policyDocument, result *ValidationResult) {
 	validatePolicySchema(policy, result)
 	validateExpiration(policy, result)
