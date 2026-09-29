@@ -1,0 +1,10 @@
+name = "cilock-ci"
+version = "0.1.0"
+defaultTargets = ["CilockCi", "cilock-ci-eval"]
+
+[[lean_lib]]
+name = "CilockCi"
+
+[[lean_exe]]
+name = "cilock-ci-eval"
+root = "Main"
