@@ -12,11 +12,11 @@ No supply-chain background needed.
 
 ## Watch first
 
-A 4.5-minute explainer covers both parts, with subtitles:
+A 5.5-minute explainer covers both parts, with subtitles:
 
 - [Explainer video, subtitled](https://github.com/aflock-ai/cilock-training/raw/main/media/cilock-build-receipts-explainer.mp4)
 - [Explainer video, narrated and subtitled](https://github.com/aflock-ai/cilock-training/raw/main/media/cilock-build-receipts-explainer-narrated.mp4)
-- [Slides (HTML)](https://github.com/aflock-ai/cilock-training/blob/main/media/cilock-build-receipts-slides.html), [slides (PDF)](https://github.com/aflock-ai/cilock-training/raw/main/media/cilock-build-receipts-slides.pdf), [one-page summary (PDF)](https://github.com/aflock-ai/cilock-training/raw/main/media/cilock-build-receipts-onepager.pdf)
+- [slides (HTML, download and open in a browser)](https://github.com/aflock-ai/cilock-training/raw/main/media/cilock-build-receipts-slides.html), [slides (PDF)](https://github.com/aflock-ai/cilock-training/raw/main/media/cilock-build-receipts-slides.pdf), [one-page summary (PDF)](https://github.com/aflock-ai/cilock-training/raw/main/media/cilock-build-receipts-onepager.pdf)
 
 Commands, verdicts and timings on screen come from a real run of this lesson on Linux. The policy iteration table
 comes from part 2's harness. The media lives in
