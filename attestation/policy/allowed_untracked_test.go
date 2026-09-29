@@ -17,6 +17,7 @@ package policy
 
 import (
 	"context"
+	"path"
 	"strings"
 	"testing"
 
@@ -279,6 +280,19 @@ func TestMatchAllowedUntracked(t *testing.T) {
 		// Character classes / alternation behave as gobwas documents.
 		{"/opt/{a,b}/**", "/opt/b/tool", true},
 		{"/opt/{a,b}/**", "/opt/c/tool", false},
+		// The literals on either side of '**' never share bytes. gobwas let
+		// them overlap, so "a**a" admitted "a" and "vendor/**/x.go" admitted
+		// "vendor/x.go" (while "vendor/**/*.go" refused "vendor/a.go").
+		{"a**a", "a", false},
+		{"a**a", "aa", true},
+		{"/**/", "/", false},
+		{"vendor/**/x.go", "vendor/x.go", false},
+		{"vendor/**/x.go", "vendor/a/x.go", true},
+		{"vendor/**/*.go", "vendor/a.go", false},
+		{"vendor/**x.go", "vendor/x.go", true},
+		// '?' is one rune and never the separator.
+		{"?", "é", true},
+		{"a?b", "a/b", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.pattern+"|"+tc.path, func(t *testing.T) {
@@ -294,6 +308,95 @@ func TestMatchAllowedUntracked(t *testing.T) {
 		assert.False(t, m.matches("anything"))
 		assert.False(t, m.matches(""))
 	})
+}
+
+// refUntrackedGlob is the allowedUntracked glob semantics written as a direct
+// recursive definition (the cilock-policy Lean model's untrackedAllowed): '**'
+// is any run of runes, '*' any run without '/', '?' one rune other than '/',
+// anything else itself. Tokens are read left to right, "**" before "*".
+func refUntrackedGlob(pat, v []rune) bool {
+	if len(pat) == 0 {
+		return len(v) == 0
+	}
+	switch {
+	case len(pat) >= 2 && pat[0] == '*' && pat[1] == '*':
+		for i := 0; i <= len(v); i++ {
+			if refUntrackedGlob(pat[2:], v[i:]) {
+				return true
+			}
+		}
+		return false
+	case pat[0] == '*':
+		for i := 0; i <= len(v); i++ {
+			if refUntrackedGlob(pat[1:], v[i:]) {
+				return true
+			}
+			if i < len(v) && v[i] == '/' {
+				return false
+			}
+		}
+		return false
+	case pat[0] == '?':
+		return len(v) > 0 && v[0] != '/' && refUntrackedGlob(pat[1:], v[1:])
+	default:
+		return len(v) > 0 && v[0] == pat[0] && refUntrackedGlob(pat[1:], v[1:])
+	}
+}
+
+// TestAllowedUntrackedMatchesReference enumerates every pattern of up to four
+// tokens over {a, b, *, **, ?, /} against every clean path of up to five
+// characters over {a, b, /} and holds the matcher to refUntrackedGlob. It is
+// the adversarial form of the overlap cases above: gobwas failed it on "a**a"
+// against "a" and on "/**/" against "/", both admitting a path the pattern
+// does not describe.
+func TestAllowedUntrackedMatchesReference(t *testing.T) {
+	tokens := []string{"a", "b", "*", "**", "?", "/"}
+	var pats []string
+	seen := map[string]bool{}
+	var grow func(prefix string, n int)
+	grow = func(prefix string, n int) {
+		if prefix != "" && !seen[prefix] {
+			seen[prefix] = true
+			pats = append(pats, prefix)
+		}
+		if n == 0 {
+			return
+		}
+		for _, tok := range tokens {
+			grow(prefix+tok, n-1)
+		}
+	}
+	grow("", 4)
+	var vals []string
+	var grow2 func(prefix string, n int)
+	grow2 = func(prefix string, n int) {
+		if prefix != "" && path.Clean(prefix) == prefix {
+			vals = append(vals, prefix)
+		}
+		if n == 0 {
+			return
+		}
+		for _, c := range []string{"a", "b", "/"} {
+			grow2(prefix+c, n-1)
+		}
+	}
+	grow2("", 5)
+
+	mismatches := 0
+	for _, p := range pats {
+		m, err := compileAllowedUntracked([]string{p})
+		require.NoError(t, err, p)
+		for _, v := range vals {
+			want := refUntrackedGlob([]rune(p), []rune(v))
+			if got := m.matches(v); got != want {
+				mismatches++
+				if mismatches <= 20 {
+					t.Errorf("pattern %q path %q: matcher %v, reference %v", p, v, got, want)
+				}
+			}
+		}
+	}
+	t.Logf("%d patterns x %d paths, %d mismatches", len(pats), len(vals), mismatches)
 }
 
 // TestStepAllowsUntracked pins the exported probe to the verifier's matcher.

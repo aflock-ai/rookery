@@ -77,7 +77,7 @@ def injected : Envelope :=
     material and the chain passes (the pre-#9862 behaviour). A glob in
     `allowedUntracked` excuses it, and `*` stays inside one path segment.
     -- cite: attestation/policy/step.go:70-77 sha256:556edead02680ff85bcbf7b05ca1fdd18be3f2f29bd7026bf3d3f40c3615b742
-    -- cite: attestation/policy/allowed_untracked.go:137-156 sha256:fd50a952b4fd8d99f65804bca12b9c6b4c03b3e360e70b4691a25edfadfc9606
+    -- cite: attestation/policy/allowed_untracked.go:143-162 sha256:fd50a952b4fd8d99f65804bca12b9c6b4c03b3e360e70b4691a25edfadfc9606
     -- cite: attestation/policy/policy.go:2634-2636 sha256:93112d8f7b6e5a90b7d93151f030f13f2f75ed13bbc40f22787a289769c61b85
     -/
 def allowPol (g : String) : Policy :=
@@ -92,13 +92,36 @@ theorem v6_untracked_material :
     verifyFixed rego regoExt .enforce (allowPol "/*") opts [srcEnv, injected] = false := by decide
 
 /-- The model's `**` needs its literal neighbours on both sides: `a**a`
-    does not excuse the path `a`. The engine's gobwas matcher does
-    (it lets a literal prefix and suffix overlap, the defect #9867 removed for
-    certificate globs by moving them to RE2), so on this input the engine
-    admits more than the pattern says. `TestFormalDifferentialGlobs` pins the
-    divergence; it fails when the engine is fixed. -/
+    does not excuse the path `a`. The engine's gobwas matcher used to (it
+    let a literal prefix and suffix overlap); allowedUntracked now matches
+    through the RE2 translation cert constraints use, and
+    `TestFormalDifferentialGlobs` holds it to this answer. -/
 theorem v6_overlap_not_allowed :
     untrackedAllowed { buildStep with allowedUntracked := ["a**a"] } "a" = false := by decide
+
+/-- The RE2 translation's answers on the cases the gobwas matcher got wrong
+    or that the old model left unspecified, each checked by `decide` against
+    the full grammar (`sepGlob`, Verify.lean): the literals around `**` never
+    overlap (`vendor/**/x.go` does not excuse `vendor/x.go`, while
+    `vendor/**/*.go` excuses `vendor/a/b.go`); a run of three `*` is `**`; a
+    class ignores the separator (`[!a]` admits `/`); braces expand, and a
+    `}` or `,` outside braces is a literal. -/
+theorem v6_re2_grammar :
+    sepGlob "vendor/**/x.go" "vendor/x.go" = false ∧
+    sepGlob "vendor/**/x.go" "vendor/a/x.go" = true ∧
+    sepGlob "vendor/**/*.go" "vendor/a/b.go" = true ∧
+    sepGlob "vendor/*.go" "vendor/a/b.go" = false ∧
+    sepGlob "a***" "a" = true ∧
+    sepGlob "a***" "a/b/c" = true ∧
+    sepGlob "[!a]" "/" = true ∧
+    sepGlob "?" "/" = false ∧
+    sepGlob "{a,b}/*" "b/c" = true ∧
+    sepGlob "{a,b}/*" "c/c" = false ∧
+    sepGlob "{a,{b,c}}" "c" = true ∧
+    sepGlob "a}," "a}," = true ∧
+    sepGlob "cilock{,.exe}" "cilock.exe" = true ∧
+    sepGlob "\\*" "*" = true ∧
+    sepGlob "\\*" "a" = false := by decide
 
 /-- requireAll is the reverse direction and does hold: every upstream artifact
     must be consumed. -/

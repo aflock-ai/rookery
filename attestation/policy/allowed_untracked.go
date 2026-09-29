@@ -17,6 +17,7 @@ package policy
 import (
 	"fmt"
 	"path"
+	"regexp"
 	"sort"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -26,32 +27,49 @@ import (
 
 // allowedUntrackedMatcher is the compiled form of Step.AllowedUntracked.
 //
-// Semantics (pinned by TestMatchAllowedUntracked):
-//   - each pattern is a gobwas/glob compiled with '/' as the separator, so '*'
-//     stays inside one path segment and '**' crosses segments;
+// Semantics (pinned by TestMatchAllowedUntracked and, over every short pattern
+// and path, TestAllowedUntrackedMatchesReference):
+//   - each pattern is a gobwas/glob with '/' as the separator, so '*' stays
+//     inside one path segment and '**' crosses segments. gobwas only decides
+//     which patterns are valid. Matching is the RE2 translation cert
+//     constraints use (#9867, certglob.go), because gobwas's matcher let the
+//     literals on each side of '**' overlap: "a**a" admitted "a", and
+//     "vendor/**/x.go" admitted "vendor/x.go" while "vendor/**/*.go" refused
+//     "vendor/a.go". Here the literals never share bytes. The translation
+//     also refuses a few patterns gobwas accepted (an unclosed '{', an
+//     inverted range), and reads two that gobwas refused paths for as their
+//     grammar says: a run of three or more '*' is '**' ("a***" admits "a"),
+//     and an empty alternative matches nothing ("*{}" admits "a");
 //   - the material path is matched exactly as the material attestor recorded
 //     it after a lexical path.Clean. There is no absolute/relative
 //     normalization, so "/vendor/**" never matches "vendor/a.go";
 //   - path.Clean runs BEFORE matching so "vendor/../../etc/passwd" cannot
 //     ride a "vendor/**" allowance out of its prefix.
 type allowedUntrackedMatcher struct {
-	globs []glob.Glob
+	globs []*regexp.Regexp
 }
 
 // compileAllowedUntracked compiles the patterns, failing on the first invalid
 // or empty one. An empty pattern list yields a matcher that matches nothing,
 // which is the documented strict default.
 func compileAllowedUntracked(patterns []string) (allowedUntrackedMatcher, error) {
-	m := allowedUntrackedMatcher{globs: make([]glob.Glob, 0, len(patterns))}
+	m := allowedUntrackedMatcher{globs: make([]*regexp.Regexp, 0, len(patterns))}
 	for i, p := range patterns {
 		if p == "" {
 			return allowedUntrackedMatcher{}, fmt.Errorf("allowedUntracked[%d]: empty pattern", i)
 		}
-		g, err := glob.Compile(p, '/')
+		if _, err := glob.Compile(p, '/'); err != nil {
+			return allowedUntrackedMatcher{}, fmt.Errorf("allowedUntracked[%d] %q: %w", i, p, err)
+		}
+		expr, err := globToRegexp(p, '/')
 		if err != nil {
 			return allowedUntrackedMatcher{}, fmt.Errorf("allowedUntracked[%d] %q: %w", i, p, err)
 		}
-		m.globs = append(m.globs, g)
+		re, err := regexp.Compile(expr)
+		if err != nil {
+			return allowedUntrackedMatcher{}, fmt.Errorf("allowedUntracked[%d] %q: %w", i, p, err)
+		}
+		m.globs = append(m.globs, re)
 	}
 	return m, nil
 }
@@ -61,8 +79,8 @@ func (m allowedUntrackedMatcher) matches(materialPath string) bool {
 		return false
 	}
 	cleaned := path.Clean(materialPath)
-	for _, g := range m.globs {
-		if safeUntrackedMatch(g, cleaned) {
+	for _, re := range m.globs {
+		if re.MatchString(cleaned) {
 			return true
 		}
 	}
@@ -80,18 +98,6 @@ func (s Step) AllowsUntracked(materialPath string) (bool, error) {
 		return false, err
 	}
 	return m.matches(materialPath), nil
-}
-
-// safeUntrackedMatch treats a gobwas/glob panic on an adversarial input as a
-// NON-match, which here is the fail-closed direction (the material stays
-// untracked and the chain is rejected).
-func safeUntrackedMatch(g glob.Glob, s string) (ok bool) {
-	defer func() {
-		if recover() != nil {
-			ok = false
-		}
-	}()
-	return g.Match(s)
 }
 
 // untrackedMaterials returns the sorted material paths that no accepted

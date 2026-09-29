@@ -653,16 +653,15 @@ type diffGlobCase struct {
 // diffGlobCases enumerates every pattern of up to three tokens over
 // {a, b, *, **, ?, /} against every value of up to four characters over
 // {a, b, /}. Untracked values are kept only when path.Clean leaves them
-// unchanged: the model takes material paths as already clean. A run of three
-// or more '*' is left out: the model does not specify it, and gobwas reads
-// "a***" as refusing "a".
+// unchanged: the model takes material paths as already clean. Runs of three or
+// more '*' are included; both matchers read them as '**'.
 func diffGlobCases() []diffGlobCase {
 	tokens := []string{"a", "b", "*", "**", "?", "/"}
 	var pats []string
 	seen := map[string]bool{}
 	var grow func(prefix string, n int)
 	grow = func(prefix string, n int) {
-		if prefix != "" && !seen[prefix] && !strings.Contains(prefix, "***") {
+		if prefix != "" && !seen[prefix] {
 			seen[prefix] = true
 			pats = append(pats, prefix)
 		}
@@ -694,7 +693,79 @@ func diffGlobCases() []diffGlobCase {
 			}
 		}
 	}
-	return out
+	return append(out, diffGlobGrammarCases()...)
+}
+
+// diffGlobGrammarAlphabet and diffGlobGrammarValues drive the allowedUntracked
+// grammar enumeration: every pattern of up to three characters over the glob
+// syntax (braces, commas, classes, negation, ranges, escapes, stars, '?', '/')
+// that the engine compiles, against every clean value of up to three
+// characters that can meet those literals. It holds the whole translator
+// (globToRegexp with '/'), not just '*', '**' and '?', to the model's
+// sepGlob, including the edges: '}' and ',' outside braces, "[]" and "[!]",
+// a trailing '\', a class after '!'.
+var (
+	diffGlobGrammarAlphabet = []string{"a", "*", "?", "/", "{", "}", ",", "[", "]", "!", "-", "\\"}
+	diffGlobGrammarValues   = []string{"a", "b", "/", ",", "}", "-"}
+)
+
+// diffGlobPinned are realistic allowedUntracked questions whose answers moved
+// with the RE2 matcher, or that the enumeration is too short to reach.
+var diffGlobPinned = []diffGlobCase{
+	{Kind: "untracked", Pattern: "vendor/**/x.go", Value: "vendor/x.go"},
+	{Kind: "untracked", Pattern: "vendor/**/x.go", Value: "vendor/a/x.go"},
+	{Kind: "untracked", Pattern: "vendor/**/*.go", Value: "vendor/a.go"},
+	{Kind: "untracked", Pattern: "vendor/**/*.go", Value: "vendor/a/b.go"},
+	{Kind: "untracked", Pattern: "vendor/*.go", Value: "vendor/a/b.go"},
+	{Kind: "untracked", Pattern: "/tmp/build/cilock{,.exe}", Value: "/tmp/build/cilock.exe"},
+	{Kind: "untracked", Pattern: "/tmp/build/cilock{,.exe}", Value: "/tmp/build/cilock"},
+	{Kind: "untracked", Pattern: "{node_modules,dist}/**", Value: "dist/a/b.js"},
+	{Kind: "untracked", Pattern: "{node_modules,dist}/**", Value: "src/a.js"},
+	{Kind: "untracked", Pattern: "**/[!.]*.go", Value: "a/.x.go"},
+	{Kind: "untracked", Pattern: "**/[!.]*.go", Value: "a/x.go"},
+	{Kind: "untracked", Pattern: "a***", Value: "a"},
+	{Kind: "untracked", Pattern: "a***", Value: "a/b/c"},
+	{Kind: "untracked", Pattern: "a**a", Value: "a"},
+	{Kind: "untracked", Pattern: "/**/", Value: "/"},
+}
+
+func diffGlobGrammarCases() []diffGlobCase {
+	var pats []string
+	var grow func(prefix string, n int)
+	grow = func(prefix string, n int) {
+		if prefix != "" {
+			if _, err := compileAllowedUntracked([]string{prefix}); err == nil {
+				pats = append(pats, prefix)
+			}
+		}
+		if n == 0 {
+			return
+		}
+		for _, t := range diffGlobGrammarAlphabet {
+			grow(prefix+t, n-1)
+		}
+	}
+	grow("", 3)
+	vals := []string{""}
+	for frontier := []string{""}; len(frontier[0]) < 3; {
+		var next []string
+		for _, v := range frontier {
+			for _, c := range diffGlobGrammarValues {
+				next = append(next, v+c)
+			}
+		}
+		vals = append(vals, next...)
+		frontier = next
+	}
+	var out []diffGlobCase
+	for _, p := range pats {
+		for _, v := range vals {
+			if v == "" || path.Clean(v) == v {
+				out = append(out, diffGlobCase{Kind: "untracked", Pattern: p, Value: v})
+			}
+		}
+	}
+	return append(out, diffGlobPinned...)
 }
 
 func diffGoGlob(t *testing.T, c diffGlobCase) bool {
@@ -713,21 +784,18 @@ func diffGoGlob(t *testing.T, c diffGlobCase) bool {
 	return m.matches(c.Value)
 }
 
-// diffGlobKnownEngineDivergence are inputs where the engine's allowedUntracked
-// matcher admits a path the pattern does not describe. gobwas lets the literal
-// on each side of '**' overlap, so "a**a" matches "a": the defect #9867 took
-// cert-constraint globs off gobwas for. The model states the pattern's meaning
-// (LinkingCounterexamples.v6_overlap_not_allowed). Each entry must still
-// diverge: when the matcher is fixed the test fails and the entry is deleted.
-var diffGlobKnownEngineDivergence = map[diffGlobCase]bool{
-	{Kind: "untracked", Pattern: "a**a", Value: "a"}: true,
-	{Kind: "untracked", Pattern: "b**b", Value: "b"}: true,
-	{Kind: "untracked", Pattern: "/**/", Value: "/"}: true,
-}
+// diffGlobKnownEngineDivergence are inputs where a matcher is known to
+// disagree with the model. Each entry must still diverge: when the matcher is
+// fixed the test fails and the entry is deleted. It is empty: the three gobwas
+// overlap cases ("a**a" admitting "a", "b**b" "b", "/**/" "/") were deleted
+// when allowedUntracked moved to the RE2 matcher.
+var diffGlobKnownEngineDivergence = map[diffGlobCase]bool{}
 
 // TestFormalDifferentialGlobs holds the two glob matchers the verdict reads to
 // the model: certGlob (cert constraints, RE2 since #9867) and the
-// allowedUntracked matcher (#9862, gobwas with '/' as separator).
+// allowedUntracked matcher (#9862; gobwas syntax, matched through the same RE2
+// translation with '/' as separator since #10376). The allowedUntracked kind
+// also runs the full-grammar enumeration (diffGlobGrammarCases).
 func TestFormalDifferentialGlobs(t *testing.T) {
 	cases := diffGlobCases()
 	in, err := json.Marshal(cases)

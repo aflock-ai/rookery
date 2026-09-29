@@ -271,29 +271,142 @@ def edgeOk (o : Options) (c u : Collection) : Bool :=
   compareOk c.materials (artifacts u) &&
   (!o.requireAll || (artifacts u).all fun a => (c.materials.lookup a.1).isSome)
 
-/-- gobwas/glob compiled with '/' as the separator (compileAllowedUntracked):
-    `**` any sequence, `*` any sequence without '/', `?` one character other
-    than '/'. `{…}`, `[…]` and `\` are matched literally here. Structural on a
-    fuel of pattern length + value length + 1, which every call decreases.
-    -- cite: attestation/policy/allowed_untracked.go:59-70 sha256:cc396b7babdbc556ac6bf5b87fda162051d9f71fc0e64c6178df3ff495177116
-    -/
-def sepGlobMatch : Nat → List Char → List Char → Bool
+/-! ### The allowedUntracked glob
+
+compileAllowedUntracked: gobwas decides which patterns are valid, and matching
+is globToRegexp's RE2 translation with '/' as the separator (certglob.go). The
+model follows the translator element by element:
+
+* a run of two or more `*` is any run of characters; a lone `*` is any run
+  without '/';
+* `?` is one character other than '/';
+* `\c` is `c` literally (a trailing `\` is nothing);
+* `[…]` is one character in (or, with `[!…]`, not in) the listed characters,
+  with `\` escapes, or in the range `lo-hi` when the class is exactly
+  `lo-hi`; the separator does not apply to classes, so `[!a]` matches '/';
+  `[]` admits no character and `[!]` any one;
+* `{x,y,…}` is any one alternative, and alternatives nest; outside braces
+  `,` and `}` are literal, and `]` is literal outside a class.
+
+An alternation is expanded into its flat alternatives (RE2 `(?:x|y)z` is
+`xz|yz`), so a pattern is a list of token strings and the matcher needs no
+backtracking state. Which patterns gobwas refuses is not modelled: the
+differential only asks about patterns the engine compiles.
+    -- cite: attestation/policy/allowed_untracked.go:77-88 sha256:1d56ce0e5949e90ad2c4cbd0761134cea605e16fba16b5fae08ffeb490f31cf4
+-/
+
+inductive GlobTok where
+  | lit (c : Char)
+  | star
+  | dstar
+  | one
+  | cls (neg : Bool) (items : List Char) (range : Option (Char × Char))
+  deriving DecidableEq, Repr
+
+def GlobTok.admits : GlobTok → Char → Bool
+  | .cls neg items range, c =>
+    let inSet := match range with
+      | some (lo, hi) => decide (lo ≤ c) && decide (c ≤ hi)
+      | none => items.contains c
+    if neg then !inSet else inSet
+  | _, _ => false
+
+/-- globClass: the body of a class after its `[`, returning the class and
+    what follows its `]`; `none` when it never closes. -/
+def globClassItems : Nat → List Char → Option (List Char × List Char)
+  | 0, _ => none
+  | _ + 1, [] => none
+  | _ + 1, ']' :: rest => some ([], rest)
+  | _ + 1, ['\\'] => none
+  | n + 1, '\\' :: c :: rest => (globClassItems n rest).map fun (xs, r) => (c :: xs, r)
+  | n + 1, c :: rest => (globClassItems n rest).map fun (xs, r) => (c :: xs, r)
+
+def globClass (cs : List Char) : Option (GlobTok × List Char) :=
+  let (neg, body) := match cs with
+    | '!' :: r => (true, r)
+    | r => (false, r)
+  match body with
+  | lo :: '-' :: hi :: ']' :: rest => some (.cls neg [] (some (lo, hi)), rest)
+  | _ :: '-' :: _ :: _ :: _ => none
+  | _ => (globClassItems (body.length + 1) body).map fun (xs, r) => (.cls neg xs none, r)
+
+def globProduct (xs ys : List (List GlobTok)) : List (List GlobTok) :=
+  xs.flatMap fun a => ys.map (a ++ ·)
+
+/-- A run of `*` after the first one: how many more, and what follows. -/
+def globStars : List Char → Nat × List Char
+  | '*' :: r => let (k, rest) := globStars r; (k + 1, rest)
+  | r => (0, r)
+
+mutual
+/-- The flat expansions of a sequence, up to the end (depth 0) or to the `,`
+    or `}` that ends it inside braces (not consumed). -/
+def globSeq : Nat → Bool → List Char → Option (List (List GlobTok) × List Char)
+  | 0, _, _ => none
+  | _ + 1, inner, [] => if inner then none else some ([[]], [])
+  | _ + 1, true, ',' :: r => some ([[]], ',' :: r)
+  | _ + 1, true, '}' :: r => some ([[]], '}' :: r)
+  | n + 1, inner, '{' :: r => do
+    let (alts, r1) ← globAlts n r
+    let (tails, r2) ← globSeq n inner r1
+    pure (globProduct alts tails, r2)
+  | n + 1, inner, '[' :: r => do
+    let (t, r1) ← globClass r
+    let (tails, r2) ← globSeq n inner r1
+    pure (tails.map (t :: ·), r2)
+  | n + 1, inner, '*' :: r =>
+    let (k, r1) := globStars r
+    let t := if k = 0 then GlobTok.star else GlobTok.dstar
+    (globSeq n inner r1).map fun (tails, r2) => (tails.map (t :: ·), r2)
+  | n + 1, inner, '?' :: r =>
+    (globSeq n inner r).map fun (tails, r2) => (tails.map (.one :: ·), r2)
+  | _ + 1, inner, ['\\'] => if inner then none else some ([[]], [])
+  | n + 1, inner, '\\' :: c :: r =>
+    (globSeq n inner r).map fun (tails, r2) => (tails.map (.lit c :: ·), r2)
+  | n + 1, inner, c :: r =>
+    (globSeq n inner r).map fun (tails, r2) => (tails.map (.lit c :: ·), r2)
+
+/-- The alternatives of a brace group after its `{`, through its `}`. -/
+def globAlts : Nat → List Char → Option (List (List GlobTok) × List Char)
+  | 0, _ => none
+  | n + 1, cs => do
+    let (first, r) ← globSeq n true cs
+    match r with
+    | ',' :: r1 => do
+      let (more, r2) ← globAlts n r1
+      pure (first ++ more, r2)
+    | '}' :: r1 => pure (first, r1)
+    | _ => none
+end
+
+/-- The pattern's flat alternatives, or `none` where the translator refuses. -/
+def globParse (g : String) : Option (List (List GlobTok)) :=
+  (globSeq (3 * g.length + 3) false g.toList).map (·.1)
+
+/-- One flat alternative against a path, '/' the separator. Structural on a
+    fuel of token count + value length + 1, which every call decreases. -/
+def globTokMatch : Nat → List GlobTok → List Char → Bool
   | 0, _, _ => false
   | _ + 1, [], s => s.isEmpty
-  | n + 1, '*' :: '*' :: ps, [] => sepGlobMatch n ps []
-  | n + 1, '*' :: '*' :: ps, c :: s => sepGlobMatch n ps (c :: s) || sepGlobMatch n ('*' :: '*' :: ps) s
-  | n + 1, '*' :: ps, [] => sepGlobMatch n ps []
-  | n + 1, '*' :: ps, c :: s => sepGlobMatch n ps (c :: s) || (c != '/' && sepGlobMatch n ('*' :: ps) s)
-  | _ + 1, '?' :: _, [] => false
-  | n + 1, '?' :: ps, c :: s => c != '/' && sepGlobMatch n ps s
+  | n + 1, .dstar :: ts, [] => globTokMatch n ts []
+  | n + 1, .dstar :: ts, c :: s => globTokMatch n ts (c :: s) || globTokMatch n (.dstar :: ts) s
+  | n + 1, .star :: ts, [] => globTokMatch n ts []
+  | n + 1, .star :: ts, c :: s => globTokMatch n ts (c :: s) || (c != '/' && globTokMatch n (.star :: ts) s)
   | _ + 1, _ :: _, [] => false
-  | n + 1, p :: ps, c :: s => p == c && sepGlobMatch n ps s
+  | n + 1, .one :: ts, c :: s => c != '/' && globTokMatch n ts s
+  | n + 1, .lit p :: ts, c :: s => p == c && globTokMatch n ts s
+  | n + 1, t :: ts, c :: s => t.admits c && globTokMatch n ts s
+
+/-- One allowedUntracked pattern against one path. -/
+def sepGlob (g path : String) : Bool :=
+  match globParse g with
+  | some alts => alts.any fun ts => globTokMatch (ts.length + path.length + 1) ts path.toList
+  | none => false
 
 /-- allowedUntrackedMatcher.matches: an empty path never matches. Paths are
     taken as already clean (path.Clean is the identity on them). -/
 def untrackedAllowed (s : Step) (path : String) : Bool :=
-  path != "" && s.allowedUntracked.any fun g =>
-    sepGlobMatch (g.length + path.length + 1) g.toList path.toList
+  path != "" && s.allowedUntracked.any fun g => sepGlob g path
 
 /-- The paths the artifact pass counts as produced upstream: every artifact
     of every upstream collection that passed its edge, across all edges
@@ -305,7 +418,7 @@ def coveredPath (o : Options) (st : State) (s : Step) (c : Collection) (path : S
 /-- checkAllowedUntracked (#9815): with EnforceAllowedUntracked on, in a step
     with artifactsFrom, every material is produced upstream or matches an
     allowedUntracked glob. Off, it only logs.
-    -- cite: attestation/policy/allowed_untracked.go:106-156 sha256:487f6741ce50d210ef8494fa108c13d9d2e5aaf878635ba4c8cb8cc605e3eeaa
+    -- cite: attestation/policy/allowed_untracked.go:112-162 sha256:487f6741ce50d210ef8494fa108c13d9d2e5aaf878635ba4c8cb8cc605e3eeaa
     -/
 def untrackedOk (o : Options) (st : State) (s : Step) (c : Collection) : Bool :=
   !o.enforceUntracked || s.artifactsFrom.isEmpty ||

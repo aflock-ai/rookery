@@ -67,7 +67,7 @@ func compileCertGlob(pattern string) (glob.Glob, error) {
 	if _, err := glob.Compile(pattern); err != nil {
 		return nil, err
 	}
-	expr, err := globToRegexp(pattern)
+	expr, err := globToRegexp(pattern, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -78,8 +78,8 @@ func compileCertGlob(pattern string) (glob.Glob, error) {
 	return certGlob{re: re, allowEmpty: pattern == AllowAllConstraint}, nil
 }
 
-// globToRegexp translates the gobwas glob grammar, compiled without
-// separators, into RE2 syntax:
+// globToRegexp translates the gobwas glob grammar into RE2 syntax. With sep
+// 0 (no separator, as cert constraints compile):
 //
 //   - and **      any run of runes, including none
 //     ?              exactly one rune
@@ -88,12 +88,16 @@ func compileCertGlob(pattern string) (glob.Glob, error) {
 //     [a-z] [!a-z]   one rune in / not in the range (one range per class)
 //     {x,y,...}      any one alternative; alternatives nest
 //
+// With a separator (allowedUntracked passes '/'), '*' and '?' do not match
+// it, and a run of two or more '*' matches any run of runes. Classes are
+// unchanged: gobwas does not apply the separator to them, so "[!a]" matches
+// '/'.
+//
 // Outside an alternation ',' and '}' are literal, and ']' is always literal
 // outside a class, as in gobwas's lexer. The translator refuses anything it
-// does not recognise; compileCertGlob only calls it on patterns gobwas
-// accepted.
-func globToRegexp(pattern string) (string, error) {
-	t := globTranslator{p: []rune(pattern)}
+// does not recognise; callers only pass patterns gobwas accepted.
+func globToRegexp(pattern string, sep rune) (string, error) {
+	t := globTranslator{p: []rune(pattern), sep: sep}
 	t.b.WriteString(`\A(?s:`)
 	for t.i = 0; t.i < len(t.p); t.i++ {
 		if err := t.step(); err != nil {
@@ -112,6 +116,7 @@ type globTranslator struct {
 	p     []rune
 	i     int
 	depth int
+	sep   rune // 0: none
 	b     strings.Builder
 }
 
@@ -119,12 +124,21 @@ type globTranslator struct {
 func (t *globTranslator) step() error {
 	switch r := t.p[t.i]; r {
 	case '*':
-		t.b.WriteString(`.*`)
+		run := t.i
 		for t.i+1 < len(t.p) && t.p[t.i+1] == '*' {
 			t.i++
 		}
+		if t.sep == 0 || t.i > run {
+			t.b.WriteString(`.*`)
+		} else {
+			t.b.WriteString(`[^` + regexp.QuoteMeta(string(t.sep)) + `]*`)
+		}
 	case '?':
-		t.b.WriteString(`.`)
+		if t.sep == 0 {
+			t.b.WriteString(`.`)
+		} else {
+			t.b.WriteString(`[^` + regexp.QuoteMeta(string(t.sep)) + `]`)
+		}
 	case '\\':
 		if t.i+1 < len(t.p) {
 			t.i++

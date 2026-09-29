@@ -75,14 +75,28 @@ trace.
 
 `TestFormalDifferentialGlobs` runs `cilock-policy-eval --glob` against the two
 matchers the verdict reads: the cert-constraint matcher (`certGlob`, RE2 since
-#9867) and the allowedUntracked matcher (`untrackedAllowed`, gobwas with `/` as
-separator, #9862). It enumerates every pattern of up to three tokens over
-`a b * ** ? /` against every value of up to four characters over `a b /`,
-about 41,000 questions. Three are known engine divergences, all the gobwas
-overlap defect: `a**a` matches `a`, `b**b` matches `b`, `/**/` matches `/`.
-The model states the pattern's meaning (`v6_overlap_not_allowed`), the test
-requires each one to still diverge, and it fails once the matcher is fixed.
-Runs of three or more `*` are left out; the model does not specify them.
+#9867) and the allowedUntracked matcher (`untrackedAllowed`, the same RE2
+translation with `/` as separator). It enumerates every pattern of up to three
+tokens over `a b * ** ? /` against every value of up to four characters over
+`a b /`, about 44,700 questions. For the allowedUntracked matcher it adds the
+whole grammar the RE2 translation reads (`sepGlob`, Verify.lean: classes and
+negated classes, ranges, escapes, nested braces, and `}` and `,` outside
+braces): every pattern of up to three characters over
+`a * ? / { } , [ ] ! - \` that the engine compiles, against every clean value
+of up to three characters over `a b / , } -`, plus pinned realistic patterns
+(`vendor/**/*.go`, `/tmp/build/cilock{,.exe}`, `**/[!.]*.go`). That is 296,353
+questions, and none disagree. `v6_re2_grammar` checks the headline answers by
+`decide`.
+
+Run against the gobwas matcher allowedUntracked used before, the same
+enumeration disagrees on 2,496 cases. 2,312 are gobwas admitting a path the
+model refuses: the `**` overlap (`a**a` matched `a`, `/**/` matched `/`,
+`vendor/**/x.go` matched `vendor/x.go`) and gobwas's reading of an unclosed
+`{` (`a{a` matched `aa`), which the RE2 translation refuses to compile. 184 are
+gobwas refusing a path the pattern describes: a run of three `*` (`a***`
+refused `a`) and an empty alternative (`*{}` refused `a`). Which patterns are
+valid is not modelled; the differential only asks about patterns the engine
+compiles.
 
 ## Files
 
@@ -129,7 +143,7 @@ the kernel.
 | V3 | commit binding | proved for witnesses and externals (`commit_bound`, `external_commit_bound`) |
 | V4 | about only widens reach | proved: it changes no per-collection decision; outside v0.2 it is refused (`about_irrelevant`, `about_needs_v02`) |
 | V5 | lazy = eager | proved (`lazy_eq_eager`) |
-| V6 | allowedUntracked enforced | **holds since #9862** under EnforceAllowedUntracked (EnforcedHardening, the cilock CLI and Judge default): an untracked material refuses; warn passes it; a glob excuses it; `*` stays in one segment (`v6_untracked_material`). The engine's gobwas matcher over-admits on `a**a` (`v6_overlap_not_allowed`, pinned in the glob differential). requireAll holds (`requireAll_consumes`) |
+| V6 | allowedUntracked enforced | **holds since #9862** under EnforceAllowedUntracked (EnforcedHardening, the cilock CLI and Judge default): an untracked material refuses; warn passes it; a glob excuses it; `*` stays in one segment (`v6_untracked_material`). `a**a` does not excuse `a` (`v6_overlap_not_allowed`), which the engine matches since it left gobwas. requireAll holds (`requireAll_consumes`) |
 | V7 | timestamps | proved (`timestamp_sound`, `verifier_times_tsa`, `triage_skew_irrelevant`). Only TSA-verified times of functionary-matched signatures count. The earliest is judged, the bounds are exact, and the skew option is never read |
 | #9813 bound | the fix converges within len(steps)+1 rounds | **proved** for policies whose step list is a topological order of attestationsFrom ∪ artifactsFrom (`validateAcyclic`): `fix9813_converges`. **Not proved** for every policy the shipped validator accepts: `unionAcyclic` takes an acyclic graph in any order, and `bound_scope_gap` is such a policy outside the theorem; its result is the unique joint fixed point, so it decides exactly as `verifyFixed` (`jointFixed_unique`, `verifyFix9813_eq_verifyFixed`). **Refuted** under the old validator: a combined cycle that settles on PASS after m+1 rounds is refused at 3 (`Bound9813.m3_refused`, `m3_converges_later`, `bound_counterexample_validators`); reproduced on the engine |
 

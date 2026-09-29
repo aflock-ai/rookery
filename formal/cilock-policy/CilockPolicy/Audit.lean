@@ -72,6 +72,7 @@ namespace CilockPolicy
 #print axioms LinkingCounterexamples.l4_backref_not_followed
 #print axioms LinkingCounterexamples.v6_untracked_material
 #print axioms LinkingCounterexamples.v6_overlap_not_allowed
+#print axioms LinkingCounterexamples.v6_re2_grammar
 #print axioms LinkingCounterexamples.GitSubject.null_oid_not_matchable
 #print axioms LinkingCounterexamples.GitSubject.commit_forms_matchable
 #print axioms LinkingCounterexamples.GitSubject.commit_forms_refused
