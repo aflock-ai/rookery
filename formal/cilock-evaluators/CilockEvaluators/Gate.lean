@@ -178,7 +178,7 @@ theorem no_shadowing (ev : Evaluators) (s : Step) (c : Collection) (e : Expected
     gate ev s c ≠ .passed :=
   gate_fail_closed ev s c e he bad hbad (Or.inl hb)
 
--- cite: attestation/policy/policy.go:1769-2007 sha256:689668da2334dbd438eb524cbfc35526d896b48910dc6979bbfbb12a3923389e
+-- cite: attestation/policy/policy.go:1775-2013 sha256:e739186d2c3fddb063edc0980c8f9be5acd82ba200e2c14f2c98d8ace5aa743a
 /-! ## External attestations (policy.go)
 
 The stock semantics. An external that sets childPolicyDigest or

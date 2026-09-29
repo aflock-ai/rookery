@@ -5,6 +5,7 @@
   `Lean.ofReduceBool` in any line fails the axiom audit.
 -/
 import CilockEvaluators.Holdout
+import CilockEvaluators.Verdict
 import CilockEvaluators.Nested
 
 open CilockEvaluators
@@ -74,6 +75,17 @@ open CilockEvaluators
 #print axioms Holdout.h2_refusals
 #print axioms Holdout.h3_optional_rejected_external_fails
 #print axioms Holdout.h4_nonstring_deny
+-- Failure verdicts and stepResults
+#print axioms Vsa.emit_names_externals
+#print axioms Verdict.denies_join
+#print axioms Verdict.noVerdict_join
+#print axioms Verdict.noVerdict_exits_two
+#print axioms Verdict.failure_never_zero
+#print axioms Verdict.first_denied_drops_the_rest
+#print axioms Verdict.step_refusal_exits_two
+#print axioms Verdict.undecided_reads_nothing
+#print axioms Verdict.denied_reads_failed
+#print axioms Verdict.passed_vsa_no_denials
 -- Nested externals (a parent policy over child VSAs)
 #print axioms Nested.latest_sound
 #print axioms Nested.parent_sound

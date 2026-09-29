@@ -18,7 +18,7 @@ def one : Policy := basePolicy [step "build"]
     `gitoid:sha256` label is keyed `gitoid:sha256:<value>` and no longer
     anchors the match. Before #9863 seeds were bare values and this envelope
     verified; that was the #9816 counterexample.
-    -- cite: plugins/attestors/policyverify/policyverify.go:117-134 sha256:237f48662d314cab35a32b69eb277b293aa328896b84e717a3ce9548e4f5790b
+    -- cite: plugins/attestors/policyverify/policyverify.go:121-138 sha256:237f48662d314cab35a32b69eb277b293aa328896b84e717a3ce9548e4f5790b
     -/
 def relabelled : Envelope :=
   env "r" { coll "build" with subjects := [⟨"x", ⟨"gitoid:sha256", seedD⟩⟩] }
@@ -77,8 +77,8 @@ def injected : Envelope :=
     material and the chain passes (the pre-#9862 behaviour). A glob in
     `allowedUntracked` excuses it, and `*` stays inside one path segment.
     -- cite: attestation/policy/step.go:70-77 sha256:556edead02680ff85bcbf7b05ca1fdd18be3f2f29bd7026bf3d3f40c3615b742
-    -- cite: attestation/policy/allowed_untracked.go:143-162 sha256:fd50a952b4fd8d99f65804bca12b9c6b4c03b3e360e70b4691a25edfadfc9606
-    -- cite: attestation/policy/policy.go:2634-2636 sha256:93112d8f7b6e5a90b7d93151f030f13f2f75ed13bbc40f22787a289769c61b85
+    -- cite: attestation/policy/allowed_untracked.go:137-156 sha256:fd50a952b4fd8d99f65804bca12b9c6b4c03b3e360e70b4691a25edfadfc9606
+    -- cite: attestation/policy/policy.go:2624-2626 sha256:93112d8f7b6e5a90b7d93151f030f13f2f75ed13bbc40f22787a289769c61b85
     -/
 def allowPol (g : String) : Policy :=
   basePolicy [srcStep, { buildStep with allowedUntracked := [g] }]
@@ -135,7 +135,7 @@ theorem requireAll_consumes {o : Options} (ho : o.requireAll = true) {c u : Coll
 /-- maxFanout = 1. A second AUTHORIZED collection on the same seed, which
     itself FAILS its gate, makes the seed a hub and demotes the good one
     (`policy.go` says so). Opt-in; cilock verify never sets it.
-    -- cite: attestation/policy/policy.go:1433-1450 sha256:5e9863ea9e233cf1c62b5167d761080b6703e83ca83423931b0aca24adc02a23
+    -- cite: attestation/policy/policy.go:1436-1453 sha256:5e9863ea9e233cf1c62b5167d761080b6703e83ca83423931b0aca24adc02a23
     -/
 def fanOpts : Options := { opts with maxFanout := 1 }
 def good : Envelope := env "g" (coll "build")
@@ -153,8 +153,8 @@ theorem fanout_flood_flips :
     an artifactsFrom cycle before any evidence is read (`policy.go`, as
     cilock's static validator did, `validate.go`), which `verifyShipped`
     states through `unionAcyclic`.
-    -- cite: attestation/policy/policy.go:2292-2298 sha256:9866424669cd90ea2c8f3f795c82526c2dd2155673f24649448a3b4f0eaff014
-    -- cite: cilock/internal/policy/validate.go:443 sha256:d60598f26e04616b9da3fd7fc8f4bea5ba6a738a9f31fa01d1e49a500a78d4e5
+    -- cite: attestation/policy/policy.go:2282-2288 sha256:9866424669cd90ea2c8f3f795c82526c2dd2155673f24649448a3b4f0eaff014
+    -- cite: cilock/internal/policy/validate.go:448 sha256:d60598f26e04616b9da3fd7fc8f4bea5ba6a738a9f31fa01d1e49a500a78d4e5
     -/
 def aStep : Step := { step "a" with artifactsFrom := ["b"] }
 def bStep : Step := { step "b" with artifactsFrom := ["a"] }

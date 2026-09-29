@@ -17,6 +17,7 @@ package policyverify
 import (
 	"crypto/x509"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -53,7 +54,10 @@ type Attestor struct {
 	*policysig.VerifyPolicySignatureOptions
 	slsa.VerificationSummary
 
-	DenyReasons        []DenyReason `json:"denyReasons"`
+	DenyReasons []DenyReason `json:"denyReasons"`
+	// Steps is the stepResults extension of a VSA read back through this attestor (a parent
+	// policy's external). Without it the parent sees the verdict but not which checks decided it.
+	Steps              []slsa.VerificationStepResult `json:"stepResults,omitempty"`
 	stepResults        map[string]policy.StepResult
 	policyEnvelope     dsse.Envelope
 	collectionSource   source.Sourcer
@@ -308,7 +312,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 		verifyOpts = append(verifyOpts, policy.WithAiServerURL(a.aiServerURL))
 	}
 
-	accepted, stepResults, policyErr := pol.Verify(ctx.Context(), verifyOpts...)
+	accepted, stepResults, externalResults, policyErr := pol.VerifyWithExternals(ctx.Context(), verifyOpts...)
 	if policyErr != nil {
 		for step, result := range stepResults {
 			log.Warnf("Step %s: passed=%v, accepted=%d, rejected=%d",
@@ -326,6 +330,8 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 	if err != nil {
 		return fmt.Errorf("failed to generate verification summary: %w", err)
 	}
+	a.InputAttestations = append(a.InputAttestations,
+		externalInputAttestations(ctx, externalResults, accepted)...)
 
 	return nil
 }
@@ -366,6 +372,48 @@ func vsaPolicyURI(payloadType string) string {
 		return policy.PolicyPredicate
 	}
 	return payloadType
+}
+
+// externalInputAttestations names the external evidence that decided the verdict (a parent
+// policy's child VSAs), by the digest of each envelope's signed payload, in external-name order:
+// the passed envelopes (after latest-decides, the decisive ones) and, for a failing verdict, the
+// rejected ones too, as verificationSummaryFromResults does for collections. Without it a parent
+// VSA does not say which child verdict it judged.
+func externalInputAttestations(ctx *attestation.AttestationContext, externals map[string]policy.ExternalResult, accepted bool) []slsa.ResourceDescriptor {
+	names := make([]string, 0, len(externals))
+	for n := range externals {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	var out []slsa.ResourceDescriptor
+	add := func(name string, env source.StatementEnvelope) {
+		if len(env.Envelope.Payload) == 0 {
+			log.Warnf("external %q: envelope %s has no payload to digest; it is not named in the VSA", name, env.Reference)
+			return
+		}
+		digest, err := cryptoutil.CalculateDigestSetFromBytes(env.Envelope.Payload, ctx.Hashes())
+		if err != nil {
+			log.Warnf("external %q: failed to digest envelope %s: %v", name, env.Reference, err)
+			return
+		}
+		uri := env.Reference
+		if uri == "" {
+			uri = "external:" + name
+		}
+		out = append(out, slsa.ResourceDescriptor{URI: uri, Digest: digest})
+	}
+	for _, n := range names {
+		er := externals[n]
+		for _, p := range er.Passed {
+			add(n, p.Envelope)
+		}
+		if !accepted {
+			for _, r := range er.Rejected {
+				add(n, r.Envelope)
+			}
+		}
+	}
+	return out
 }
 
 func verificationSummaryFromResults(ctx *attestation.AttestationContext, policyEnvelope dsse.Envelope, stepResults map[string]policy.StepResult, accepted bool) (slsa.VerificationSummary, error) {

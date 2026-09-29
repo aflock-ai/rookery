@@ -34,6 +34,7 @@ package policy
 // formal:differential cilock-evaluators TestFormalDifferentialGate
 // formal:differential cilock-evaluators TestFormalDifferentialVSA
 // formal:differential cilock-evaluators TestFormalDifferentialNestedVSA
+// formal:differential cilock-evaluators TestFormalDifferentialVerdict
 
 import (
 	"bufio"
@@ -1218,4 +1219,129 @@ func TestFormalDifferentialNestedVSA(t *testing.T) {
 		}
 	}
 	reportMismatches(t, "nested-vsa", ms, len(cases))
+}
+
+// ---------------------------------------------------------------------------
+// Failure verdicts: DenyReasons and NoVerdict over real error trees
+// ---------------------------------------------------------------------------
+
+// errTreeJSON is one node of Verdict.ErrTree.
+type errTreeJSON struct {
+	K  string        `json:"k"`
+	Rs []string      `json:"rs,omitempty"`
+	E  *errTreeJSON  `json:"e,omitempty"`
+	Es []errTreeJSON `json:"es,omitempty"`
+}
+
+type verdictCaseJSON struct {
+	Kind string      `json:"kind"`
+	Err  errTreeJSON `json:"err"`
+}
+
+// denyPhrases include ", " and a quote: a deny message is Rego's text, kept whole.
+var denyPhrases = []string{"check:a", "check:b, want c", "no \"sbom\"", "d", "check:e"}
+
+// randErrTree builds a random tree and the real Go error it stands for, from
+// the engine's own error types and the wrappings the engine uses (%w, several
+// %w, errors.Join, ErrCollectionValidationFailed, the attestor-leg wrapper).
+func randErrTree(r *rand.Rand, depth int) (errTreeJSON, error) {
+	leaf := depth <= 0 || r.IntN(3) == 0
+	if leaf {
+		switch r.IntN(7) {
+		case 0, 1:
+			n := 1 + r.IntN(2)
+			rs := make([]string, 0, n)
+			for i := 0; i < n; i++ {
+				rs = append(rs, denyPhrases[r.IntN(len(denyPhrases))])
+			}
+			if r.IntN(2) == 0 {
+				return errTreeJSON{K: "denied", Rs: rs}, ErrPolicyDenied{Reasons: rs}
+			}
+			return errTreeJSON{K: "denied", Rs: rs}, &ErrPolicyDenied{Reasons: rs}
+		case 2:
+			return errTreeJSON{K: "unavailable"}, ErrEvidenceUnavailable
+		case 3:
+			return errTreeJSON{K: "aiRefused"}, ErrAIEvaluationRefused{Code: "provider"}
+		case 4:
+			return errTreeJSON{K: "regoRefused"}, ErrRegoEvaluationRefused{Code: "deadline"}
+		case 5:
+			return errTreeJSON{K: "assignmentBound"}, ErrExternalAssignmentsExceedBound{Externals: []string{"a", "b"}}
+		default:
+			// Text that looks like a denial is not one.
+			return errTreeJSON{K: "other"}, errors.New("policy was denied due to: x, y")
+		}
+	}
+	if r.IntN(2) == 0 {
+		cj, ce := randErrTree(r, depth-1)
+		return errTreeJSON{K: "wrap", E: &cj}, fmt.Errorf("attestor policyverify failed: %w", ce)
+	}
+	n := 1 + r.IntN(3)
+	js := make([]errTreeJSON, 0, n)
+	es := make([]error, 0, n)
+	for i := 0; i < n; i++ {
+		cj, ce := randErrTree(r, depth-1)
+		js = append(js, cj)
+		es = append(es, ce)
+	}
+	var e error
+	switch r.IntN(3) {
+	case 0:
+		e = errors.Join(es...)
+	case 1:
+		e = ErrCollectionValidationFailed{Reasons: es}
+	default:
+		if n == 1 {
+			e = errors.Join(es...)
+		} else {
+			parts := make([]string, n)
+			args := make([]any, n)
+			for i := range es {
+				parts[i] = "%w"
+				args[i] = es[i]
+			}
+			e = fmt.Errorf(strings.Join(parts, "; "), args...)
+		}
+	}
+	return errTreeJSON{K: "join", Es: js}, e
+}
+
+// TestFormalDifferentialVerdict: policy.DenyReasons and policy.NoVerdict (the
+// exit code `cilock verify` derives from it) against Verdict.lean.
+func TestFormalDifferentialVerdict(t *testing.T) {
+	bin := diffOracle(t)
+	r := rand.New(rand.NewPCG(uint64(diffEnvInt("FORMAL_DIFF_SEED", 1)), 31))
+	n := diffEnvInt("FORMAL_DIFF_N", 600)
+	var cases []any
+	var goV, details []string
+	for i := 0; i < n; i++ {
+		tj, e := randErrTree(r, 3)
+		code := 1
+		if NoVerdict(e) {
+			code = 2
+		}
+		denies := DenyReasons(e)
+		if denies == nil {
+			denies = []string{}
+		}
+		var buf strings.Builder
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		require.NoError(t, enc.Encode(struct {
+			Denies []string `json:"denies"`
+			Exit   int      `json:"exit"`
+		}{denies, code}))
+		goV = append(goV, strings.TrimSpace(buf.String()))
+		c := verdictCaseJSON{Kind: "verdict", Err: tj}
+		cases = append(cases, c)
+		cj, _ := json.Marshal(c)
+		details = append(details, fmt.Sprintf("err=%v case=%s", e, cj))
+	}
+	lean := runOracle(t, bin, cases)
+	var ms []diffMismatch
+	for i := range cases {
+		if goV[i] != lean[i] {
+			ms = append(ms, diffMismatch{"verdict", goV[i], lean[i], details[i]})
+		}
+	}
+	reportMismatches(t, "verdict", ms, len(cases))
 }

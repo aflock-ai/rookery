@@ -1,7 +1,7 @@
--- cite: plugins/attestors/policyverify/policyverify.go:229-423 sha256:da4f17ffccbef061
+-- cite: plugins/attestors/policyverify/policyverify.go:233-471 sha256:f0dec122b2755cb9c36b9dfc9573916a60a0fd80232c7354109655174bd152a4
 -- cite: attestation/workflow/verify.go:326-352 sha256:a33f012b394cf59baaf640fb52e376b443f142dd03229b4e5b1e897f5fcd0244
--- cite: plugins/attestors/vsa/vsa.go:37-37 sha256:ea4b5f26d671802f212f2452002bcb25afa9797036154c0f16af56a2abc26f6f
--- cite: plugins/attestors/vsa/vsa.go:106-118 sha256:7945715445a34d85a477d13ab7fd9f0380f93322dc1a8ca1a5c62feaf2bff81f
+-- cite: plugins/attestors/vsa/vsa.go:38 sha256:ea4b5f26d671802f212f2452002bcb25afa9797036154c0f16af56a2abc26f6f
+-- cite: plugins/attestors/vsa/vsa.go:111-123 sha256:7945715445a34d85a477d13ab7fd9f0380f93322dc1a8ca1a5c62feaf2bff81f
 /-
   CilockEvaluators.Vsa: Verification Summary Attestations.
 
@@ -29,10 +29,11 @@ inductive Result where
   | failed
   deriving DecidableEq, Repr
 
--- cite: plugins/attestors/vsa/vsa.go:70-76 sha256:038d66464d69c9becc571e44b6db2068aab57824951a204e685fc9ab5e425a7f
--- cite: plugins/attestors/policyverify/policyverify.go:194-207 sha256:5f642ecb06bd65592bd29d065808ababc86bcc05b9f3d9ab6e50743ee805144c
+-- cite: plugins/attestors/vsa/vsa.go:71-81 sha256:2da9a13ceaa2eb9973cda9aca041b26eae028cebf31dacab44b9a0c273023beb
+-- cite: plugins/attestors/policyverify/policyverify.go:198-211 sha256:5f642ecb06bd65592bd29d065808ababc86bcc05b9f3d9ab6e50743ee805144c
 /-- The predicate (attestation/slsa/verificationsummary.go; vsa.go) plus the
-statement subjects (policyverify.go). -/
+statement subjects (policyverify.go). The stepResults extension a VSA may
+carry is read in Verdict.lean (`SummaryView`); a VSA without it is this. -/
 structure Vsa where
   subjects : List Subject
   policyUri : String
@@ -48,10 +49,10 @@ structure Run where
   /-- The exact decoded DSSE payload bytes of the policy. -/
   policyPayload : String
   policyUri : String
-  -- cite: plugins/attestors/policyverify/policyverify.go:230-232 sha256:c230b8950d74bf5783bd434f704317ee37284315367b906a68407c99177c937a
+  -- cite: plugins/attestors/policyverify/policyverify.go:234-236 sha256:c230b8950d74bf5783bd434f704317ee37284315367b906a68407c99177c937a
   /-- `policysig.VerifyPolicySignature` (policyverify.go). -/
   policySigOk : Bool
-  -- cite: plugins/attestors/policyverify/policyverify.go:238-242 sha256:a524815bd4f3ac2bc1929a3fee8fe8d5d1c2e45b12153d6b18fa6c4cd6e0b0ce
+  -- cite: plugins/attestors/policyverify/policyverify.go:242-246 sha256:a524815bd4f3ac2bc1929a3fee8fe8d5d1c2e45b12153d6b18fa6c4cd6e0b0ce
   /-- `policy.DecodePolicyEnvelope` (policyverify.go). -/
   decodeOk : Bool
   seeds : List Subject
@@ -59,15 +60,19 @@ structure Run where
   now : Timestamp
   passedInputs : List Digest
   rejectedInputs : List Digest
+  /-- The payload digests of the external envelopes that passed, and that were
+  rejected (externalInputAttestations, policyverify.go). -/
+  passedExternals : List Digest := []
+  rejectedExternals : List Digest := []
   deriving DecidableEq, Repr
 
--- cite: plugins/attestors/policyverify/policyverify.go:230-242 sha256:abcc70a2863fac22524181ed79e94f76e7fff149c29fa316b2b55108f2911946
--- cite: plugins/attestors/policyverify/policyverify.go:310-319 sha256:bf3a0030348d8741f6be2781a75a0bead271fb58807c79f2e4956192bb0320a3
--- cite: plugins/attestors/policyverify/policyverify.go:406-409 sha256:6eb71cb8138ef3a45489c5b202f940a7db63391745ee1f3272531c5fb557a2db
--- cite: plugins/attestors/policyverify/policyverify.go:401 sha256:02839719c4e110bd96207a38909ffa2888e7722a322a8371f623ce1e38378b65
--- cite: plugins/attestors/policyverify/policyverify.go:412-414 sha256:f5d8b93d8f8bf66baf5b25836316dcd560aad5eb3ec940f8d4eb1f7802492c8b
--- cite: plugins/attestors/policyverify/policyverify.go:373-399 sha256:92a13498dd9b9d65b66f2f0af09ab4e837a490041d8ac95ef16a3c6fd9328f23
--- cite: plugins/attestors/policyverify/policyverify.go:194-207 sha256:5f642ecb06bd65592bd29d065808ababc86bcc05b9f3d9ab6e50743ee805144c
+-- cite: plugins/attestors/policyverify/policyverify.go:234-246 sha256:abcc70a2863fac22524181ed79e94f76e7fff149c29fa316b2b55108f2911946
+-- cite: plugins/attestors/policyverify/policyverify.go:315-324 sha256:51e171a7486ff2bfa78a83e524c12d68f823259bc1b6d971444a5aff3517ce79
+-- cite: plugins/attestors/policyverify/policyverify.go:454-457 sha256:6eb71cb8138ef3a45489c5b202f940a7db63391745ee1f3272531c5fb557a2db
+-- cite: plugins/attestors/policyverify/policyverify.go:449 sha256:02839719c4e110bd96207a38909ffa2888e7722a322a8371f623ce1e38378b65
+-- cite: plugins/attestors/policyverify/policyverify.go:460-462 sha256:f5d8b93d8f8bf66baf5b25836316dcd560aad5eb3ec940f8d4eb1f7802492c8b
+-- cite: plugins/attestors/policyverify/policyverify.go:421-447 sha256:92a13498dd9b9d65b66f2f0af09ab4e837a490041d8ac95ef16a3c6fd9328f23
+-- cite: plugins/attestors/policyverify/policyverify.go:198-211 sha256:5f642ecb06bd65592bd29d065808ababc86bcc05b9f3d9ab6e50743ee805144c
 /-- `Attest` + `verificationSummaryFromResults`. `hash` is the digest function
 over exact bytes.
 * policy signature or decode failure: no VSA (policyverify.go);
@@ -76,7 +81,8 @@ over exact bytes.
   whose policy digest is the digest of the exact payload (policyverify.go),
   whose verifier id is the constant "aflock" (policyverify.go),
   whose inputs are the passed collections plus, on failure, the rejected ones
-  (policyverify.go), and whose subjects are the seeds plus the policy
+  (policyverify.go), then the passed externals plus, on failure, the
+  rejected ones (externalInputAttestations), and whose subjects are the seeds plus the policy
   subject (policyverify.go). -/
 def emit (hash : String → Digest) (r : Run) : Option Vsa :=
   if !r.policySigOk || !r.decodeOk then none
@@ -88,7 +94,8 @@ def emit (hash : String → Digest) (r : Run) : Option Vsa :=
         policyDigest := hash r.policyPayload
         verifierId := "aflock"
         timeVerified := r.now
-        inputs := r.passedInputs ++ (if b then [] else r.rejectedInputs)
+        inputs := r.passedInputs ++ (if b then [] else r.rejectedInputs) ++
+          r.passedExternals ++ (if b then [] else r.rejectedExternals)
         result := if b then .passed else .failed }
 
 theorem emit_refusal_none (hash : String → Digest) (r : Run) (b : Bool)
@@ -120,9 +127,29 @@ theorem emit_sound (hash : String → Digest) (r : Run) (v : Vsa) (h : emit hash
       refine ⟨hs', hd', rfl, rfl, rfl, fun s hs => by simp [hs], ?_, ?_⟩ <;>
         cases b <;> simp [hout]
 
+-- cite: plugins/attestors/policyverify/policyverify.go:377-417 sha256:01607f0dd65467b21b554d11386ce9b873ba22c7da4af0eb899d1cf30fef7581
+/-- A VSA names the external evidence that decided it: every passed external
+envelope by its payload digest, and on a FAILED verdict every rejected one.
+A PASSED VSA names no rejected external, as for collections. -/
+theorem emit_names_externals (hash : String → Digest) (r : Run) (v : Vsa) (h : emit hash r = some v) :
+    (∀ d ∈ r.passedExternals, d ∈ v.inputs) ∧
+      (v.result = .failed → ∀ d ∈ r.rejectedExternals, d ∈ v.inputs) ∧
+      (v.result = .passed → v.inputs = r.passedInputs ++ r.passedExternals) := by
+  unfold emit at h
+  split at h
+  · simp at h
+  · split at h
+    · simp at h
+    · rename_i b _
+      simp only [Option.some.injEq] at h
+      subst h
+      refine ⟨fun d hd => by simp [hd], fun hf d hd => ?_, fun hp => ?_⟩
+      · cases b <;> simp_all
+      · cases b <;> simp_all
+
 /-! ## Consumption -/
 
--- cite: attestation/policy/policy.go:1813 sha256:a66860576a2118541df86481df475f9f83f3a31cc93666bfcc6fd6cba3e4cc33
+-- cite: attestation/policy/policy.go:1810 sha256:a66860576a2118541df86481df475f9f83f3a31cc93666bfcc6fd6cba3e4cc33
 /-- A candidate VSA envelope in a downstream verify. `sigOk`: its DSSE
 signature verified against the downstream policy's roots/keys, naming
 `signer` (source/verified.go; policy.go). -/
@@ -132,7 +159,7 @@ structure Candidate where
   sigOk : Bool
   deriving DecidableEq, Repr
 
--- cite: attestation/policy/policy.go:1813-1824 sha256:f100b55459c88dd720341e0520bbfce7ea9953388dbc3c2b1340ff49ff4c60f0
+-- cite: attestation/policy/policy.go:1810-1821 sha256:f100b55459c88dd720341e0520bbfce7ea9953388dbc3c2b1340ff49ff4c60f0
 /-- The consumer's view of a candidate as a `Gate.Envelope`: signature errors
 and subject-unbound both surface as envelope errors (policy.go);
 no commit binding and no declared `commitSubject`, so `commitUnbound` is
@@ -246,7 +273,7 @@ theorem vsa_non_amplification (hash : String → Digest) (W : World)
       simp only [List.mem_append, List.mem_singleton] at hsub
       exact hsub
 
--- cite: plugins/attestors/policyverify/policyverify.go:205 sha256:807db86f672dff48c839b71ac0bcac20cfcf711c3c6be53f4fd014f58839b4d6
+-- cite: plugins/attestors/policyverify/policyverify.go:209 sha256:807db86f672dff48c839b71ac0bcac20cfcf711c3c6be53f4fd014f58839b4d6
 /-- The policy subject: every VSA of a policy names that policy's digest as a
 subject (policyverify.go), so a verify seeded with a POLICY digest binds
 to every VSA of that policy, whatever artifact it was about. -/

@@ -24,6 +24,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/slsa"
 	"github.com/invopop/jsonschema"
 )
 
@@ -73,6 +74,10 @@ type VerificationSummary struct {
 	Policy             ResourceDescriptor   `json:"policy"`
 	InputAttestations  []ResourceDescriptor `json:"inputAttestations"`
 	VerificationResult VerificationResult   `json:"verificationResult"`
+	// StepResults is the stepResults extension `cilock verify` writes next to the
+	// v1 fields (slsa.VerificationStepResult). The in-toto parsing rules make it
+	// ignorable, so it is decoded when present and omitted when absent.
+	StepResults []slsa.VerificationStepResult `json:"stepResults,omitempty"`
 }
 
 // Compile-time interface assertion.

@@ -98,6 +98,11 @@ type VerifyOptions struct {
 	// RunOptions.Offline so the run and verify sides share one opt-out idiom.
 	Offline bool
 
+	// PlatformDisabled is set by ResolvePlatformDefaults when the operator turned
+	// the platform off (--platform-url "" or --offline): no session is looked up,
+	// so a platform Archivista answers 401. Read to explain that failure.
+	PlatformDisabled bool
+
 	// NoEmbeddedTrust ignores the policy-signing trust compiled into this cilock
 	// build (embeddedtrust). With it set, a released binary stops auto-trusting
 	// its baked platform roots/signer and behaves like a stock build — verify
@@ -177,6 +182,7 @@ func (vo *VerifyOptions) ResolvePlatformDefaults(cmd *cobra.Command) error { //n
 		vo.PlatformURL = ""
 	}
 	platformExplicitlyDisabled := (cmd.Flags().Changed("platform-url") || vo.Offline) && vo.PlatformURL == ""
+	vo.PlatformDisabled = platformExplicitlyDisabled
 	if platformExplicitlyDisabled {
 		return nil
 	}

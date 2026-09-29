@@ -482,8 +482,20 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		// verdict on stdout so a gate consuming the JSON sees the failure (the
 		// exit code remains the canonical signal). Emitted before the error
 		// return so it always lands.
+		// A verification that could not read its evidence judged nothing: it is
+		// an error (exit 2), not a denial (exit 1).
+		verdict, code := classifyVerifyFailure(verifyErr)
+		if verdict == VerdictError {
+			if vo.PlatformDisabled && vo.ArchivistaOptions.Enable && strings.Contains(verifyErr.Error(), "401") {
+				log.Error("Archivista refused the request (401): --platform-url \"\" (or --offline) turns off the platform session, so nothing authenticates the evidence lookup. Drop --platform-url \"\" to use your `cilock login` session, or point --archivista-server at a store that needs no credentials.")
+			}
+		}
 		if vo.OutputJSON() {
-			if werr := writeVerifyVerdictJSON(os.Stdout, VerifyVerdict{Passed: false}); werr != nil {
+			jv := VerifyVerdict{Passed: false, Verdict: verdict}
+			if verdict == VerdictError {
+				jv.Error = verifyErr.Error()
+			}
+			if werr := writeVerifyVerdictJSON(os.Stdout, jv); werr != nil {
 				log.Errorf("failed to emit JSON verify verdict: %v", werr)
 			}
 		}
@@ -491,9 +503,9 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			// errors.Join keeps the trust-mismatch error reachable via
 			// errors.As at the top level while preserving the original
 			// verifyErr chain for existing callers.
-			return fmt.Errorf("failed to verify policy: %w", errors.Join(trustMismatch, verifyErr))
+			return &VerifyExitError{Code: code, Err: fmt.Errorf("failed to verify policy: %w", errors.Join(trustMismatch, verifyErr))}
 		}
-		return fmt.Errorf("failed to verify policy: %w", verifyErr)
+		return &VerifyExitError{Code: code, Err: fmt.Errorf("failed to verify policy: %w", verifyErr)}
 	}
 
 	log.Info("Verification succeeded")
@@ -614,7 +626,7 @@ func writeVSAOutfile(path string, evidence workflow.VerifyResult, signers []cryp
 		subjects[sub.URI] = sub.Digest
 	}
 
-	predicateBytes, err := json.Marshal(evidence.VerificationSummary)
+	predicateBytes, err := marshalVSAPredicate(evidence)
 	if err != nil {
 		return fmt.Errorf("failed to marshal VSA predicate: %w", err)
 	}

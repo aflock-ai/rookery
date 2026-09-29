@@ -16,6 +16,8 @@
   meant to do.
 -/
 import Lean.Data.Json
+import CilockEvaluators.Vsa
+import CilockEvaluators.Verdict
 import CilockEvaluators.Nested
 
 namespace CilockEvaluators.Oracle
@@ -256,6 +258,28 @@ def vsaCase (j : Json) : D String := do
     return Nested.externalLatest now x cands)
   return verifyStr (Gate.verify true [] exts)
 
+/-! ## Failure verdicts (deny reasons, no verdict, exit code) -/
+
+/-- An error tree: `{"k": kind, "rs": [...]}` for `denied`, `"e"` for `wrap`,
+`"es"` for `join`, nothing else for a leaf. -/
+partial def decodeErr (j : Json) : D Verdict.ErrTree := do
+  match ← str j "k" with
+  | "denied" => return .denied (← strs j "rs")
+  | "unavailable" => pure .unavailable
+  | "aiRefused" => pure .aiRefused
+  | "regoRefused" => pure .regoRefused
+  | "assignmentBound" => pure .assignmentBound
+  | "other" => pure .other
+  | "wrap" => return .wrap (← decodeErr (← field j "e"))
+  | "join" => return .join (← (← arr j "es").mapM decodeErr)
+  | k => throw s!"error kind {k}"
+
+/-- `{"denies":[...],"exit":n}`, keys in the order Go's struct writes them. -/
+def verdictCase (j : Json) : D String := do
+  let e ← decodeErr (← field j "err")
+  let denies := Json.arr (e.denies.map Json.str).toArray
+  return (Json.mkObj [("denies", denies), ("exit", Json.num (Verdict.exitCode (some e)))]).compress
+
 def runCase (line : String) : String :=
   match Json.parse line with
   | .error e => s!"decode-error: {e}"
@@ -266,6 +290,7 @@ def runCase (line : String) : String :=
       | "ai" => aiCase j
       | "gate" => gateCase j
       | "vsa" => vsaCase j
+      | "verdict" => verdictCase j
       | k => throw s!"case kind {k}"
     match r with
     | .ok s => s

@@ -144,6 +144,12 @@ func Execute() {
 		fmt.Fprintln(os.Stderr, notice) //nolint:gosec // G705: CLI notice to stderr, not an HTTP/HTML sink; every interpolated part is semver-validated or constant.
 	}
 	if failed {
+		// A policy verify distinguishes a denial (1) from a verification that
+		// could not be made (2); every other failure exits 1.
+		var coded interface{ ExitCode() int }
+		if errors.As(err, &coded) {
+			os.Exit(coded.ExitCode())
+		}
 		os.Exit(1)
 	}
 }

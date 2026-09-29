@@ -100,7 +100,7 @@ def normSeed (seed : String) : String :=
     source normalizes every seed and keys every subject the same way
     (`verified.go`), so a value recorded under one algorithm never matches a
     seed computed under another.
-    -- cite: plugins/attestors/policyverify/policyverify.go:117-134 sha256:237f48662d314cab35a32b69eb277b293aa328896b84e717a3ce9548e4f5790b
+    -- cite: plugins/attestors/policyverify/policyverify.go:121-138 sha256:237f48662d314cab35a32b69eb277b293aa328896b84e717a3ce9548e4f5790b
     -/
 def anchorHits (seeds : List String) (c : Collection) : List String :=
   (c.subjects.filter fun s => matchable c.hardenedGit s && (seeds.map normSeed).contains (subjectKey s)).map
@@ -209,7 +209,7 @@ def extCtx (s : Step) (α : Assign) : List (String × Collection) :=
     read from the results accumulated so far, i.e. BEFORE pruning. The step
     loop cited below is the one #9860 turned into the round loop: its first
     round is this phase (`fix9813Loop` with `prev = none`).
-    -- cite: attestation/policy/policy.go:994-1149 sha256:04751931704c5869e80821d7e6ac8f4e6c0e8cef260eba4bc93d5f4bbace5cfb
+    -- cite: attestation/policy/policy.go:994-1149 sha256:e5695bc78bae9bf145b0785a3813c440afe983f60b80a539405e38abe3588bfc
     -/
 def phaseAsBuilt (rego : Rego) (h : Hardening) (p : Policy) (o : Options) (E : List Envelope)
     (α : Assign) : State :=
@@ -454,7 +454,7 @@ def pruneLoop (p : Policy) (o : Options) : Nat → State → State
 def prune (p : Policy) (o : Options) (st : State) : State := pruneLoop p o (size st + 1) st
 
 /-! ## Externals (`policy.go`)
-  -- cite: attestation/policy/policy.go:1769-2007 sha256:689668da2334dbd438eb524cbfc35526d896b48910dc6979bbfbb12a3923389e
+  -- cite: attestation/policy/policy.go:1775-2013 sha256:e739186d2c3fddb063edc0980c8f9be5acd82ba200e2c14f2c98d8ace5aa743a
 -/
 
 /-- An external candidate is bound when DSSE passes... the substitution guard

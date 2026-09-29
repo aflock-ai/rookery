@@ -1048,7 +1048,7 @@ func (p Policy) verifyStepsRound(ctx context.Context, vo *verifyOptions, trustBu
 				// Use search to get all the attestations that match the supplied step name and subjects
 				collections, err := vo.verifiedSource.Search(ctx, stepName, vo.subjectDigests, attestationsByStep[stepName])
 				if err != nil {
-					return nil, nil, err
+					return nil, nil, fmt.Errorf("%w: searching step %q: %w", ErrEvidenceUnavailable, stepName, err)
 				}
 
 				if len(collections) == 0 {
@@ -1362,7 +1362,10 @@ func (p Policy) verifyStepStreamed(ctx context.Context, streamer source.Streamin
 		return nil
 	})
 	if err != nil && !errors.Is(err, errStepSatisfied) {
-		return StepResult{}, 0, false, err
+		// The callback returns nothing but errStepSatisfied, so any other
+		// error is the source's: the evidence could not be read, as on the
+		// batch path's Search.
+		return StepResult{}, 0, false, fmt.Errorf("%w: streaming step %q: %w", ErrEvidenceUnavailable, step.Name, err)
 	}
 
 	// End of stream: final hub classification over the full authorized set,
@@ -1802,7 +1805,7 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 			var err error
 			envelopes, err = searchExternal(ctx, vo, ext.PredicateType, declared)
 			if err != nil {
-				return results, fmt.Errorf("failed to search external attestation %q: %w", name, err)
+				return results, fmt.Errorf("%w: failed to search external attestation %q: %w", ErrEvidenceUnavailable, name, err)
 			}
 			searched[ext.PredicateType] = envelopes
 		}

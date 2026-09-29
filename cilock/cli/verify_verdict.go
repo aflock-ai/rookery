@@ -84,6 +84,14 @@ func loadCollectionInventories(coll attestation.Collection, manifests manifestIn
 // without parsing logr prose (though the exit code remains the canonical gate).
 type VerifyVerdict struct {
 	Passed bool `json:"passed"`
+	// Verdict separates a policy decision from a verification that could not be
+	// made: "passed", "denied" (the policy judged the evidence and refused it,
+	// exit 1), or "error" (no verdict was reached: the evidence could not be read,
+	// or an evaluator refused to answer; exit 2). A gate can tell an outage from a
+	// denial without parsing prose, and must fail closed on both.
+	Verdict string `json:"verdict"`
+	// Error is the reason for an "error" verdict.
+	Error string `json:"error,omitempty"`
 	// Step is the (first) policy step whose collection passed and bound the
 	// supplied artifact. Empty when no supplied artifact digest matched a
 	// passing step's subject (e.g. the policy passed on a subject the operator
@@ -234,7 +242,7 @@ func appendCollectionBindings(out []subjectBinding, seen, want map[string]struct
 // its own subjects, but cilock does not claim the operator's artifact bound when
 // it did not.
 func buildVerifyVerdict(supplied []string, stepResults map[string]policy.StepResult, manifests manifestIndex) VerifyVerdict {
-	v := VerifyVerdict{Passed: true}
+	v := VerifyVerdict{Passed: true, Verdict: VerdictPassed}
 	if b := matchedBindings(supplied, stepResults, manifests); len(b) > 0 {
 		v.Step = b[0].step
 		v.MatchedSubject = b[0].digest
@@ -336,4 +344,39 @@ func writeVerifyVerdictJSON(w io.Writer, v VerifyVerdict) error {
 		return fmt.Errorf("write verify verdict: %w", err)
 	}
 	return nil
+}
+
+// Verdicts and exit codes of a policy verify (`cilock verify -p`).
+const (
+	VerdictPassed = "passed"
+	VerdictDenied = "denied"
+	VerdictError  = "error"
+
+	ExitDenied = 1
+	ExitError  = 2
+)
+
+// VerifyExitError carries the exit code of a failed policy verify: ExitDenied
+// when the policy refused evidence it read, ExitError when verification could
+// not be carried out. Execute exits with Code.
+type VerifyExitError struct {
+	Code int
+	Err  error
+}
+
+func (e *VerifyExitError) Error() string { return e.Err.Error() }
+func (e *VerifyExitError) Unwrap() error { return e.Err }
+
+// ExitCode is read by Execute through errors.As.
+func (e *VerifyExitError) ExitCode() int { return e.Code }
+
+// classifyVerifyFailure tells a denial (the policy judged evidence it read) from a
+// verification that reached no verdict (policy.NoVerdict: the evidence could not
+// be read, an evaluator refused to answer, or the external assignments could not
+// all be tried). Exit 2 is never a pass: a gate must fail closed on it too.
+func classifyVerifyFailure(err error) (verdict string, code int) {
+	if policy.NoVerdict(err) {
+		return VerdictError, ExitError
+	}
+	return VerdictDenied, ExitDenied
 }

@@ -44,3 +44,21 @@ type VerificationSummary struct {
 	InputAttestations  []ResourceDescriptor `json:"inputAttestations"`
 	VerificationResult VerificationResult   `json:"verificationResult"`
 }
+
+// VerificationRejection is one rejected collection in the stepResults extension: which signed
+// collection, why, and the rego deny messages when the rejection was a policy denial.
+type VerificationRejection struct {
+	Reference  string   `json:"reference,omitempty"`
+	Collection string   `json:"collection,omitempty"`
+	Reason     string   `json:"reason"`
+	Denies     []string `json:"denies,omitempty"`
+}
+
+// VerificationStepResult is one step's outcome in the stepResults extension `cilock verify`
+// writes next to the VSA v1 fields, so a consumer (a person, or a parent policy judging this VSA
+// as an external) can tell which step, collection and rego check decided the verdict.
+type VerificationStepResult struct {
+	Step     string                  `json:"step"`
+	Passed   []string                `json:"passed"`
+	Rejected []VerificationRejection `json:"rejected"`
+}

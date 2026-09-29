@@ -4,10 +4,10 @@
 The SLSA attestor copies the attestation context's products when it meets the
 product attestor, then builds `file:<name>` subjects from them and overlays
 the subjects other attestors emitted:
--- cite: plugins/attestors/slsa/slsa.go:302-316 sha256:04a9e314a6c3bd3287c1dd52da90a998d9649552b1958db671a3a5fbdbd0b3b2
--- cite: plugins/attestors/slsa/slsa.go:352-366 sha256:de0f3a2557f7e23c3482906f1eabfc29c61dbfb2cf87b8c0c4f5eed83ed7e698
+-- cite: plugins/attestors/slsa/slsa.go:312-326 sha256:04a9e314a6c3bd3287c1dd52da90a998d9649552b1958db671a3a5fbdbd0b3b2
+-- cite: plugins/attestors/slsa/slsa.go:362-376 sha256:de0f3a2557f7e23c3482906f1eabfc29c61dbfb2cf87b8c0c4f5eed83ed7e698
 An attestor that errored contributes nothing:
--- cite: plugins/attestors/slsa/slsa.go:166-169 sha256:2ca61b975d8a4b47849541266f2763e01d3a3cebe74fa9681cdede640e820fae
+-- cite: plugins/attestors/slsa/slsa.go:176-179 sha256:2ca61b975d8a4b47849541266f2763e01d3a3cebe74fa9681cdede640e820fae
 The context's products are every producer's, last writer wins:
 -- cite: attestation/context.go:567-572 sha256:ce8e30325badd203b43fd277114f5411f10379a8960418bf60f1d99be0a008f8
 The product attestor's own subject is the Merkle root, under sha256 only:
@@ -144,7 +144,7 @@ seed into an algorithm:value key and the memory index is keyed the same way.
 refined model with the matchability filter and the legacy table is
 formal/security-backlog SecBacklog/Subject.lean.
 
--- cite: plugins/attestors/policyverify/policyverify.go:124-134 sha256:b8d9bbe775e3698b
+-- cite: plugins/attestors/policyverify/policyverify.go:128-138 sha256:b8d9bbe775e3698b
 -- cite: attestation/source/memory.go:111-113 sha256:7605160503b2bca1
 -/
 
