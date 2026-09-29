@@ -21,6 +21,11 @@ func isolateCLIConfig(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("HOME", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
+	// No ambient CI identity either: a runner that grants `id-token: write` is
+	// a platform identity, and its evidence is uploaded (or the run refused),
+	// so a test that means "no platform identity" must not inherit one.
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
 }
 
 // TestUseCmd_FastPathBindsProduct: `cilock use --product-id …` rebinds the

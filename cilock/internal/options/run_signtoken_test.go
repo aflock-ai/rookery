@@ -200,6 +200,9 @@ func TestResolvePlatformDefaults_ArchivistaExplicitFalseWins(t *testing.T) {
 // offline/no-platform default: without a session, Archivista stays off.
 func TestResolvePlatformDefaults_ArchivistaOffWhenLoggedOut(t *testing.T) {
 	isolateCredentialStore(t)
+	// Logged out AND no ambient CI identity: a job with `id-token: write` is a
+	// platform identity whose evidence is stored (evidence_storage_test.go).
+	clearAmbientOIDC(t)
 
 	cmd, ro := newRunCmd(t)
 	if err := cmd.ParseFlags([]string{"--platform-url", "https://platform.example.com"}); err != nil {

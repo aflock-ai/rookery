@@ -7,24 +7,46 @@ package options
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	"github.com/spf13/cobra"
 )
 
-// platformPrincipal is the stored platform credential a run signs as: an
-// enrolled agent (its SPIFFE ID) or a `cilock login` session (its account).
+// platformPrincipal is the platform identity a run signs as: an enrolled agent
+// (its SPIFFE ID), a `cilock login` session (its account), or an ambient CI
+// workflow identity whose OIDC token authenticates the platform's own
+// Archivista (holdAmbientIdentityToStore).
 // It is the ONE definition of "a principal that could have stored evidence" —
 // the evidence gate below reads it rather than inferring the same fact from
 // whichever resolved* fields a given path happens to fill in.
 //
-// nil for every run with no stored credential: local key, --offline, or an
-// ambient CI identity with no login. Those runs never had upload authority to
-// begin with, so the gate has nothing to hold them to.
+// nil for every run with no platform identity: a local key with no login,
+// --offline, or a CI identity whose upload would go to a foreign Archivista.
+// Those runs never had upload authority, so the gate has nothing to hold them
+// to.
 type platformPrincipal struct {
-	Kind string // "agent" | "session"
+	Kind string // "agent" | "session" | "workflow identity"
 	Name string // SPIFFE ID, or the session's account
+}
+
+// holdAmbientIdentityToStore makes an ambient CI workflow identity with upload
+// authority store its evidence. Its OIDC token authenticates the platform's own
+// Archivista (ArchivistaOptions.OIDC, same origin, checked by the caller), and
+// the platform resolves its tenant and product from that token, so it is a
+// principal exactly as a login session is: the upload turns on unless the
+// operator set --enable-archivista, and the evidence gate holds it. Before,
+// such a run signed, stored nothing and exited 0 with only a warning.
+func (ro *RunOptions) holdAmbientIdentityToStore(cmd *cobra.Command) {
+	name := "CI job"
+	if repo := os.Getenv("GITHUB_REPOSITORY"); repo != "" {
+		name = "GitHub Actions job in " + repo
+	}
+	ro.platformPrincipal = &platformPrincipal{Kind: "workflow identity", Name: name}
+	if !archivistaFlagExplicit(cmd) {
+		ro.ArchivistaOptions.Enable = true
+	}
 }
 
 // uploadScope is the platform scope storing an attestation needs. It is the
@@ -75,7 +97,7 @@ func (e *EvidenceNotStoredError) Error() string {
 // compiled nothing: the exit code claimed evidence that does not exist.
 //
 // Rule:
-//   - no stored principal (local key, --offline, ambient CI only) → proceed;
+//   - no principal (local key, --offline, a foreign Archivista) → proceed;
 //     nothing here could have uploaded, and the "signed locally; not uploaded"
 //     warning after the run covers it.
 //   - principal + upload enabled → proceed; an upload that then fails is a

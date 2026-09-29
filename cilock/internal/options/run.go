@@ -823,6 +823,7 @@ func (ro *RunOptions) resolvePlatformIdentity(cmd *cobra.Command, pc platformcon
 			// match before binding. Closes the confused-deputy gap where a hostile CI
 			// step exports CILOCK_PLATFORM_URL to forge a platform binding.
 			platformconfig.MarkTrustedPlatformBinding(normalized)
+			ro.holdAmbientIdentityToStore(cmd)
 		}
 		return true
 	}

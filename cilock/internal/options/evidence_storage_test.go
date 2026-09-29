@@ -233,3 +233,73 @@ func boolStr(b bool) string {
 	}
 	return "false"
 }
+
+// TestEnforceEvidenceStorage_AmbientWorkflowIdentityStoresOrRefuses: a GitHub
+// Actions job with `permissions: id-token: write` and no `cilock login` has
+// upload authority (the job's OIDC token authenticates the Archivista upload,
+// and the platform resolves its tenant and product from it). Before, that run
+// signed, stored NOTHING, warned "run `cilock login`" and exited 0: the same
+// silent evidence loss as the 2026-09-02 agent incident, reproduced with
+// main's binary against a loopback platform (resolve-binding answered, no
+// upload was attempted). Now the upload is on, the identity is a principal
+// the evidence gate holds, and only an explicit --enable-archivista=false
+// signs without storing.
+func TestEnforceEvidenceStorage_AmbientWorkflowIdentityStoresOrRefuses(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		flags       []string
+		wantEnabled bool
+	}{
+		{name: "default: the upload is on", wantEnabled: true},
+		{name: "explicit opt-out: signs locally on purpose", flags: []string{"--enable-archivista=false"}, wantEnabled: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateCredentialStore(t)
+			t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://token.example/req")
+			t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "bearer-xyz")
+			t.Setenv("GITHUB_REPOSITORY", "acme/widget")
+			cmd, ro := newRunCmd(t)
+			if err := cmd.ParseFlags(append([]string{"--platform-url", "https://platform.example.com", "-k", "key.pem"}, tc.flags...)); err != nil {
+				t.Fatal(err)
+			}
+			ro.ResolvePlatformDefaults(cmd)
+			if !ro.ArchivistaOptions.OIDC {
+				t.Fatal("precondition: the job's OIDC token must authenticate the upload")
+			}
+			if ro.platformPrincipal == nil || ro.platformPrincipal.Kind != "workflow identity" {
+				t.Fatalf("an ambient CI identity with upload authority is a principal the evidence gate holds, got %+v", ro.platformPrincipal)
+			}
+			if ro.ArchivistaOptions.Enable != tc.wantEnabled {
+				t.Fatalf("upload enabled = %v, want %v", ro.ArchivistaOptions.Enable, tc.wantEnabled)
+			}
+			if err := ro.EnforceEvidenceStorage(cmd); err != nil {
+				t.Fatalf("EnforceEvidenceStorage = %v", err)
+			}
+			// The backstop: if the upload were off without the operator
+			// asking, the gate refuses before the command runs.
+			ro.ArchivistaOptions.Enable = false
+			if err := ro.enforceEvidenceStorage(false); err == nil {
+				t.Fatal("a workflow-identity run that would store nothing must be refused")
+			}
+		})
+	}
+}
+
+// TestEnforceEvidenceStorage_AmbientIdentityForAForeignArchivista: the job's
+// OIDC token is only sent to the platform's own Archivista, so a run whose
+// --archivista-server is elsewhere has no upload authority there and is not
+// held by the gate.
+func TestEnforceEvidenceStorage_AmbientIdentityForAForeignArchivista(t *testing.T) {
+	isolateCredentialStore(t)
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://token.example/req")
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "bearer-xyz")
+	cmd, ro := newRunCmd(t)
+	if err := cmd.ParseFlags([]string{"--platform-url", "https://platform.example.com", "-k", "key.pem",
+		"--archivista-server", "https://archivista.elsewhere.example"}); err != nil {
+		t.Fatal(err)
+	}
+	ro.ResolvePlatformDefaults(cmd)
+	if ro.platformPrincipal != nil || ro.ArchivistaOptions.Enable {
+		t.Fatalf("a foreign Archivista is not the platform's upload: principal %+v enabled %v", ro.platformPrincipal, ro.ArchivistaOptions.Enable)
+	}
+}
