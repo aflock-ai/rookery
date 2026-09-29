@@ -1,0 +1,10 @@
+name = "cilock-policy"
+version = "0.1.0"
+defaultTargets = ["CilockPolicy", "cilock-policy-eval"]
+
+[[lean_lib]]
+name = "CilockPolicy"
+
+[[lean_exe]]
+name = "cilock-policy-eval"
+root = "Main"
