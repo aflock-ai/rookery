@@ -17,6 +17,8 @@ package catalog
 import (
 	"bytes"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -108,6 +110,30 @@ func TestDeterministic(t *testing.T) {
 		if !bytes.Equal(first, next) {
 			t.Fatalf("Render #%d is not byte-identical to #1 — catalog output is nondeterministic", i)
 		}
+	}
+}
+
+// TestCommittedCatalogIsCurrent asserts the committed docs/attestor-catalog.json
+// is exactly what Render produces from the registry and the detection catalog.
+// A new catalog entry (#10186) changed the generator's input and nothing
+// regenerated the file: verify-codegen runs only when ent/gqlgen inputs change,
+// so the stale file reached main and every later full `jade generate` rewrote
+// it. This test is the check that runs on the change that makes it stale.
+//
+// Regenerate: cd presets/all && GOWORK=off go run ./cmd/gen-catalog, or
+// `jade generate`, which also copies it into judge-api.
+func TestCommittedCatalogIsCurrent(t *testing.T) {
+	want, err := Render()
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "docs", "attestor-catalog.json"))
+	if err != nil {
+		t.Fatalf("read committed catalog: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("docs/attestor-catalog.json is stale: regenerate it with " +
+			"`cd presets/all && GOWORK=off go run ./cmd/gen-catalog` (or `jade generate`) and commit it")
 	}
 }
 

@@ -1,6 +1,6 @@
 {
   "generated_from": "registry+detector.yaml",
-  "attestor_count": 140,
+  "attestor_count": 145,
   "attestors": [
     {
       "name": "alps-evidence",
@@ -2570,6 +2570,44 @@
       }
     },
     {
+      "name": "biome",
+      "category": [
+        "lint"
+      ],
+      "upstream": {
+        "name": "Biome",
+        "source": "https://github.com/biomejs/biome",
+        "license": "MIT OR Apache-2.0",
+        "vendor": "Biome contributors"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[biome], argv_prefix:[npx biome])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "biome"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "npx",
+                "biome"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
       "name": "bitbucket-pipelines",
       "category": [
         "ci-context"
@@ -3639,6 +3677,44 @@
       }
     },
     {
+      "name": "mocha",
+      "category": [
+        "unit-test"
+      ],
+      "upstream": {
+        "name": "Mocha",
+        "source": "https://github.com/mochajs/mocha",
+        "license": "MIT",
+        "vendor": "OpenJS Foundation"
+      },
+      "emits_formats": [
+        "test-results"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[mocha], argv_prefix:[npx mocha])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "mocha"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "npx",
+                "mocha"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
       "name": "nancy",
       "category": [
         "vulnerability-scan"
@@ -3659,6 +3735,35 @@
         "pre": {
           "argv_prefix": [
             "nancy"
+          ]
+        }
+      }
+    },
+    {
+      "name": "node-test",
+      "category": [
+        "unit-test"
+      ],
+      "upstream": {
+        "name": "Node.js test runner",
+        "source": "https://nodejs.org/api/test.html",
+        "license": "MIT",
+        "vendor": "OpenJS Foundation / Node.js"
+      },
+      "emits_formats": [
+        "test-results"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[node --test]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "node",
+            "--test"
           ]
         }
       }
@@ -3752,6 +3857,35 @@
                 "install"
               ]
             }
+          ]
+        }
+      }
+    },
+    {
+      "name": "npm-sbom",
+      "category": [
+        "sbom-generate"
+      ],
+      "upstream": {
+        "name": "npm sbom",
+        "source": "https://docs.npmjs.com/cli/commands/npm-sbom",
+        "license": "Artistic-2.0",
+        "vendor": "GitHub / npm"
+      },
+      "emits_formats": [
+        "sbom"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[npm sbom]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "npm",
+            "sbom"
           ]
         }
       }
@@ -4291,6 +4425,41 @@
         "pre": {
           "argv_prefix": [
             "trufflehog"
+          ]
+        }
+      }
+    },
+    {
+      "name": "tsc",
+      "category": [
+        "build"
+      ],
+      "upstream": {
+        "name": "TypeScript",
+        "source": "https://github.com/microsoft/TypeScript",
+        "license": "Apache-2.0",
+        "vendor": "Microsoft"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "any_of(argv_prefix:[npx tsc], argv_prefix:[tsc])"
+      },
+      "detection": {
+        "pre": {
+          "any_of": [
+            {
+              "argv_prefix": [
+                "npx",
+                "tsc"
+              ]
+            },
+            {
+              "argv_prefix": [
+                "tsc"
+              ]
+            }
           ]
         }
       }
