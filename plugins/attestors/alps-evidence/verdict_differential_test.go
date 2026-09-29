@@ -21,7 +21,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"math/rand"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -115,8 +114,8 @@ func TestVerdictMatchesLeanModel(t *testing.T) {
 	t.Logf("%d cases agree: %v", len(covs), seen)
 }
 
-// leanEvaluator returns the path of the built `ciprov-eval`, building it with
-// lake when needed, or skips.
+// leanEvaluator runs an incremental `lake build ciprov-eval` and returns the
+// binary's path, or skips when lake is not on PATH.
 func leanEvaluator(t *testing.T) string {
 	t.Helper()
 	dir, err := filepath.Abs(filepath.Join("..", "..", "..", "formal", "ci-provenance"))
@@ -124,12 +123,12 @@ func leanEvaluator(t *testing.T) string {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(dir, ".lake", "build", "bin", "ciprov-eval")
-	if _, err := os.Stat(bin); err == nil {
-		return bin
-	}
+	// Always run the incremental build: lake rebuilds only what changed, and
+	// reusing an existing binary would compare the code against whatever
+	// model was built last rather than the model in the tree.
 	lake, err := exec.LookPath("lake")
 	if err != nil {
-		t.Skip("Lean evaluator not built and `lake` not on PATH; install elan to run the differential test")
+		t.Skip("`lake` not on PATH, so the Lean evaluator cannot be rebuilt from the current model; install elan to run the differential test")
 	}
 	build := exec.Command(lake, "build", "ciprov-eval")
 	build.Dir = dir

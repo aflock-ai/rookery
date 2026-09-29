@@ -157,9 +157,8 @@ func leanEvaluator(t *testing.T) string {
 		t.Fatal(err)
 	}
 	bin := filepath.Join(dir, ".lake", "build", "bin", "ciprov-eval")
-	if _, err := os.Stat(bin); err == nil {
-		return bin
-	}
+	// Always run the incremental build: reusing an existing binary would
+	// compare the code against whatever model was built last.
 	if _, err := os.Stat(dir); err != nil {
 		t.Skip("Lean model formal/ci-provenance not in this tree; set CIPROV_EVAL to run the differential test")
 	}

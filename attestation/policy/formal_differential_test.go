@@ -72,12 +72,21 @@ func diffOracle(t *testing.T) string {
 	if p := os.Getenv("CILOCK_EVALUATORS_ORACLE"); p != "" {
 		return p
 	}
-	p, err := filepath.Abs(filepath.Join(cilockEvaluatorsModel, ".lake", "build", "bin", "cilock-evaluators-oracle"))
+	dir, err := filepath.Abs(cilockEvaluatorsModel)
 	require.NoError(t, err)
-	if _, err := os.Stat(p); err != nil {
-		t.Skipf("Lean oracle not built (%s); run `lake build` in formal/cilock-evaluators", p)
+	// Always run the incremental build: lake rebuilds only what changed, and
+	// reusing an existing binary would compare the code against whatever
+	// model was built last rather than the model in the tree.
+	lake, err := exec.LookPath("lake")
+	if err != nil {
+		t.Skip("`lake` not on PATH, so the Lean oracle cannot be rebuilt from the current model; install elan, or set CILOCK_EVALUATORS_ORACLE")
 	}
-	return p
+	build := exec.Command(lake, "build", "cilock-evaluators-oracle")
+	build.Dir = dir
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("lake build cilock-evaluators-oracle: %v\n%s", err, out)
+	}
+	return filepath.Join(dir, ".lake", "build", "bin", "cilock-evaluators-oracle")
 }
 
 func diffEnvInt(name string, def int) int {
