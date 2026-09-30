@@ -213,7 +213,7 @@ func TestPinMismatchRecordsNoScope(t *testing.T) {
 }
 
 // B9-Q5: a failed write keeps the previous dated record and warns; it never
-// refuses the exchange the way expiry's write does.
+// refuses the exchange, just like an expiry report write failure.
 func TestScopeWriteFailureWarnsAndSigns(t *testing.T) {
 	isolateConfig(t)
 	warnings := captureAgentWarnings(t)

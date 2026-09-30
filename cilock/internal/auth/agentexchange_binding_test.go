@@ -106,6 +106,7 @@ func TestExchangeRefusesAPrincipalItDidNotAskFor(t *testing.T) {
 // TestExchangeAcceptsThePrincipalItAskedFor is the positive control. Without it
 // the test above could pass by refusing everything.
 func TestExchangeAcceptsThePrincipalItAskedFor(t *testing.T) {
+	isolateConfig(t)
 	cred := bindingCred("")
 	want := "spiffe://td/tenant/" + cred.TenantID + "/agent/" + cred.AgentID
 

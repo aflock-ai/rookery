@@ -110,6 +110,7 @@ func agentExchangeStub(t *testing.T, spiffeID string, gotBody *[]byte) *httptest
 }
 
 func TestExchangeAgentCredentialSendsTheContractAndReadsTheSPIFFEID(t *testing.T) {
+	isolateConfig(t)
 	const spiffeID = "spiffe://platform.example.com/tenant/t-1/agent/a-1"
 	var body []byte
 	srv := agentExchangeStub(t, spiffeID, &body)

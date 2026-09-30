@@ -298,7 +298,7 @@ func exchangeAgentCredential(platformURL string, cred AgentCredential) (AgentSig
 	}
 	// RECORD THE ANSWERED SCOPE, LAST: every check and every refusal above has
 	// passed, so a scope lands only for an exchange about to be handed to the
-	// signer. It is a report, so unlike the pin and the ceiling it can never
+	// signer. It is a report, so like the ceiling and unlike the pin it can never
 	// refuse. An absent or unreadable answer records UNKNOWN over any previous
 	// record: a scope can shrink, and yesterday's list shown as current is the
 	// misleading outcome. A failed write (the store replaced under us, or I/O)
@@ -464,6 +464,8 @@ func isPlatformCredentialVerdict(status int, body []byte) bool {
 
 // recordAnsweredExpiry stores the platform's expires_at from an exchange
 // response. Empty (an older platform) is a no-op; unreadable is a refusal.
+// Persistence is a report, not authority: an in-flight exchange can outlive
+// enrollment replacing its stored credential. The platform still checks expiry.
 func recordAnsweredExpiry(cred AgentCredential, raw string) error {
 	if raw == "" {
 		return nil
@@ -473,7 +475,7 @@ func recordAnsweredExpiry(cred AgentCredential, raw string) error {
 		return fmt.Errorf("the platform answered with an unreadable expires_at: %w", err)
 	}
 	if err := RecordAgentExpiry(cred, ceiling); err != nil {
-		return fmt.Errorf("recording the agent's expiry: %w", err)
+		_, _ = fmt.Fprintf(agentWarnings, "cilock: warning: could not record the agent expiry the platform answered (agent status keeps the previous answer): %v\n", err)
 	}
 	return nil
 }

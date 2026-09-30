@@ -70,6 +70,7 @@ func TestExchangeRefusesATokenForADifferentPrincipal(t *testing.T) {
 // TestExchangeAcceptsAMatchingToken is the positive control: without it the
 // test above could pass by refusing every response.
 func TestExchangeAcceptsAMatchingToken(t *testing.T) {
+	isolateConfig(t)
 	cred := bindingCred("")
 	enrolled := "spiffe://td/tenant/" + cred.TenantID + "/agent/" + cred.AgentID
 

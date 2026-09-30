@@ -107,6 +107,7 @@ func TestExchangeRefusesACredentialItKnowsHasExpired(t *testing.T) {
 }
 
 func TestExchangeStillPresentsACredentialWithNoKnownExpiry(t *testing.T) {
+	isolateConfig(t)
 	// Zero means "not recorded", not "expired": the platform is the authority
 	// and answers for itself. The local check only saves a round trip it can
 	// prove is pointless.
@@ -258,6 +259,56 @@ func TestExchangeRecordsThePlatformsExpiryOverTheCallbacks(t *testing.T) {
 	after, err := LookupAgent(srv.URL)
 	require.NoError(t, err)
 	assert.True(t, after.ExpiresAt.Equal(authoritative), "stored %v, want the platform's %v", after.ExpiresAt, authoritative)
+}
+
+// Enrollment can complete while a previously pinned agent's exchange is in
+// flight. Its valid answer must survive a lost report write without modifying
+// the newly enrolled identity.
+func TestExchangeAfterEnrollmentWarnsWhenExpiryCannotBeRecorded(t *testing.T) {
+	isolateConfig(t)
+	warnings := captureAgentWarnings(t)
+	const spiffeID = "spiffe://platform.example.com/tenant/t-1/agent/a-1"
+	for _, expiry := range []string{time.Now().Add(time.Hour).UTC().Format(time.RFC3339), "soon"} {
+		t.Run(expiry, func(t *testing.T) {
+			warnings.Reset()
+			var replacement AgentCredential
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				assert.NoError(t, SavePendingAgent(replacement))
+				assert.NoError(t, PromotePendingAgentIf(replacement))
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(map[string]string{
+					"token": jwtWithSubject(t, spiffeID), "token_type": "oidc", "spiffe_id": spiffeID,
+					"expires_at": expiry,
+				})
+			}))
+			defer srv.Close()
+			cred := AgentCredential{PlatformURL: srv.URL, TenantID: "t-1", AgentID: "a-1",
+				RefreshCredential: theSecret, TrustDomain: "platform.example.com"}
+			require.NoError(t, SaveAgent(cred))
+			replacement = cred
+			replacement.AgentID = "a-new"
+			replacement.RefreshCredential = "replacement-secret"
+			replacement.ExpiresAt = time.Now().Add(2 * time.Hour).UTC()
+
+			id, err := ExchangeAgentCredential(srv.URL, cred)
+			if expiry == "soon" {
+				require.ErrorContains(t, err, "unreadable expires_at")
+				assert.Empty(t, id.Token)
+				assert.NotContains(t, warnings.String(), "could not record the agent expiry")
+			} else {
+				require.NoError(t, err, "losing a report write must not fail a valid exchange")
+				assert.Equal(t, spiffeID, id.SPIFFEID)
+				assert.NotEmpty(t, id.Token)
+				assert.Contains(t, warnings.String(), "could not record the agent expiry")
+			}
+			got, err := LookupAgent(srv.URL)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.Equal(t, replacement, *got)
+			assert.NotContains(t, warnings.String(), theSecret)
+			assert.NotContains(t, warnings.String(), replacement.RefreshCredential)
+		})
+	}
 }
 
 func TestExchangeRefusesAnUnreadableExpiryFromThePlatform(t *testing.T) {
