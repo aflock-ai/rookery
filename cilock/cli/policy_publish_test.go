@@ -328,7 +328,7 @@ func TestPolicyBind_MissingDefinitionErrors(t *testing.T) {
 	stubSession(t, srv.URL)
 
 	_, err := runCmd(t, PolicyBindCmd(),
-		"--definition", "ghost", "--product", "svc", "--platform-url", srv.URL)
+		"--definition", "ghost", "--release", "6a4e31bc-a182-4cdf-a909-c4419377c802", "--product", "svc", "--platform-url", srv.URL)
 	if err == nil || !strings.Contains(err.Error(), "no policy definition") {
 		t.Fatalf("want missing-definition error, got %v", err)
 	}
@@ -362,7 +362,7 @@ func TestPolicyBind_NotLoggedIn(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, ".config"))
 
 	_, err := runCmd(t, PolicyBindCmd(),
-		"-d", "d", "--product", "svc", "--platform-url", "https://platform.example.test")
+		"-d", "d", "--release", "6a4e31bc-a182-4cdf-a909-c4419377c802", "--product", "svc", "--platform-url", "https://platform.example.test")
 	if err == nil || !strings.Contains(err.Error(), "not logged in") {
 		t.Fatalf("want not-logged-in error, got %v", err)
 	}

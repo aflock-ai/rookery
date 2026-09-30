@@ -61,7 +61,7 @@ func resolveBoundPolicyRef(ctx context.Context, vo *options.VerifyOptions) (stri
 		productLabel = cred.ProductID
 	}
 	if bound == nil {
-		return "", fmt.Errorf("no policy bound for product %q — bind one with `cilock policy bind --definition <name> --product %s`, or pass -p/--policy", productLabel, cred.ProductID)
+		return "", fmt.Errorf("no policy bound for product %q — bind one with `cilock policy bind --definition <name> --release <uuid> --product %s`, or pass -p/--policy", productLabel, cred.ProductID)
 	}
 
 	// The loud provenance line: which policy this verify trusts, and on whose
