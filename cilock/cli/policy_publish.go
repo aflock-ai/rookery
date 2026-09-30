@@ -274,7 +274,8 @@ func printPublishResult(out io.Writer, res *policyPublishResult, platformURL str
 	_, _ = fmt.Fprintf(out, "  release:  %s\n  policy:   sha256:%s\n  gitoid:   %s\n  signed:   %s\n",
 		res.ReleaseID, res.PolicySHA256, res.PolicyGitoid, publishSignedLine(res))
 	if origin := publishNextStepPushgateOrigin(platformURL); origin != "" {
-		_, _ = fmt.Fprintf(out, "\nNext: your human turns it on for a repository at %s/policy (Warn first).\n", origin)
+		_, _ = fmt.Fprintf(out, "\nNext: your human turns it on for a repository (Warn first): %s\n", assignReviewURL(origin, res.ReleaseID, ""))
+		_, _ = fmt.Fprintf(out, "  or: cilock policy bind pushgate --release %s --repo github.com/<owner>/<name> --mode warn\n", res.ReleaseID)
 	}
 }
 

@@ -75,6 +75,7 @@ func PolicyBindCmd() *cobra.Command {
 
 	_ = cmd.MarkFlagRequired("definition")
 	_ = cmd.MarkFlagRequired("product")
+	cmd.AddCommand(PolicyBindPushgateCmd())
 	return cmd
 }
 

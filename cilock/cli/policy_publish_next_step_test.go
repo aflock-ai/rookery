@@ -41,7 +41,7 @@ func TestPolicyPublish_NextStepUsesDiscoveredPushgateOrigin(t *testing.T) {
 
 	out := publishResultText("https://platform.testifysec.com")
 
-	if !strings.Contains(out, "Next: your human turns it on for a repository at https://pushgate.dev/policy (Warn first).") {
+	if !strings.Contains(out, "Next: your human turns it on for a repository (Warn first): https://pushgate.dev/gates?assign=rel-1&view=policies") {
 		t.Fatalf("next step does not name the discovered Pushgate origin; got:\n%s", out)
 	}
 	if strings.Contains(out, "pushgate.testifysec.com") {
@@ -56,7 +56,7 @@ func TestPolicyPublish_NextStepUsesDiscoveredPushgateOrigin(t *testing.T) {
 func TestPolicyPublish_NextStepTrimsDiscoveredTrailingSlash(t *testing.T) {
 	stubPushgateDiscovery(t, "https://pushgate.dev/", nil)
 	out := publishResultText("https://platform.testifysec.com")
-	if !strings.Contains(out, " https://pushgate.dev/policy ") {
+	if !strings.Contains(out, " https://pushgate.dev/gates?") {
 		t.Fatalf("got:\n%s", out)
 	}
 }
@@ -98,7 +98,7 @@ func TestPolicyPublish_NoNextStepWhenPushgateIsNotAdvertised(t *testing.T) {
 func TestPolicyPublish_NextStepAcceptsLoopbackPushgate(t *testing.T) {
 	stubPushgateDiscovery(t, "http://localhost:8081", nil)
 	out := publishResultText("http://localhost:8080")
-	if !strings.Contains(out, " http://localhost:8081/policy ") {
+	if !strings.Contains(out, " http://localhost:8081/gates?") {
 		t.Fatalf("got:\n%s", out)
 	}
 }

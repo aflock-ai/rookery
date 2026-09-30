@@ -351,3 +351,7 @@ func openBrowserURL(rawURL string) bool {
 	// claiming a browser is up.
 	return cmd.Start() == nil
 }
+
+// OpenURL opens a page that carries no secret (a review link) and reports
+// whether an opener started. BROWSER=none suppresses it, as for the ceremonies.
+func OpenURL(rawURL string) bool { return openBrowserURL(rawURL) }

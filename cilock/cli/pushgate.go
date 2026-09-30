@@ -127,7 +127,7 @@ const pushgateDisplayName = "Pushgate.dev"
 // creation remains under run/attest; this domain answers what happened after
 // an authenticated Git push was admitted.
 func PushgateCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "pushgate", Short: "Inspect delivery of pushes accepted by " + pushgateDisplayName}
+	cmd := &cobra.Command{Use: pushgateCommandName, Short: "Inspect delivery of pushes accepted by " + pushgateDisplayName}
 	cmd.AddCommand(pushgateStatusCmd())
 	return cmd
 }
@@ -349,7 +349,7 @@ func resolvePushgateRemote(ctx context.Context, explicit, ref, trustedOrigin str
 // and refuses on ambiguity, so a wrong guess here cannot silently select the
 // wrong remote.
 func pushgateRemoteCandidates(ctx context.Context, ref string) []string {
-	candidates := []string{"pushgate"}
+	candidates := []string{pushgateCommandName}
 	if branch := strings.TrimPrefix(ref, "refs/heads/"); branch != ref {
 		for _, key := range []string{
 			"branch." + branch + ".pushRemote",
