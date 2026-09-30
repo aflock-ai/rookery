@@ -328,3 +328,25 @@ func TestRunVerify_EmbeddedSignerOnlyWhenFlagsLeaveIdentityUnpinned(t *testing.T
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "policy signers", "a flag-pinned signer identity must not be overwritten by embedded trust")
 }
+
+// The embedded signer carries its whole certificate constraint into the policy
+// signer check. A field the copy leaves out is a constraint embedded trust
+// declared and the verify never enforced: minassurancelevel is carried; a
+// constraint the policy-signer path cannot enforce (requiredpolicyoids) is a
+// refusal, never a silent drop.
+func TestSignatureTrust_EmbeddedSignerConstraintIsCarriedWhole(t *testing.T) {
+	human := releaseSigner()
+	human.CertConstraint.MinAssuranceLevel = "aal2"
+	emb, _, _ := trustTestEmbedded(t, human)
+	var vo options.VerifyOptions
+	_, err := resolvePolicySignatureTrust(&vo, emb, true)
+	require.NoError(t, err)
+	assert.Equal(t, "aal2", vo.PolicyMinAssurance, "the embedded signer's minassurancelevel was dropped")
+
+	oids := releaseSigner()
+	oids.CertConstraint.RequiredPolicyOIDs = []string{"1.3.6.1.4.1.57264.1.99"}
+	emb, _, _ = trustTestEmbedded(t, oids)
+	var vo2 options.VerifyOptions
+	_, err = resolvePolicySignatureTrust(&vo2, emb, true)
+	require.ErrorContains(t, err, "requiredpolicyoids")
+}

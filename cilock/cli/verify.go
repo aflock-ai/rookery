@@ -410,6 +410,9 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		workflow.VerifyWithPolicyCertConstraints(vo.PolicyCommonName, vo.PolicyDNSNames, vo.PolicyEmails, vo.PolicyOrganizations, vo.PolicyURIs),
 		workflow.VerifyWithPolicyFulcioCertExtensions(vo.PolicyFulcioCertExtensions),
 	}
+	if vo.PolicyMinAssurance != "" {
+		verifyOpts = append(verifyOpts, workflow.VerifyWithPolicyMinAssurance(vo.PolicyMinAssurance))
+	}
 	if len(signers) > 0 {
 		verifyOpts = append(verifyOpts, workflow.VerifyWithSigners(signers...))
 	}
@@ -597,6 +600,11 @@ var signerIdentityFlags = []string{
 	"policy-fulcio-source-repository-identifier",
 	"policy-fulcio-source-repository-ref",
 	"policy-fulcio-run-invocation-uri",
+	// An assurance minimum names the kind of signer (a person at AAL2), which
+	// the embedded release-workflow identity never is. Setting it alone keeps
+	// embedded identity out, and with no identity pinned the signer is refused
+	// (policysig TestPolicyMinAssuranceIsNotAnIdentity), fail-closed.
+	"policy-min-assurance",
 }
 
 // signerIdentityPinnedByFlags reports whether the operator explicitly set any

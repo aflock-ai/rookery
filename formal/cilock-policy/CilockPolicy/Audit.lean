@@ -55,6 +55,13 @@ namespace CilockPolicy
 -- V7
 #print axioms timestamp_sound
 #print axioms verifier_times_tsa
+#print axioms meetsMin_sound
+#print axioms absent_never_meets
+#print axioms repeated_never_meets
+#print axioms unknown_min_never_meets
+#print axioms ccCheck_min_assurance
+#print axioms assurance_examples
+#print axioms policy_signer_min_assurance
 #print axioms triage_skew_irrelevant
 -- Counterexamples (kernel-decided traces)
 #print axioms Launder.control_fails

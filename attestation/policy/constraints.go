@@ -123,6 +123,13 @@ type CertConstraint struct {
 	// policies are unaffected. This is the enforcement primitive for requiring a
 	// hardware-backed / AAL3 release-approval policy OID on a signer cert.
 	RequiredPolicyOIDs []string `json:"requiredpolicyoids,omitempty" jsonschema:"title=Required Policy OIDs,description=certificatePolicies (OID 2.5.29.32) OIDs in dotted-decimal form that the signer cert must all carry (fail-closed; empty means no constraint)"`
+
+	// MinAssuranceLevel requires the signer's leaf to carry the platform Fulcio's
+	// authenticator assurance level extension (OID 1.3.6.1.4.1.57264.1.100, the
+	// signing token's acr) at this level or above: "aal1", "aal2" or "aal3". The
+	// extension must appear exactly once with a known value; absent, repeated or
+	// unknown fails closed. Empty means no constraint. See assurance.go.
+	MinAssuranceLevel string `json:"minassurancelevel,omitempty" jsonschema:"title=Minimum Assurance Level,description=Minimum NIST 800-63B authenticator assurance level (aal1 aal2 aal3) the platform Fulcio stamped on the signer's leaf (fail-closed; empty means no constraint)"`
 }
 
 // IsSet reports whether the certificate constraint carries any configured field.
@@ -172,6 +179,10 @@ func (cc CertConstraint) Check(verifier *cryptoutil.X509Verifier, trustBundles m
 	}
 
 	if err := cc.checkPolicyOIDs(cert); err != nil {
+		return ErrConstraintCheckFailed{[]error{err}}
+	}
+
+	if err := checkMinAssurance(cc.MinAssuranceLevel, cert); err != nil {
 		return ErrConstraintCheckFailed{[]error{err}}
 	}
 

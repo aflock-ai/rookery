@@ -12,7 +12,7 @@ namespace CilockPolicy
 
 /-- CertConstraint (`constraints.go`). `exts` lists the Fulcio extension
     constraints; an empty value is "no constraint" for that field.
-    -- cite: attestation/policy/constraints.go:109-126 sha256:fe95a235e6c8211b342070dc1f8ed8c525e1c3b52a634b0451f63ed7fce2566b
+    -- cite: attestation/policy/constraints.go:109-133 sha256:a754f2d42d8b27221036f620ca893a67d3e764c077288e6105d7183a4b57d579
     -/
 structure CertConstraint where
   cn     : String := ""
@@ -23,10 +23,12 @@ structure CertConstraint where
   roots  : List RootId := []
   exts   : List (String × String) := []
   oids   : List String := []
+  /-- MinAssuranceLevel: "" for no constraint, else aal1 | aal2 | aal3. -/
+  minAssurance : String := ""
 deriving DecidableEq, Repr
 
 /-- CertConstraint.IsSet (`constraints.go`): anything but the zero value.
-  -- cite: attestation/policy/constraints.go:134 sha256:76e124931953bfa3be191751652b90cbc17bcbe064713d643da240af1ea56de4
+  -- cite: attestation/policy/constraints.go:141 sha256:76e124931953bfa3be191751652b90cbc17bcbe064713d643da240af1ea56de4
 -/
 def CertConstraint.isSet (cc : CertConstraint) : Bool := cc != {}
 

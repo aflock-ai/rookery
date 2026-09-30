@@ -135,9 +135,9 @@ theorem listOk_mono {g h : Hardening} (hle : Hardening.le g h) {cons vals : List
 theorem ccCheck_mono {g h : Hardening} (hle : Hardening.le g h) {roots : List RootId}
     {cc : CertConstraint} {c : Cert} (hok : ccCheck h roots cc c = true) : ccCheck g roots cc c = true := by
   simp only [ccCheck, Bool.and_eq_true] at hok ⊢
-  obtain ⟨⟨⟨⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h5⟩, h6⟩, h7⟩, h8⟩ := hok
-  exact ⟨⟨⟨⟨⟨⟨⟨h1, listOk_mono hle h2⟩, listOk_mono hle h3⟩, listOk_mono hle h4⟩, listOk_mono hle h5⟩,
-    h6⟩, h7⟩, h8⟩
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨h1, h2⟩, h3⟩, h4⟩, h5⟩, h6⟩, h7⟩, h8⟩, h9⟩ := hok
+  exact ⟨⟨⟨⟨⟨⟨⟨⟨h1, listOk_mono hle h2⟩, listOk_mono hle h3⟩, listOk_mono hle h4⟩, listOk_mono hle h5⟩,
+    h6⟩, h7⟩, h8⟩, h9⟩
 
 theorem certArm_mono {g h : Hardening} (hle : Hardening.le g h) {roots : List RootId}
     {f : Functionary} {cred : Cred} (hok : certArm h roots f cred = true) : certArm g roots f cred = true := by

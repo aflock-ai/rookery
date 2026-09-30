@@ -1,5 +1,5 @@
 -- cite: plugins/attestors/policyverify/policyverify.go:233-471 sha256:f0dec122b2755cb9c36b9dfc9573916a60a0fd80232c7354109655174bd152a4
--- cite: attestation/workflow/verify.go:326-352 sha256:a33f012b394cf59baaf640fb52e376b443f142dd03229b4e5b1e897f5fcd0244
+-- cite: attestation/workflow/verify.go:333-359 sha256:a33f012b394cf59baaf640fb52e376b443f142dd03229b4e5b1e897f5fcd0244
 -- cite: plugins/attestors/vsa/vsa.go:38 sha256:ea4b5f26d671802f212f2452002bcb25afa9797036154c0f16af56a2abc26f6f
 -- cite: plugins/attestors/vsa/vsa.go:111-123 sha256:7945715445a34d85a477d13ab7fd9f0380f93322dc1a8ca1a5c62feaf2bff81f
 /-
@@ -149,7 +149,7 @@ theorem emit_names_externals (hash : String → Digest) (r : Run) (v : Vsa) (h :
 
 /-! ## Consumption -/
 
--- cite: attestation/policy/policy.go:1810 sha256:a66860576a2118541df86481df475f9f83f3a31cc93666bfcc6fd6cba3e4cc33
+-- cite: attestation/policy/policy.go:1819 sha256:a66860576a2118541df86481df475f9f83f3a31cc93666bfcc6fd6cba3e4cc33
 /-- A candidate VSA envelope in a downstream verify. `sigOk`: its DSSE
 signature verified against the downstream policy's roots/keys, naming
 `signer` (source/verified.go; policy.go). -/
@@ -159,7 +159,7 @@ structure Candidate where
   sigOk : Bool
   deriving DecidableEq, Repr
 
--- cite: attestation/policy/policy.go:1810-1821 sha256:f100b55459c88dd720341e0520bbfce7ea9953388dbc3c2b1340ff49ff4c60f0
+-- cite: attestation/policy/policy.go:1819-1830 sha256:f100b55459c88dd720341e0520bbfce7ea9953388dbc3c2b1340ff49ff4c60f0
 /-- The consumer's view of a candidate as a `Gate.Envelope`: signature errors
 and subject-unbound both surface as envelope errors (policy.go);
 no commit binding and no declared `commitSubject`, so `commitUnbound` is

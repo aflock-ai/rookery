@@ -23,6 +23,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -44,6 +47,7 @@ import (
 
 // formal:differential cilock-policy TestFormalDifferential
 // formal:differential cilock-policy TestFormalDifferentialGlobs
+// formal:differential cilock-policy TestFormalDifferentialAssurance
 //
 // Differential test: the Lean model (formal/cilock-policy, `lake exe
 // cilock-policy-eval`) against this engine, on random cases plus pinned ones.
@@ -824,4 +828,71 @@ func TestFormalDifferentialGlobs(t *testing.T) {
 		t.Errorf("%d of %d known divergences were generated; the enumeration no longer covers them", known, len(diffGlobKnownEngineDivergence))
 	}
 	t.Logf("glob differential: %d cases, %d mismatches, %d known engine divergences", len(cases), mismatches, known)
+}
+
+type diffAssuranceCase struct {
+	Min string   `json:"min"`
+	ACR []string `json:"acr"`
+}
+
+// diffAssuranceNotUTF8 stands for an extension occurrence that is not one DER
+// UTF8String. The engine is handed undecodable bytes; the model is handed a
+// value no level parses from, which is what the engine's reading makes of it.
+const diffAssuranceNotUTF8 = "~"
+
+// TestFormalDifferentialAssurance holds CertConstraint.MinAssuranceLevel
+// (checkMinAssurance, assurance.go) to the model's meetsMin (Trust.lean) on
+// every list of up to two extension occurrences over the minted values and
+// their near misses, under every minimum including unknown ones.
+func TestFormalDifferentialAssurance(t *testing.T) {
+	values := []string{
+		"urn:testifysec:params:acr:nist-800-63b:aal1", "urn:testifysec:params:acr:nist-800-63b:aal2",
+		"urn:testifysec:params:acr:nist-800-63b:aal3", "aal1", "aal2", "aal3",
+		"AAL2", "urn:testifysec:params:acr:nist-800-63b:AAL2", " aal2", "", diffAssuranceNotUTF8,
+	}
+	lists := make([][]string, 0, 1+(1+len(values))*len(values))
+	lists = append(lists, []string{})
+	for _, a := range values {
+		lists = append(lists, []string{a})
+		for _, b := range values {
+			lists = append(lists, []string{a, b})
+		}
+	}
+	mins := []string{"", "aal1", "aal2", "aal3", "AAL2", "aal4", "urn:testifysec:params:acr:nist-800-63b:aal2"}
+	cases := make([]diffAssuranceCase, 0, len(lists)*len(mins))
+	for _, min := range mins {
+		for _, l := range lists {
+			cases = append(cases, diffAssuranceCase{Min: min, ACR: l})
+		}
+	}
+	in, err := json.Marshal(cases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lean := diffLeanRun(t, in, "--assurance")
+	if len(lean) != len(cases) {
+		t.Fatalf("lean printed %d verdicts for %d cases", len(lean), len(cases))
+	}
+	mismatches, meets := 0, 0
+	for i, c := range cases {
+		cert := &x509.Certificate{}
+		for _, v := range c.ACR {
+			der := []byte{0xff, 0x00} // not a UTF8String
+			if v != diffAssuranceNotUTF8 {
+				if der, err = asn1.MarshalWithParams(v, "utf8"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cert.Extensions = append(cert.Extensions, pkix.Extension{Id: oidAuthenticatorAssuranceLevel, Value: der})
+		}
+		got := checkMinAssurance(c.Min, cert) == nil
+		if got {
+			meets++
+		}
+		if lean[i] != strconv.FormatBool(got) {
+			mismatches++
+			t.Errorf("min %q acr %q: Go %v, Lean %s", c.Min, c.ACR, got, lean[i])
+		}
+	}
+	t.Logf("assurance differential: %d cases, %d meet, %d mismatches", len(cases), meets, mismatches)
 }

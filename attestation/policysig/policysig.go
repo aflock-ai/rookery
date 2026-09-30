@@ -47,6 +47,18 @@ type VerifyPolicySignatureOptions struct {
 	// from the all-wildcard default, so an unconstrained CA cert is refused
 	// rather than trusted (GHSA-mpvw-hw8p-7x27).
 	certConstraintsSet bool
+	// policyMinAssurance requires a policy signer's leaf to carry at least this assurance level
+	// (CertConstraint.MinAssuranceLevel): a policy countersigned by a person at AAL2. A raw-key signer
+	// carries no level, so a required minimum refuses it.
+	policyMinAssurance string
+}
+
+// VerifyWithPolicyMinAssurance requires the policy signer to hold at least this NIST 800-63B
+// authenticator assurance level (aal1, aal2, aal3) on the platform Fulcio leaf.
+func VerifyWithPolicyMinAssurance(level string) Option {
+	return func(vo *VerifyPolicySignatureOptions) {
+		vo.policyMinAssurance = level
+	}
 }
 
 type Option func(*VerifyPolicySignatureOptions)
@@ -208,6 +220,10 @@ func policyFunctionaryForVerifier(vo *VerifyPolicySignatureOptions, verifier dss
 	trustBundle := make(map[string]policy.TrustBundle)
 	x509v, ok := verifier.Verifier.(*cryptoutil.X509Verifier)
 	if !ok {
+		if vo.policyMinAssurance != "" {
+			log.Warnf("policy signer %s is a raw key; it carries no assurance level, and %s is required", kid, vo.policyMinAssurance)
+			return policy.Functionary{}, nil, true
+		}
 		return policy.Functionary{Type: "key", PublicKeyID: kid}, trustBundle, false
 	}
 
@@ -244,13 +260,14 @@ func policyFunctionaryForVerifier(vo *VerifyPolicySignatureOptions, verifier dss
 	return policy.Functionary{
 		Type: "root",
 		CertConstraint: policy.CertConstraint{
-			Roots:         rootIDs,
-			CommonName:    effectivePolicySignerCommonName(vo),
-			URIs:          effectivePolicySignerSANList(pinned, vo.policyURIs, certURIs),
-			Emails:        effectivePolicySignerSANList(pinned, vo.policyEmails, certEmails),
-			Organizations: effectivePolicySignerSANList(pinned, vo.policyOrganizations, certOrgs),
-			DNSNames:      effectivePolicySignerSANList(pinned, vo.policyDNSNames, certDNS),
-			Extensions:    vo.fulcioCertExtensions,
+			Roots:             rootIDs,
+			CommonName:        effectivePolicySignerCommonName(vo),
+			URIs:              effectivePolicySignerSANList(pinned, vo.policyURIs, certURIs),
+			Emails:            effectivePolicySignerSANList(pinned, vo.policyEmails, certEmails),
+			Organizations:     effectivePolicySignerSANList(pinned, vo.policyOrganizations, certOrgs),
+			DNSNames:          effectivePolicySignerSANList(pinned, vo.policyDNSNames, certDNS),
+			Extensions:        vo.fulcioCertExtensions,
+			MinAssuranceLevel: vo.policyMinAssurance,
 		},
 	}, trustBundle, false
 }

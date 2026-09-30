@@ -26,13 +26,13 @@ the wrong predicate type (#9827). The id names a CI vendor only for a GitHub
 Actions or gitlab.com token verified against that platform's own key set, the
 issuers a Fulcio CA maps; every other CI, and any token verified against a key
 set the build chose, gets the default id (#9839):
--- cite: plugins/attestors/slsa/slsa.go:48-50 sha256:26f324cb42fd3b41502e639a01493ee6ee7adf65058745efc695077c1b0190f5
+-- cite: plugins/attestors/slsa/slsa.go:49-51 sha256:26f324cb42fd3b41502e639a01493ee6ee7adf65058745efc695077c1b0190f5
 -- cite: plugins/attestors/slsa/slsa.go:69-98 sha256:b2fdb7d3571fca6c
 Policy functionaries can already constrain Fulcio extensions; an empty field
 allows every value, and a field containing a glob metacharacter is matched as
 a glob:
 -- cite: attestation/policy/constraints.go:109-116 sha256:208a832ff24c03297e7d791ec31ee1f2efa73d9ea1d6f0c8ce23af7f9878beae
--- cite: attestation/policy/constraints.go:346-353 sha256:9dbd6b15aae6492a30ef0b4324fa51cfdfe95a344410a4b9634430422e4be58f
+-- cite: attestation/policy/constraints.go:357-364 sha256:9dbd6b15aae6492a30ef0b4324fa51cfdfe95a344410a4b9634430422e4be58f
 `cilock verify --slsa-level` does not exist, so `l3Accept` is the reference.
 -/
 

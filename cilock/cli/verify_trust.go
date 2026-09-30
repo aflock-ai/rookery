@@ -246,6 +246,13 @@ func (st *policySignatureTrust) applyEmbedded(vo *options.VerifyOptions, emb *em
 			return fmt.Errorf("embedded trust defines %d policy signers; selecting among multiple embedded signers is not yet supported; pass --policy-uris / --policy-fulcio-* to choose", len(signers))
 		}
 		cc := signers[0].CertConstraint
+		// The policy-signer check has no required-policy-OID option: copying the
+		// rest and dropping this would verify a signer the embedded trust did
+		// not admit. Refuse instead.
+		if len(cc.RequiredPolicyOIDs) > 0 {
+			return fmt.Errorf("embedded policy signer requires certificate policy OIDs (requiredpolicyoids %v), which policy-signature verification cannot enforce; refusing rather than ignoring them", cc.RequiredPolicyOIDs)
+		}
+		vo.PolicyMinAssurance = cc.MinAssuranceLevel
 		vo.PolicyCommonName = cc.CommonName
 		vo.PolicyDNSNames = cc.DNSNames
 		vo.PolicyEmails = cc.Emails

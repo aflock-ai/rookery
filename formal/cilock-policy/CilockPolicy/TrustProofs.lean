@@ -217,4 +217,62 @@ theorem no_cross_step {rego : Rego} {regoExt : RegoExt} {h : Hardening} {p : Pol
   obtain ⟨_, α, F, hF, _, hall, _⟩ := verifyFixed_spec hpass
   exact ⟨α, F, hF, fun s hs e he => (hall s hs e he).named⟩
 
+/-! ## Signer assurance (minassurancelevel) -/
+
+/-- A met minimum means the leaf states exactly one known level, at least the
+    minimum, and the minimum itself is a known level. -/
+theorem meetsMin_sound {m : String} {acr : List String} (h : meetsMin m acr = true) (hm : m ≠ "") :
+    ∃ v, acr = [v] ∧ minRank m ≠ 0 ∧ aalRank v ≠ 0 ∧ minRank m ≤ aalRank v := by
+  simp only [meetsMin, Bool.or_eq_true, beq_iff_eq, hm, false_or, Bool.and_eq_true, bne_iff_ne, ne_eq,
+    decide_eq_true_eq] at h
+  obtain ⟨⟨hmr, hlr⟩, hle⟩ := h
+  match acr, hlr, hle with
+  | [v], hlr, hle => exact ⟨v, rfl, hmr, hlr, hle⟩
+
+/-- No extension (an agent's leaf, or any leaf the platform did not stamp)
+    never meets a minimum. -/
+theorem absent_never_meets {m : String} (hm : m ≠ "") : meetsMin m [] = false := by
+  simp [meetsMin, hm, leafRank]
+
+/-- A leaf that states the level twice states none a policy can rely on. -/
+theorem repeated_never_meets {m a b : String} {rest : List String} (hm : m ≠ "") :
+    meetsMin m (a :: b :: rest) = false := by
+  simp [meetsMin, hm, leafRank]
+
+/-- A minimum this model does not know refuses every leaf. -/
+theorem unknown_min_never_meets {m : String} {acr : List String} (hm : m ≠ "") (hr : minRank m = 0) :
+    meetsMin m acr = false := by
+  simp [meetsMin, hm, hr]
+
+/-- The constraint as a whole: a certificate that satisfies a constraint with
+    a minimum carries exactly one known level at least that high. -/
+theorem ccCheck_min_assurance {h : Hardening} {roots : List RootId} {cc : CertConstraint} {c : Cert}
+    (hok : ccCheck h roots cc c = true) (hm : cc.minAssurance ≠ "") :
+    ∃ v, c.acr = [v] ∧ minRank cc.minAssurance ≠ 0 ∧ aalRank v ≠ 0 ∧ minRank cc.minAssurance ≤ aalRank v := by
+  simp only [ccCheck, Bool.and_eq_true] at hok
+  exact meetsMin_sound hok.2 hm
+
+/-- `--policy-min-assurance`: a raw-key policy signer is refused, and an
+    accepted certificate signer states exactly one known level at least the
+    minimum. -/
+theorem policy_signer_min_assurance {h : Hardening} {roots : List RootId} {m : String}
+    {cc : CertConstraint} {cred : Cred} (hok : policySignerOk h roots m cc cred = true) (hm : m ≠ "") :
+    ∃ c, cred = .cert c ∧ ∃ v, c.acr = [v] ∧ minRank m ≠ 0 ∧ aalRank v ≠ 0 ∧ minRank m ≤ aalRank v := by
+  cases cred with
+  | key k => simp [policySignerOk, hm] at hok
+  | cert c =>
+    simp only [policySignerOk, Bool.and_eq_true] at hok
+    exact ⟨c, rfl, ccCheck_min_assurance (cc := { cc with minAssurance := m }) hok.2 hm⟩
+
+/-- The vectors the patch's commit message names. -/
+theorem assurance_examples :
+    meetsMin "aal2" [] = false ∧
+    meetsMin "aal2" ["urn:testifysec:params:acr:nist-800-63b:aal2"] = true ∧
+    meetsMin "aal2" ["urn:testifysec:params:acr:nist-800-63b:aal1"] = false ∧
+    meetsMin "aal2" ["aal3"] = true ∧
+    meetsMin "aal2" ["aal2", "aal2"] = false ∧
+    meetsMin "aal2" ["AAL2"] = false ∧
+    meetsMin "AAL2" ["aal3"] = false ∧
+    meetsMin "" [] = true := by decide
+
 end CilockPolicy

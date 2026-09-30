@@ -38,7 +38,7 @@ abbrev DigestSet := List (String × String)
 /-- The X.509 leaf as the constraint check reads it (`constraints.go`).
     `chainsTo` abstracts chain building: the policy roots this leaf verifies to
     (cryptoutil.X509Verifier.BelongsToRoot).
-    -- cite: attestation/policy/constraints.go:138-179 sha256:08eb1059abca290ca79fb51e5464def5a376dfcbcb0b2e114d1631681bb231d2
+    -- cite: attestation/policy/constraints.go:145-190 sha256:183fc0354ea2bb41336c83080f215dee10de7b5cca93bdd396a9309d59ad34ee
     -/
 structure Cert where
   keyId      : KeyId
@@ -53,6 +53,11 @@ structure Cert where
   chainsTo   : List RootId
   notBefore  : Time
   notAfter   : Time
+  /-- The decoded value of every occurrence of the platform Fulcio's
+      assurance extension (OID 1.3.6.1.4.1.57264.1.100), in order. An
+      occurrence that is not one UTF8String is recorded as a value no level
+      parses from. -/
+  acr        : List String := []
 deriving DecidableEq, Repr
 
 /-- An RFC 3161 token attached to one signature. `ok` is the TSA signature

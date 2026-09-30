@@ -108,6 +108,13 @@ def globCase (j : Json) : String :=
   | .ok (k, _, _) => s!"error: unknown kind {k}"
   | .error e => s!"error: {e}"
 
+/-- `--assurance`: `{"min", "acr": [values]}`, answered by `meetsMin`
+    (Trust.lean, CertConstraint.MinAssuranceLevel). -/
+def assuranceCase (j : Json) : String :=
+  match (do pure (← (← field j "min").getStr?, ← strs j "acr") : Except String (String × List String)) with
+  | .ok (m, acr) => toString (meetsMin m acr)
+  | .error e => s!"error: {e}"
+
 /-- With no flag, the pre-#9813 as-built semantics. `--fix9813` evaluates the
     engine as #9860 shipped it (`verifyShipped`: the union-acyclicity
     validator, then the round-bounded fix); `--fixed`
@@ -121,6 +128,9 @@ def main (args : List String) : IO Unit := do
   | .ok cases =>
     if args.contains "--glob" then
       for c in cases do IO.println (globCase c)
+      return
+    if args.contains "--assurance" then
+      for c in cases do IO.println (assuranceCase c)
       return
     for c in cases do
       match decodeCase c with

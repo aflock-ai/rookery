@@ -123,6 +123,13 @@ func VerifyWithPolicyCertConstraints(commonName string, dnsNames []string, email
 	}
 }
 
+// VerifyWithPolicyMinAssurance requires the policy signer to hold at least this assurance level.
+func VerifyWithPolicyMinAssurance(level string) VerifyOption {
+	return func(vo *verifyOptions) {
+		vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, policysig.VerifyWithPolicyMinAssurance(level))
+	}
+}
+
 func VerifyWithPolicyTimestampAuthorities(verifiers []timestamp.TimestampVerifier) VerifyOption {
 	return func(vo *verifyOptions) {
 		vo.verifyPolicySignatureOptions = append(vo.verifyPolicySignatureOptions, policysig.VerifyWithPolicyTimestampAuthorities(verifiers))

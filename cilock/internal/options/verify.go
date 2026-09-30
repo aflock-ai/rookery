@@ -78,9 +78,12 @@ type VerifyOptions struct {
 	ClientSide bool
 	// CommitHash is the commit anchor for a platform verify — the immutable
 	// name pipelines hold at their end. Unused in local mode.
-	CommitHash          string
-	PolicyDNSNames      []string
-	PolicyEmails        []string
+	CommitHash     string
+	PolicyDNSNames []string
+	PolicyEmails   []string
+	// PolicyMinAssurance requires the policy signer's leaf to carry at least this NIST 800-63B
+	// assurance level (a policy countersigned by a person at AAL2).
+	PolicyMinAssurance  string
 	PolicyOrganizations []string
 	PolicyURIs          []string
 
@@ -415,6 +418,7 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&vo.PolicyCommonName, "policy-commonname", "", "The common name to use when verifying a policy signed with x.509")
 	cmd.Flags().StringSliceVar(&vo.PolicyDNSNames, "policy-dns-names", []string{}, "The DNS names to use when verifying a policy signed with x.509")
 	cmd.Flags().StringSliceVar(&vo.PolicyEmails, "policy-emails", []string{}, "The email addresses to use when verifying a policy signed with x.509")
+	cmd.Flags().StringVar(&vo.PolicyMinAssurance, "policy-min-assurance", "", "Require the x.509 policy signer's platform Fulcio leaf to carry at least this authenticator assurance level (aal1, aal2, aal3); a raw-key signer is refused when set")
 	cmd.Flags().StringSliceVar(&vo.PolicyOrganizations, "policy-organizations", []string{}, "The organizations to use when verifying a policy signed with x.509")
 	cmd.Flags().StringSliceVar(&vo.PolicyURIs, "policy-uris", []string{}, "The URIs to use when verifying a policy signed with x.509")
 	cmd.Flags().StringSliceVarP(&vo.PolicyCARootPaths, "policy-ca", "", []string{}, "Paths to CA certificates to use for verifying the policy (deprecated: use --policy-ca-roots instead)")
