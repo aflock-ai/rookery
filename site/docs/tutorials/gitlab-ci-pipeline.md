@@ -14,8 +14,35 @@ A GitLab pipeline where each stage is wrapped by CI/lock and produces a signed i
 ## Prerequisites
 
 - A GitLab project (the example is Go, but any language works)
-- For OIDC keyless signing: GitLab's JWT (`CI_JOB_JWT_V2`) or `id_tokens:` config
+- For keyless signing: `id_tokens:` in the job (GitLab 17 removed `CI_JOB_JWT` and `CI_JOB_JWT_V2`); see the next section
 - Optional: an Archivista instance reachable from the runner
+
+## Keyless with the job's own ID tokens (gitlab.com and self-managed)
+
+A GitLab job has no identity cilock can ask for: it gets exactly the ID tokens it declares under `id_tokens:`, one per audience, and the runner exports each as a variable. Declare one for each place cilock sends a token:
+
+```yaml
+variables:
+  PLATFORM_URL: https://platform.example.com   # your platform or appliance
+
+attest:
+  id_tokens:
+    SIGSTORE_ID_TOKEN:                          # keyless signing (Fulcio)
+      aud: sigstore
+    CILOCK_LOGIN_ID_TOKEN:                      # cilock login
+      aud: ${PLATFORM_URL}/login
+    CILOCK_ARCHIVISTA_ID_TOKEN:                 # attestation upload
+      aud: ${PLATFORM_URL}/archivista
+  script:
+    - cilock login --platform-url "$PLATFORM_URL" --product "$PRODUCT_ID"
+    - cilock run -- go build -trimpath -o hello .
+```
+
+The same file works on gitlab.com and on a self-managed GitLab. Any variable names work: cilock takes a token only when its claims say it was issued by this job's GitLab (`CI_SERVER_URL`) to this job (`CI_JOB_ID`) for exactly the audience it is about to be sent to. A token that names several audiences is never sent anywhere, because the party it goes to could replay it at the other. A job that declared no `sigstore` token is refused before its build runs, with the `id_tokens:` entry to add.
+
+Before this works end to end, a tenant admin trusts the project for upload (`cilock trust gitlab <group>/<project> --host <your-gitlab-host>` on a self-managed GitLab), and the platform's Fulcio must trust the GitLab issuer: gitlab.com is trusted by default, a self-managed GitLab through the platform's GitLab connection. `--product` names the product to bind the run to.
+
+Observed on GitLab CE 19.4.1 with a self-managed appliance: `cilock login` bound the session to the tenant and product, and a following `cilock run` uploaded its evidence under that session, platform-bound and timestamped.
 
 ## Step 1: Include the template
 
@@ -182,7 +209,7 @@ For the full reference, see the [GitLab component reference](../reference/gitlab
 | Default attestations | `environment git github` | `environment git gitlab` |
 | Default `enable-sigstore` | `true` | `false` |
 | Wrapping another tool | `action-ref:` input | Not supported, call commands directly |
-| OIDC | GH `id-token` permission | GitLab `id_tokens:` / `CI_JOB_JWT_V2` |
+| OIDC | GH `id-token` permission | GitLab `id_tokens:` (one per audience; `CI_JOB_JWT_V2` was removed in GitLab 17) |
 | Inter-step evidence | Action outputs (`git_oid`, `attestation_file`) | `cilock.env` dotenv artifact via `dependencies`/`needs` |
 
 ## Going further

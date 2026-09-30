@@ -62,7 +62,7 @@ This is how subsequent stages (e.g. a verify stage) can reference the GitOID or 
 | Default `enable-sigstore` | `true` | `false` |
 | Configuration | Action `with:` inputs | `CILOCK_*` variables |
 | Wrapping another tool's UI | `action-ref:` input | Not applicable (call commands directly) |
-| OIDC | GitHub `id-token` permission | GitLab JWT (`CI_JOB_JWT_V2`) |
+| OIDC | GitHub `id-token` permission | GitLab `id_tokens:` (`CI_JOB_JWT_V2` was removed in GitLab 17) |
 
 ## Example pipelines
 
