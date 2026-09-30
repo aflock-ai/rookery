@@ -50,6 +50,9 @@ type LoginParams struct {
 // cilock via client=cilock; scope hints (tenant/product/purpose) are passed
 // through so the page can pre-fill rather than prompt.
 func BrowserLogin(judgeURL string, params LoginParams) (*Credential, error) {
+	if InCI(os.Getenv) {
+		return nil, ErrBrowserInCI
+	}
 	judgeURL = NormalizeURL(judgeURL)
 	state, err := newState()
 	if err != nil {

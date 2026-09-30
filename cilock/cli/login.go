@@ -6,8 +6,10 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	"github.com/aflock-ai/rookery/cilock/internal/config"
@@ -29,16 +31,21 @@ func LoginCmd() *cobra.Command {
 			"scoped to one; switch them later with `cilock use`, or override per-command.\n\n" +
 			"Identity is resolved by precedence:\n" +
 			"  1. --token            an explicit JWT (CI/headless; '-' reads from stdin)\n" +
-			"  2. workflow identity  ambient CI OIDC (GitHub Actions) — auto-detected on the\n" +
-			"                        default platform; no browser, no stored secret. cilock run\n" +
-			"                        mints a fresh OIDC token per call.\n" +
+			"  2. workflow identity  the CI job's own OIDC identity; no browser, no stored secret.\n" +
+			"                        GitHub Actions: auto-detected on the default platform, and\n" +
+			"                        cilock run mints a fresh token per call. GitLab CI: the job's\n" +
+			"                        id_tokens entry for <platform-url>/login, on any platform\n" +
+			"                        (a token's audience is fixed by the pipeline); a GitLab job\n" +
+			"                        never falls back to the browser.\n" +
 			"  3. browser            interactive loopback login (default for local use)\n\n" +
-			"--interactive forces the browser. --workflow-identity forces ambient OIDC (and is\n" +
-			"required to send a workflow token to a non-default --platform-url).",
+			"--interactive forces the browser. --workflow-identity forces ambient OIDC (and on\n" +
+			"GitHub Actions is required to send a workflow token to a non-default --platform-url).",
 		Example: "  # Interactive browser login (binds tenant+product on the approve page)\n" +
 			"  cilock login\n\n" +
 			"  # CI on GitHub Actions: use the ambient workflow identity (auto-detected)\n" +
 			"  cilock login   # with `permissions: id-token: write`\n\n" +
+			"  # CI on GitLab: declare `id_tokens: {CILOCK_LOGIN_ID_TOKEN: {aud: $PLATFORM_URL/login}}`\n" +
+			"  cilock login --platform-url https://platform.example.com --product <uuid>\n\n" +
 			"  # CI/headless: provide a JWT plus the tenant+product to bind\n" +
 			"  cilock login --platform-url https://platform.example.com --token $TESTIFYSEC_TOKEN \\\n" +
 			"    --tenant-id <uuid> --product-id <uuid>",
@@ -88,7 +95,7 @@ func LoginCmd() *cobra.Command {
 	cmd.Flags().StringVar(&productID, "product-id", "", "Product UUID to bind for a headless --token login")
 	cmd.Flags().StringVar(&productName, "product-name", "", "Product name to record with --product-id")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "Force the interactive browser login (skip ambient CI workflow identity)")
-	cmd.Flags().BoolVar(&workflowIdentity, "workflow-identity", false, "Use the ambient CI workflow OIDC identity (auto-detected on the default platform; required to send a workflow token to a non-default --platform-url)")
+	cmd.Flags().BoolVar(&workflowIdentity, "workflow-identity", false, "Use the CI job's own OIDC identity (GitHub Actions: auto-detected on the default platform, and required to send a workflow token to a non-default --platform-url; GitLab CI: the job's id_tokens entry for <platform-url>/login, used on any platform)")
 	cmd.Flags().BoolVar(&allowTrust, "allow-trust", false, "Also grant the narrow oidc:write scope so this session can register CI trust with `cilock trust` (off by default)")
 	return cmd
 }
@@ -130,14 +137,92 @@ func decideLoginTier(token string, interactive, workflowIdentity, ambientAvailab
 		return tierBrowser, fmt.Errorf("ambient workflow OIDC identity detected but --platform-url %q is not the default (%s); pass --workflow-identity to send a workflow-identity token to it, or use --token / --interactive", url, defaultURL)
 	}
 	if workflowIdentity {
-		return tierBrowser, fmt.Errorf("--workflow-identity requested but no ambient OIDC identity is present (need ACTIONS_ID_TOKEN_REQUEST_URL and `permissions: id-token: write`)")
+		return tierBrowser, fmt.Errorf("--workflow-identity requested but no ambient OIDC identity is present (GitHub Actions needs `permissions: id-token: write`; a GitLab CI job needs `id_tokens:` with the platform login audience)")
 	}
 	return tierBrowser, nil
 }
 
-// resolveLoginCredential obtains a session credential per decideLoginTier.
+// loginTierInput is everything decideLoginTierCI reads, so the decision is a
+// pure function the model can be compared against.
+type loginTierInput struct {
+	token                         string
+	interactive, workflowIdentity bool
+	provider                      auth.CIProvider
+	githubCanMint                 bool
+	// gitlabLoginErr is the result of selecting this GitLab job's token for the
+	// platform's login audience (nil: one was selected). Read only for GitLab.
+	gitlabLoginErr  error
+	url, defaultURL string
+	// ci is auth.InCI: CI=true or a detected provider. Nothing interactive
+	// starts in CI.
+	ci bool
+}
+
+var (
+	errCINoIdentity    = errors.New("cilock login in CI found no workflow identity")
+	errInteractiveInCI = errors.New("cilock login --interactive refused in CI")
+)
+
+// ciNoIdentityError names what to add, per provider; the model's
+// `.refuse .ciNoIdentity`.
+func ciNoIdentityError(p auth.CIProvider) error {
+	switch p {
+	case auth.CIGitHub:
+		return fmt.Errorf("%w: GitHub Actions cannot mint an OIDC token for this job; add to the job:\n  permissions:\n    id-token: write\nor pass --token", errCINoIdentity)
+	default:
+		return fmt.Errorf("%w (CI=true): this CI has no workflow identity cilock can use, and there is no browser to approve a login; pass --token (a platform token from a CI secret) with --tenant-id and --product-id", errCINoIdentity)
+	}
+}
+
+// decideLoginTierCI is decideLoginTier with GitLab CI. It is the model's
+// `tier` (formal/cilock-ci, CilockCi/Login.lean).
+//
+// A GitLab job has no browser, so it never falls back to one: with no --token
+// and no --interactive it signs in with the job token declared for exactly
+// <platform>/login, or refuses naming the `id_tokens:` entry to add. Unlike
+// GitHub it needs no --workflow-identity for a non-default --platform-url:
+// GitHub mints a token for whatever audience cilock asks, so a hostile URL
+// could harvest one, but a GitLab token's audience is fixed by the pipeline,
+// so a URL the pipeline did not name finds no token to take.
+func decideLoginTierCI(in loginTierInput) (loginTier, error) {
+	if in.token != "" {
+		return tierToken, nil
+	}
+	if in.interactive {
+		if in.ci {
+			return tierBrowser, fmt.Errorf("%w: there is no browser in CI (CI=true or a CI provider detected) and the job would hang to its timeout; drop --interactive and use the job's workflow identity or --token", errInteractiveInCI)
+		}
+		return tierBrowser, nil
+	}
+	if in.provider == auth.CIGitLab {
+		if in.gitlabLoginErr != nil {
+			return tierBrowser, fmt.Errorf("cilock login in a GitLab CI job: %w", in.gitlabLoginErr)
+		}
+		return tierWorkflow, nil
+	}
+	tier, err := decideLoginTier(in.token, in.interactive, in.workflowIdentity,
+		in.provider == auth.CIGitHub && in.githubCanMint, in.url, in.defaultURL)
+	if err == nil && tier == tierBrowser && in.ci {
+		return tierBrowser, ciNoIdentityError(in.provider)
+	}
+	return tier, err
+}
+
+// loginTierInputFromEnv reads the CI identity decideLoginTierCI needs from the
+// process environment.
+func loginTierInputFromEnv(url, token string, interactive, workflowIdentity bool) loginTierInput {
+	in := loginTierInput{token: token, interactive: interactive, workflowIdentity: workflowIdentity,
+		provider: auth.CIProviderFromEnv(os.Getenv), githubCanMint: auth.GitHubCanMint(os.Getenv),
+		url: url, defaultURL: config.DefaultPlatformURL, ci: auth.InCI(os.Getenv)}
+	if in.provider == auth.CIGitLab && token == "" && !interactive {
+		_, in.gitlabLoginErr = auth.GitLabJobToken(config.Derive(url).OIDCLoginAudience)
+	}
+	return in
+}
+
+// resolveLoginCredential obtains a session credential per decideLoginTierCI.
 func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product string, interactive, workflowIdentity, allowTrust bool) (*auth.Credential, error) {
-	tier, err := decideLoginTier(token, interactive, workflowIdentity, auth.WorkflowOIDCAvailable(), url, config.DefaultPlatformURL)
+	tier, err := decideLoginTierCI(loginTierInputFromEnv(url, token, interactive, workflowIdentity))
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +248,13 @@ func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product stri
 // `cilock use` when no product is bound).
 func printLoginResult(out io.Writer, url string, cred *auth.Credential) {
 	if cred.AuthMode == auth.AuthModeWorkflowOIDC {
-		_, _ = fmt.Fprintf(out, "✓ workflow identity active for %s (GitHub Actions OIDC; cilock run mints a token per call)\n", auth.NormalizeURL(url))
+		_, _ = fmt.Fprintf(out, "✓ workflow identity active for %s (%s)\n", auth.NormalizeURL(url), workflowIdentityLabel())
+		if cred.TenantName != "" || cred.TenantID != "" {
+			_, _ = fmt.Fprintf(out, "  tenant:  %s %s\n", cred.TenantName, cred.TenantID)
+			_, _ = fmt.Fprintf(out, "  product: %s %s\n", cred.ProductName, cred.ProductID)
+		} else {
+			_, _ = fmt.Fprintf(out, "  ⚠ the platform's binding endpoint did not answer; cilock run resolves the tenant and product itself\n")
+		}
 		return
 	}
 	_, _ = fmt.Fprintf(out, "✓ logged in to %s\n", auth.NormalizeURL(url))
@@ -309,7 +400,7 @@ func WhoamiCmd() *cobra.Command {
 			// explains its verdict without the operator reverse-engineering it.
 			_, _ = fmt.Fprintf(out, "session:  %s\n", resolved.Posture())
 			if cred.AuthMode == auth.AuthModeWorkflowOIDC {
-				_, _ = fmt.Fprintf(out, "auth:     workflow identity (GitHub Actions OIDC)\n")
+				_, _ = fmt.Fprintf(out, "auth:     workflow identity (%s)\n", workflowIdentityLabel())
 			}
 			if cred.TenantName != "" || cred.TenantID != "" {
 				_, _ = fmt.Fprintf(out, "tenant:   %s %s\n", cred.TenantName, cred.TenantID)
@@ -328,4 +419,13 @@ func WhoamiCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&platformURL, "platform-url", "", "TestifySec platform URL (default "+config.DefaultPlatformURL+")")
 	return cmd
+}
+
+// workflowIdentityLabel says which CI identity a workflow-identity session
+// signs with, for login and whoami output.
+func workflowIdentityLabel() string {
+	if auth.CIProviderFromEnv(os.Getenv) == auth.CIGitLab {
+		return "GitLab CI job ID tokens; cilock run reads the job's id_tokens"
+	}
+	return "GitHub Actions OIDC; cilock run mints a token per call"
 }

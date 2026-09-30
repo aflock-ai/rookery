@@ -7,6 +7,20 @@ import (
 	"testing"
 )
 
+// TestBrowserLoginRefusesInCI is the backstop for every caller (`cilock use`
+// included): in CI BrowserLogin returns at once instead of waiting for a
+// browser nobody will open.
+func TestBrowserLoginRefusesInCI(t *testing.T) {
+	for _, env := range []map[string]string{{"CI": "true"}, {"GITLAB_CI": "true"}, {"GITHUB_ACTIONS": "true"}} {
+		for _, k := range []string{"CI", "GITLAB_CI", "GITHUB_ACTIONS", "ACTIONS_ID_TOKEN_REQUEST_URL", "BUILDKITE", "CIRCLECI"} {
+			t.Setenv(k, env[k])
+		}
+		if _, err := BrowserLogin("https://platform.example.com", LoginParams{}); err != ErrBrowserInCI {
+			t.Fatalf("env %v: want ErrBrowserInCI, got %v", env, err)
+		}
+	}
+}
+
 // A crafted `tenant` form value on the loopback callback must never reach the
 // rendered page un-escaped — otherwise it injects script into a page served on
 // a localhost origin reachable by any other local process (XSS).
