@@ -84,6 +84,7 @@ import (
 	"unsafe"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
+	"github.com/aflock-ai/rookery/attestation/log"
 	"golang.org/x/sys/unix"
 )
 
@@ -410,7 +411,12 @@ type sandboxSession struct {
 	readCapture *darwinReadCapture
 	collector   *exec.Cmd
 	stdout      io.ReadCloser
-	stderr      syncBuffer
+	// stopByClosingPipe is set when the collector runs through sudo. We
+	// cannot signal sudo (its front end runs as root), and a kill that did
+	// land would orphan a root `log stream`; so shutdown closes the pipe
+	// instead and log dies on its next write. See shutdown.
+	stopByClosingPipe bool
+	stderr            syncBuffer
 
 	readerDone chan struct{}
 	stopping   atomic.Bool
@@ -587,16 +593,24 @@ func startSandboxSession(configs ...darwinReadConfig) (*sandboxSession, error) {
 			logToolPath, err)
 	}
 
-	// #nosec G204 -- both the binary path and every argument are package
-	// constants; nothing here is caller- or environment-controlled.
-	col := exec.Command(logToolPath, "stream", "--style", "ndjson", "--predicate", logPredicate)
+	// log refuses `stream` outside the admin group; a non-admin runs it
+	// through a NOPASSWD sudoers rule for exactly this argv, or is refused
+	// here with both fixes named. See logstream_collector.go.
+	launch, err := chooseCollector(defaultCollectorHost(), logToolPath, sudoToolPath, logPredicate)
+	if err != nil {
+		return nil, err
+	}
+	// #nosec G204 -- every element is a package constant (the pinned sudo and
+	// log paths, the fixed predicate); nothing is caller- or env-controlled.
+	col := exec.Command(launch.argv[0], launch.argv[1:]...)
 	s := &sandboxSession{
-		readerDone: make(chan struct{}),
-		facts:      make(map[int]procFacts, 256),
-		pinned:     make(map[imageIdentity]pinnedImage, 64),
-		canaryPIDs: make(map[int]procFacts, 4),
-		ourPids:    make(map[int]bool, 64),
-		collector:  col,
+		readerDone:        make(chan struct{}),
+		facts:             make(map[int]procFacts, 256),
+		pinned:            make(map[imageIdentity]pinnedImage, 64),
+		canaryPIDs:        make(map[int]procFacts, 4),
+		ourPids:           make(map[int]bool, 64),
+		collector:         col,
+		stopByClosingPipe: launch.viaSudo,
 	}
 	if err := s.configureReadCapture(configs); err != nil {
 		return nil, err
@@ -657,9 +671,17 @@ func (s *sandboxSession) canary(phase string) error {
 				return nil
 			}
 			if s.endedEarly.Load() {
+				stderr := strings.TrimSpace(s.stderr.String())
+				hint := collectorRefusalHint(stderr, defaultCollectorHost().userName(), logToolPath, logPredicate)
+				if strings.Contains(stderr, "while sandboxed") {
+					// log refuses to run inside a sandbox: the nesting case, which the
+					// probe used to report before the collector started first.
+					hint += " sandboxes do not nest, so cilock cannot trace a command that is itself already " +
+						"sandboxed. Re-run outside the outer sandbox, or disable tracing for this step."
+				}
 				return fmt.Errorf("macOS process tracing: the %s collector exited during the %s probe "+
-					"(stderr: %q); the report channel is gone, so no process tree can be captured",
-					logToolPath, phase, strings.TrimSpace(s.stderr.String()))
+					"(stderr: %q); the report channel is gone, so no process tree can be captured.%s",
+					logToolPath, phase, stderr, hint)
 			}
 			time.Sleep(5 * time.Millisecond)
 		}
@@ -1176,7 +1198,9 @@ func (s *sandboxSession) read() {
 		}
 		s.record(ev)
 	}
-	if err := sc.Err(); err != nil {
+	// A closed pipe while stopping is shutdown closing it on purpose
+	// (stopCollectorByPipe), not a reader failure.
+	if err := sc.Err(); err != nil && (!s.stopping.Load() || !errors.Is(err, os.ErrClosed)) {
 		s.mu.Lock()
 		s.readerErr = err
 		s.mu.Unlock()
@@ -2083,11 +2107,15 @@ func (s *sandboxSession) shutdown() {
 	if !s.stopping.CompareAndSwap(false, true) {
 		return
 	}
-	if s.collector.Process != nil {
-		_ = s.collector.Process.Kill()
+	if s.stopByClosingPipe {
+		s.stopCollectorByPipe()
+	} else {
+		if s.collector.Process != nil {
+			_ = s.collector.Process.Kill()
+		}
+		<-s.readerDone
+		_ = s.collector.Wait()
 	}
-	<-s.readerDone
-	_ = s.collector.Wait()
 	s.stopWrapWatch()
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -2095,6 +2123,38 @@ func (s *sandboxSession) shutdown() {
 		_ = img.file.Close()
 	}
 	s.closeReadCapture()
+}
+
+// collectorStopBound caps how long shutdown waits for a pipe-stopped
+// collector to exit. Past it shutdown returns rather than hang the build; the
+// process still dies on its next write.
+const collectorStopBound = 5 * time.Second
+
+// stopCollectorByPipe closes our read end of the collector's stdout, which
+// unblocks the reader at once and makes log's next write fail with SIGPIPE.
+// The stream is machine-wide and rarely quiet, and one sandboxed no-op here
+// guarantees a report (and so a write) within milliseconds.
+func (s *sandboxSession) stopCollectorByPipe() {
+	if s.stdout != nil {
+		_ = s.stdout.Close()
+	}
+	<-s.readerDone
+	if s.collector.Process == nil {
+		return
+	}
+	exited := make(chan struct{})
+	go func() {
+		_ = s.collector.Wait()
+		close(exited)
+	}()
+	// #nosec G204 -- fixed binary, fixed profile constant, fixed /usr/bin/true.
+	_ = exec.Command(sandboxExecPath, "-p", sandboxProfile, "--", "/usr/bin/true").Run()
+	select {
+	case <-exited:
+	case <-time.After(collectorStopBound):
+		log.Warnf("(sandbox-trace) the report collector (pid %d) did not exit within %s of its pipe closing; "+
+			"it will exit on its next write", s.collector.Process.Pid, collectorStopBound)
+	}
 }
 
 // harvest returns the captured events after checking the two conditions that
