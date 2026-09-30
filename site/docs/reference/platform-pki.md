@@ -85,18 +85,29 @@ This is the single most useful distinction to internalize:
 
 | What you're doing | What it proves | Authority |
 |---|---|---|
-| **Sign** (Fulcio + TSA) | the certificate principal signed these exact bytes at this time | Workload OIDC, or today's AAL1 stored-session exchange naming the credential creator's email; the explicit human/agent ceremony is a target |
+| **Sign** (Fulcio + TSA) | the certificate principal signed these exact bytes at this time | CI workflow OIDC (GitHub Actions, GitLab.com, Buildkite, CircleCI); an enrolled agent's own SPIFFE identity (`cilock enroll agent`); or a person's `cilock login` credential, whose login must have reached AAL2 unless the tenant opted out |
 | **Upload** (Archivista) | this evidence belongs to this tenant/subject | A separate purpose-scoped tenant credential |
 
-**Signing is keyless.** In CI, with `id-token: write`, the runner mints an ambient
-OIDC token; the platform Fulcio exchanges it for a leaf that lives ~10 minutes —
+**Signing is keyless.** On GitHub Actions, with `id-token: write`, the runner mints an
+ambient OIDC token; the platform Fulcio exchanges it for a leaf that lives ~10 minutes —
 long enough to sign, too short to be worth stealing. The TSA timestamps the
 signature so it stays verifiable long after the leaf expires. A workflow OIDC
-request is a workload principal. Today's local client may instead exchange a
-stored API credential non-interactively for an AAL1 token naming its creator's
-email. That is not proof a person was present and not a stable agent identity;
-agents must not use that compatibility path. The platform's explicit,
-server-observed human/agent ceremony remains a target.
+request is a workload principal. The platform Fulcio also accepts GitLab.com,
+Buildkite and CircleCI workload identities, and `cilock run --platform-url` fetches the
+job's token on those too. On Kubernetes, sign keyless against public Sigstore, and on
+other CI sign with a key. See the
+[support matrix](./support-matrix) for the level each environment reaches.
+
+On a workstation, an agent signs as itself: `cilock enroll agent` mints a
+time-bound agent principal with its own SPIFFE ID after a person approves it at AAL2
+(passkey or second factor), and `cilock run` then signs as that agent, never as the person. A person's
+own `cilock login` credential mints a token at the assurance level its login reached.
+By default the tenant requires AAL2 (a passkey) for that exchange; a tenant that opts
+out still lets the local client exchange a stored API credential non-interactively for an AAL1 token
+naming its creator's email. Either way the level belongs to the login, not to each
+signature: it does not prove a person was present when a given signature was made,
+and agents must not use that path. The platform's explicit, server-observed human/agent ceremony remains a target
+for binding a person's signature to the exact bytes signed.
 
 **Uploading binds evidence to your tenant**, so it needs a different credential.
 `cilock login` supplies a human tenant session;

@@ -25,7 +25,7 @@ A test runner writes a JUnit XML or CTRF JSON report. On its own that file prove
 
 **Linked to the commit and the artifact.** The `git`, `github`, and `product` attestations in the same collection tie the counts to a commit hash and to the report file's digest. The `test-failure:<name>` subjects let a graph query find every run in which a given test failed.
 
-**SLSA Level 3 evidence.** L3 expects proof that tests ran and passed; this attestor closes that loop.
+**Test evidence for policy.** No SLSA Build level requires test results. A verifier policy can require this evidence directly, for example that a test run exists for the commit and reports no failures.
 
 ## Validated invocation
 

@@ -94,7 +94,7 @@ def deriveSlsa (p : ProvEvidence) : Slsa :=
 
 /-- The shortcut: a workflow-bound leaf on an ephemeral hosted runner is L3.
 This is the reasoning of the published "SLSA Level 3 in 75 minutes" post:
--- cite: site/blog/2026-06-08-slsa-level-3-in-75-minutes/index.md:33-33 sha256:5e87e8540f0131d5c0523e9ef510dbc9bf21ade083dd7736196f0103342e1d0e
+-- cite: site/blog/2026-06-08-slsa-level-3-in-75-minutes/index.md:39-39 sha256:1839d0e5ae78050344feac1cde3101d0c889fbda297b3612def573ead83e46ff
 -/
 def deriveSlsaNaive (p : ProvEvidence) : Slsa :=
   if !p.present then .none

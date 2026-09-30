@@ -1,11 +1,17 @@
 ---
 slug: slsa-level-3-in-75-minutes
-title: We took a real project to SLSA Level 3 in 75 minutes. This post is the build log
+title: We took a real project to SLSA Level 3 (corrected 2026-09-29, it did not reach it) in 75 minutes. This post is the build log
 authors: [cole]
 tags: [supply-chain, cilock, slsa, ci]
 date: 2026-06-08
-description: A real project, forked and hardened to a gated SLSA Level 3 release in about an hour, with the write-up coming out of the same session. The screenshots are timestamped from the build.
+description: A real project, forked and hardened to a gated release with signed, keyless provenance in about an hour (corrected 2026-09-29; the post originally said Level 3, and SLSA Build L1 and L2 are planned). The screenshots are timestamped from the build.
 ---
+
+:::caution Correction 2026-09-29
+
+This post said, incorrectly, that the build reached SLSA Build Level 3; corrected here. CI/lock signed inline on a GitHub-hosted runner with the job's own workflow identity, which meets the signing and hosting requirements of SLSA Build L2. But CI/lock's provenance carries predicateType `https://slsa.dev/provenance/v1.0`, which SLSA verifiers do not recognize, so SLSA Build L1 and L2 are planned until it carries `https://slsa.dev/provenance/v1`, so this post claims no SLSA Build level. L3 also requires that the build steps cannot reach the signing identity, and a step in the same job can obtain a certificate for that identity (the job's OIDC request token), so it can sign provenance of its own. L3 on GitHub Actions needs a separate signer workflow the build steps cannot reach, which has not shipped. The sentences below are corrected inline. See the [support matrix](https://cilock.dev/reference/support-matrix) for the level each environment reaches.
+
+:::
 
 Most write-ups about supply-chain hardening are composed weeks after the fact, by someone who was not in the terminal when it happened. This one was written in the terminal, while it happened. The screenshots are timestamped from the build. If that sounds like a strong claim, good, because the entire point of attestation is that claims should be checkable. So here is the clock.
 
@@ -18,7 +24,7 @@ Most write-ups about supply-chain hardening are composed weeks after the fact, b
 | +21m | 09:37 | Authenticated to the platform (screenshots captured live) |
 | +25m | 09:41 | The runbook you are reading was created, mid-build |
 | +28m | 09:44 | Public repo live; offline tier complete |
-| +37m | 09:53 | Keyless Level 3 build, green in CI |
+| +37m | 09:53 | Keyless ~~Level 3~~ signed build, green in CI (corrected 2026-09-29) |
 | +62m | 10:18 | Fail-closed verification gate, green in CI |
 | +74m | 10:30 | Illustrated runbook finished |
 
@@ -28,9 +34,9 @@ Everything after the 62 minute mark was writing what you are reading. The securi
 
 We started by forking Hugo, a static site generator that real people ship real sites with, not a hello-world repo built to make a point. The first tier of hardening needs no account and no network trust at all. One script wraps every build stage in a CI/lock attestation. It pins the source commit, records the build, produces a CycloneDX software bill of materials, runs a vulnerability scan, and signs a policy that gates the binary. All of it offline, with a local key.
 
-That earns SLSA Build Level 1, plus the cryptographic substance that Level 2 also asks for: real signatures over real provenance. It is honest to call it exactly that, and nothing more. A local key sitting on the same machine as the build is forgeable, which means it is not Level 2 and not Level 3, and we did not dress it up as either.
+~~That earns SLSA Build Level 1~~ That is signed provenance, what SLSA Build Level 1 asks for (corrected 2026-09-29: the level is planned until the provenance carries the SLSA v1 type), plus the cryptographic substance that Level 2 also asks for: real signatures over real provenance. It is honest to call it exactly that, and nothing more. A local key sitting on the same machine as the build is forgeable, which means it is not Level 2 and not Level 3, and we did not dress it up as either.
 
-Reaching Level 3 takes no extra YAML. It is a change of where the build runs and who holds the key. Move the same steps onto an ephemeral GitHub Actions runner, give the job an OIDC token, and the signer becomes a short-lived Fulcio certificate bound to the workflow's own identity. The build steps never touch a private key, because there is no longer a private key for them to touch. That isolation, a builder you do not operate and a key the build cannot reach, is what Level 3 actually means. The certificate on our CI attestation states it in plain text: issued by the TestifySec Platform Fulcio CA, subject set to the exact workflow file at github.com/testifysec/hugo, runner environment recorded as github-hosted. None of that is a name a human typed. It is the pipeline vouching for itself.
+~~Reaching Level 3 takes no extra YAML.~~ **Correction 2026-09-29:** the next step, toward Build L2, takes no extra YAML. It is a change of where the build runs and who holds the key. Move the same steps onto an ephemeral GitHub Actions runner, give the job an OIDC token, and the signer becomes a short-lived Fulcio certificate bound to the workflow's own identity. The build steps never touch a private key, because there is no longer a private key for them to touch. ~~That isolation, a builder you do not operate and a key the build cannot reach, is what Level 3 actually means.~~ **Correction 2026-09-29:** that meets the signing requirements of SLSA Build L2, a level that is planned until the provenance type is fixed (see the note at the top). The steps hold no key, but they hold the job's OIDC request token, which is enough to obtain a certificate for the same workflow identity. Level 3 needs a signer the build steps cannot reach at all. The certificate on our CI attestation states it in plain text: issued by the TestifySec Platform Fulcio CA, subject set to the exact workflow file at github.com/testifysec/hugo, runner environment recorded as github-hosted. None of that is a name a human typed. It is the pipeline vouching for itself.
 
 ![The CI/lock platform authorize screen](./01-cilock-authorize-page.png)
 
@@ -50,7 +56,7 @@ So we tried. We took the built binary, appended a single byte, and ran verificat
 
 ## Act 3: Why it was fast
 
-Here is the part that matters if you are the one paying for it. Standing up Level 3 with policy-gated releases is normally scoped as a multi-week project for a platform team, because the list of moving parts is long: a Fulcio certificate authority, a timestamp authority, an attestation store, a policy engine, and the glue holding them together. We ran none of it. The TestifySec platform brings that trust plane and you operate exactly none of it. Our side of the contract was one workflow permission, id-token: write, and four words of attestor configuration. The platform URL, the keyless signing, and the attestation storage all came from defaults.
+Here is the part that matters if you are the one paying for it. Standing up ~~Level 3~~ signed provenance (corrected 2026-09-29) with policy-gated releases is normally scoped as a multi-week project for a platform team, because the list of moving parts is long: a Fulcio certificate authority, a timestamp authority, an attestation store, a policy engine, and the glue holding them together. We ran none of it. The TestifySec platform brings that trust plane and you operate exactly none of it. Our side of the contract was one workflow permission, id-token: write, and four words of attestor configuration. The platform URL, the keyless signing, and the attestation storage all came from defaults.
 
 That is the real reason the clock reads an hour and not a quarter. The undifferentiated work, the part every company would otherwise rebuild and rebuild badly, is already done and already running. You bring a build command and an identity.
 
@@ -76,6 +82,6 @@ The same evidence answers more than CRA. Point it at NIST's Secure Software Deve
 
 ## The receipt
 
-That is the whole story. A real project, forked and hardened to a Level 3 release with a gate that fails closed, in about an hour, with the write-up coming out of the same session. The speed holds up because the trust plane was already running and the agent driving the CLI knew what it was doing. The compliance mapping, CRA included, is not a second project you signed up for later. It is the same evidence, waiting.
+That is the whole story. A real project, forked and hardened to a ~~Level 3~~ signed, policy-gated release (corrected 2026-09-29) with a gate that fails closed, in about an hour, with the write-up coming out of the same session. The speed holds up because the trust plane was already running and the agent driving the CLI knew what it was doing. The compliance mapping, CRA included, is not a second project you signed up for later. It is the same evidence, waiting.
 
 The screenshots above are from that session, timestamped from the build. Everything here verifies.

@@ -14,9 +14,9 @@
 
 // Package testresults emits a structured attestation predicate covering
 // test-run results in two canonical formats: JUnit XML (legacy, ubiquitous)
-// and CTRF JSON (https://ctrf.io/). SLSA Level 3 essentially requires
-// evidence that tests ran and passed; this attestor closes that loop by
-// recording a tamper-evident summary (totals, failed tests, tool identity)
+// and CTRF JSON (https://ctrf.io/). No SLSA Build level requires test
+// results; a verifier policy can require them directly. This attestor
+// records a tamper-evident summary (totals, failed tests, tool identity)
 // plus a digest of the source report file.
 package testresults
 

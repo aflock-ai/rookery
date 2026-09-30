@@ -38,12 +38,14 @@ For the full decision tree, see [Choose a signer](../guides/choose-a-signer).
 **[Fulcio](https://github.com/sigstore/fulcio)** is the Sigstore certificate authority. It issues short-lived signing certificates tied to CI identity by exchanging a CI runtime's OIDC token (e.g. the `id-token` GitHub Actions provides) for a certificate valid for a few minutes, long enough to sign, short enough that there's nothing meaningful to steal. No long-lived private key to manage.
 
 The OIDC subject, not the presence of a terminal or browser, determines the
-principal. Ambient workflow OIDC identifies the workload. Today's local
-stored-session exchange instead mints an AAL1 token naming the API credential
-creator's email without an interactive ceremony; it proves neither human
-presence nor a stable agent identity, so an agent must not invoke it. Explicit
-server-observed human/agent selection is a target interface and must never be
-selected by caller-supplied `human: true`. Signing a policy proves authorship of
+principal. Ambient workflow OIDC identifies the workload. An enrolled agent
+(`cilock enroll agent`, approved by a person at AAL2) signs under its own
+SPIFFE ID, never as the person. A person's stored `cilock login` credential mints a
+token naming their email at the assurance level the login reached, AAL2 by default (AAL1 in a
+tenant that opts out). The stored-session exchange proves neither human
+presence nor a stable agent identity: the level describes the login, not each
+signature. An agent must not use a person's login,
+and the principal is never selected by caller-supplied `human: true`. Signing a policy proves authorship of
 its exact bytes; it does not activate that policy for a Pushgate repository.
 
 **[SPIFFE/SPIRE](https://spiffe.io/)** is the alternative for workloads inside a service mesh. Identity is encoded as a SPIFFE ID URI on the certificate (e.g. `spiffe://example.com/step1`). Witness/cilock policies can require functionaries by SPIFFE URI directly, see the [policy SPIFFE example](https://github.com/in-toto/witness/blob/main/docs/concepts/policy.md).
