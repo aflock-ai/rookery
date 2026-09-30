@@ -66,6 +66,10 @@ var (
 	// ErrAmbiguousProduct: the repository maps to more than one product and no
 	// (valid) selector was supplied. The caller must pass exactly one product.
 	ErrAmbiguousProduct = errors.New("ambiguous_product")
+	// ErrNoProductBound: the platform recognised the identity (a 200 naming a
+	// valid tenant) but bound no product. Fatal for a caller that binds
+	// evidence to a product; a caller that binds none (jctl) is signed in.
+	ErrNoProductBound = errors.New("no_product_bound")
 )
 
 // RepositoryNotMappedError carries the identifiers from a repository_not_mapped
@@ -287,7 +291,7 @@ func parseBindingOK(body []byte) (Binding, error) {
 	// the caller is authenticated but no product is bound (e.g. a tenant-only CLI
 	// session with no selector). Fail closed rather than emit product-less evidence.
 	if ok.ProductID == "" || !isValidUUID(ok.ProductID) {
-		return Binding{}, fmt.Errorf("resolve-binding: no product is bound to this identity (product_id %q); pass an explicit product (`cilock login --product <uuid>` / action input `product:`), or --no-product-binding to attest without one", ok.ProductID)
+		return Binding{}, &NoProductBoundError{TenantID: ok.TenantID, ProductID: ok.ProductID}
 	}
 	return Binding(ok), nil
 }
@@ -398,3 +402,16 @@ func isValidUUID(s string) bool {
 func isHexDigit(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
+
+// NoProductBoundError is a 200 answer naming a tenant and no product.
+type NoProductBoundError struct {
+	TenantID  string
+	ProductID string // what the platform sent, empty or not a UUID
+}
+
+func (e *NoProductBoundError) Error() string {
+	return fmt.Sprintf("resolve-binding: no product is bound to this identity (product_id %q); pass an explicit product (`cilock login --product <uuid>` / action input `product:`), or --no-product-binding to attest without one", e.ProductID)
+}
+
+// Is reports ErrNoProductBound.
+func (e *NoProductBoundError) Is(target error) bool { return target == ErrNoProductBound }
