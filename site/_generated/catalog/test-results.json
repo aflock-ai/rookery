@@ -37,6 +37,7 @@
   ],
   "emitsFormats": [],
   "emittedBy": [
+    "ctest",
     "go-test",
     "gotestsum",
     "jest",

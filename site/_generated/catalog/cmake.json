@@ -1,0 +1,44 @@
+{
+  "name": "cmake",
+  "source": "catalog-only",
+  "description": "CMake: build-system generator for C and C++ (configure with cmake -S . -B build, compile with cmake --build build).",
+  "title": "cmake",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "build"
+  ],
+  "primaryCategory": "build",
+  "upstream": {
+    "name": "CMake",
+    "source": "https://gitlab.kitware.com/cmake/cmake",
+    "license": "BSD-3-Clause",
+    "vendor": "Kitware"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "full",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "cmake"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "CMake observed. commandrun (with --tracing) captures the compiler and linker processes and the files they read and write; built libraries and executables are products."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- cmake .",
+  "detectionCommand": "cilock plan --format=json -- cmake [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"cmake\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

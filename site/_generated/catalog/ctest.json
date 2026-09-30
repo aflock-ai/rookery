@@ -1,0 +1,46 @@
+{
+  "name": "ctest",
+  "source": "catalog-only",
+  "description": "CTest: CMake's test driver; runs the tests a CMake build registers.",
+  "title": "ctest",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "unit-test"
+  ],
+  "primaryCategory": "unit-test",
+  "upstream": {
+    "name": "CTest",
+    "source": "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
+    "license": "BSD-3-Clause",
+    "vendor": "Kitware"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "ctest"
+    }
+  ],
+  "emitsFormats": [
+    "test-results"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "CTest observed. --output-junit junit.xml (relative to the build directory) writes one JUnit testcase per CTest test, captured by test-results. A test CTest could not run (missing executable, missing REQUIRED_FILES, failed fixture) is written as skipped; test-results counts it as an error."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- ctest .",
+  "detectionCommand": "cilock plan --format=json -- ctest [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"ctest\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

@@ -1,0 +1,46 @@
+{
+  "name": "cppcheck",
+  "source": "catalog-only",
+  "description": "Cppcheck: static analyzer for C and C++ (undefined behavior, bounds, null pointers, leaks).",
+  "title": "cppcheck",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "lint"
+  ],
+  "primaryCategory": "lint",
+  "upstream": {
+    "name": "Cppcheck",
+    "source": "https://github.com/danmar/cppcheck",
+    "license": "GPL-3.0-or-later",
+    "vendor": "Cppcheck team"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "cppcheck"
+    }
+  ],
+  "emitsFormats": [
+    "sarif"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "Cppcheck invocation observed. --output-format=sarif --output-file=<file>.sarif is captured by the sarif attestor. It exits 0 on findings unless --error-exitcode=1 is given, and Cppcheck 2.17 (Debian 13) writes its error severity as SARIF level warning (2.21 writes error), so gate on the command-run exit code, not only on an error-level SARIF result."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- cppcheck .",
+  "detectionCommand": "cilock plan --format=json -- cppcheck [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"cppcheck\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

@@ -1,0 +1,44 @@
+{
+  "name": "clang-tidy",
+  "source": "catalog-only",
+  "description": "clang-tidy: LLVM's C and C++ linter, driven by a compilation database and the repository's .clang-tidy checks.",
+  "title": "clang-tidy",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "lint"
+  ],
+  "primaryCategory": "lint",
+  "upstream": {
+    "name": "clang-tidy",
+    "source": "https://clang.llvm.org/extra/clang-tidy/",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "vendor": "LLVM Project"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "clang-tidy"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "clang-tidy observed. It exits 0 when checks fire; only --warnings-as-errors=<checks> makes a finding fail the command, so require that flag and the command-run exit code. Findings are text on stdout (no SARIF); -p <build> names the compile_commands.json."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- clang-tidy .",
+  "detectionCommand": "cilock plan --format=json -- clang-tidy [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"clang-tidy\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

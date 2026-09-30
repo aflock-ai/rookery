@@ -109,6 +109,23 @@ ENTRIES: list[tuple[str, dict]] = [
         match=dict(argv_prefix=["staticcheck"]),
         on_match="staticcheck invocation observed. Findings captured via stdout / SARIF (-f sarif)."
     )),
+    ("clang-tidy", dict(
+        desc="clang-tidy: LLVM's C and C++ linter, driven by a compilation database and the repository's .clang-tidy checks.",
+        categories=["lint"],
+        upstream=dict(name="clang-tidy", source="https://clang.llvm.org/extra/clang-tidy/",
+                      license="Apache-2.0 WITH LLVM-exception", vendor="LLVM Project"),
+        match=dict(argv_prefix=["clang-tidy"]),
+        on_match="clang-tidy observed. It exits 0 when checks fire; only --warnings-as-errors=<checks> makes a finding fail the command, so require that flag and the command-run exit code. Findings are text on stdout (no SARIF); -p <build> names the compile_commands.json."
+    )),
+    ("cppcheck", dict(
+        desc="Cppcheck: static analyzer for C and C++ (undefined behavior, bounds, null pointers, leaks).",
+        categories=["lint"],
+        upstream=dict(name="Cppcheck", source="https://github.com/danmar/cppcheck",
+                      license="GPL-3.0-or-later", vendor="Cppcheck team"),
+        emits_formats=["sarif"],
+        match=dict(argv_prefix=["cppcheck"]),
+        on_match="Cppcheck invocation observed. --output-format=sarif --output-file=<file>.sarif is captured by the sarif attestor. It exits 0 on findings unless --error-exitcode=1 is given, and Cppcheck 2.17 (Debian 13) writes its error severity as SARIF level warning (2.21 writes error), so gate on the command-run exit code, not only on an error-level SARIF result."
+    )),
 
     # ===== VULN SCANNERS (validated) =====
     ("osv-scanner", dict(
@@ -391,6 +408,15 @@ ENTRIES: list[tuple[str, dict]] = [
         match=dict(argv_prefix=["cargo", "build"]),
         recommended_trace="full",
         on_match="cargo build observed. commandrun (with --tracing) captures opens/writes; Cargo.lock captured by lockfiles."
+    )),
+    ("cmake", dict(
+        desc="CMake: build-system generator for C and C++ (configure with cmake -S . -B build, compile with cmake --build build).",
+        categories=["build"],
+        upstream=dict(name="CMake", source="https://gitlab.kitware.com/cmake/cmake",
+                      license="BSD-3-Clause", vendor="Kitware"),
+        match=dict(argv_prefix=["cmake"]),
+        recommended_trace="full",
+        on_match="CMake observed. commandrun (with --tracing) captures the compiler and linker processes and the files they read and write; built libraries and executables are products."
     )),
     ("helm-install", dict(
         desc="helm install / upgrade — Kubernetes chart deployment.",
@@ -800,6 +826,15 @@ ENTRIES: list[tuple[str, dict]] = [
         emits_formats=["sbom"],
         match=dict(argv_prefix=["npm", "sbom"]),
         on_match="npm sbom observed. It prints to stdout: redirect to sbom.cdx.json (or *.spdx.json) so the sbom attestor captures it."
+    )),
+    ("ctest", dict(
+        desc="CTest: CMake's test driver; runs the tests a CMake build registers.",
+        categories=["unit-test"],
+        upstream=dict(name="CTest", source="https://cmake.org/cmake/help/latest/manual/ctest.1.html",
+                      license="BSD-3-Clause", vendor="Kitware"),
+        emits_formats=["test-results"],
+        match=dict(argv_prefix=["ctest"]),
+        on_match="CTest observed. --output-junit junit.xml (relative to the build directory) writes one JUnit testcase per CTest test, captured by test-results. A test CTest could not run (missing executable, missing REQUIRED_FILES, failed fixture) is written as skipped; test-results counts it as an error."
     )),
     ("gotestsum", dict(
         desc="gotestsum: runs go test -json and writes JUnit XML.",

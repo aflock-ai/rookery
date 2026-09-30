@@ -238,11 +238,45 @@ def make_node_test(fix: Path):
     )
 
 
+def make_ctest(fix: Path):
+    # A hand-written CTestTestfile.cmake, so the recipe needs ctest alone
+    # (no configure step): one passing test and one deliberate skip.
+    (fix / "CTestTestfile.cmake").write_text(
+        'add_test(passes "sh" "-c" "exit 0")\n'
+        'add_test(skips "sh" "-c" "exit 77")\n'
+        'set_tests_properties(skips PROPERTIES SKIP_RETURN_CODE "77")\n'
+    )
+
+
+def make_cppcheck(fix: Path):
+    # A planted out-of-bounds read: cppcheck reports it at its error
+    # severity (written to SARIF as level "warning").
+    (fix / "bounds.c").write_text(
+        "int read_past(void);\n"
+        "int read_past(void) { int a[2] = {0, 0}; return a[5]; }\n"
+    )
+
+
+def make_cmake(fix: Path):
+    (fix / "CMakeLists.txt").write_text(
+        "cmake_minimum_required(VERSION 3.16)\n"
+        "project(cat LANGUAGES C)\n"
+        "add_executable(cat main.c)\n"
+    )
+    (fix / "main.c").write_text("int main(void) { return 0; }\n")
+
+
 def make_npm_empty_pkg(fix: Path):
     # No dependencies: `npm install` writes a lockfile without the registry.
     (fix / "package.json").write_text(json.dumps({
         "name": "npm-sbom-cat", "version": "0.0.1"
     }, indent=2))
+
+
+def make_clang_tidy(fix: Path):
+    # fmt's own check: every function uses a trailing return type.
+    (fix / ".clang-tidy").write_text("Checks: modernize-use-trailing-return-type\n")
+    (fix / "sum.cc").write_text("auto sum(int a, int b) -> int { return a + b; }\n")
 
 
 def make_go_pkg_dir(fix: Path):
@@ -397,6 +431,14 @@ RECIPES: list[Recipe] = [
            fixture=make_go_mod, expect_uris=[URI_COMMANDRUN],
            allow_nonzero=True,
            invoke=args_only(["staticcheck", "./..."])),
+    # Clean source under the fixture's own .clang-tidy, with
+    # --warnings-as-errors so a finding would fail the command: clang-tidy
+    # exits 0 on findings without it. No compile database; `--` supplies
+    # the flags.
+    Recipe(name="clang-tidy", need="clang-tidy", category="artifact-scan",
+           fixture=make_clang_tidy, expect_uris=[URI_COMMANDRUN],
+           invoke=args_only(["clang-tidy", "--warnings-as-errors=*", "sum.cc",
+                             "--", "-std=c++17"])),
 
     # --- Vuln / dep scanners ---
     Recipe(name="osv-scanner", need="osv-scanner", category="artifact-scan",
@@ -497,6 +539,9 @@ RECIPES: list[Recipe] = [
            fixture=make_cargo, expect_uris=[URI_COMMANDRUN],
            allow_nonzero=True,
            invoke=args_only(["cargo", "build", "--offline"])),
+    Recipe(name="cmake", need="cmake", category="build",
+           fixture=make_cmake, expect_uris=[URI_COMMANDRUN],
+           invoke=args_only(["cmake", "-S", ".", "-B", "build"])),
     Recipe(name="gradle", need="gradle", category="build",
            fixture=make_gradle, expect_uris=[URI_COMMANDRUN],
            allow_nonzero=True,
@@ -598,6 +643,15 @@ RECIPES: list[Recipe] = [
     Recipe(name="node-test-no-reporter", need="node", category="artifact-scan",
            fixture=make_node_test, expect_uris=[URI_COMMANDRUN],
            invoke=args_only(["node", "--test"])),
+    Recipe(name="ctest", need="ctest", category="artifact-scan",
+           fixture=make_ctest, expect_uris=[URI_COMMANDRUN, URI_TEST],
+           attestors=["test-results"],
+           invoke=args_only(["ctest", "--output-junit", "junit.xml"])),
+    Recipe(name="cppcheck", need="cppcheck", category="artifact-scan",
+           fixture=make_cppcheck, expect_uris=[URI_COMMANDRUN, URI_SARIF],
+           attestors=["sarif"], allow_nonzero=True,
+           invoke=args_only(["cppcheck", "--error-exitcode=1", "--output-format=sarif",
+                             "--output-file=cppcheck.sarif", "bounds.c"])),
     Recipe(name="npm-sbom", need="npm", category="artifact-scan",
            fixture=make_npm_empty_pkg,
            expect_uris=[URI_COMMANDRUN, URI_SBOM_CYCLONEDX],

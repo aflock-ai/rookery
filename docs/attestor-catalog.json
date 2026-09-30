@@ -1,6 +1,6 @@
 {
   "generated_from": "registry+detector.yaml",
-  "attestor_count": 145,
+  "attestor_count": 149,
   "attestors": [
     {
       "name": "alps-evidence",
@@ -2812,6 +2812,31 @@
       }
     },
     {
+      "name": "clang-tidy",
+      "category": [
+        "lint"
+      ],
+      "upstream": {
+        "name": "clang-tidy",
+        "source": "https://clang.llvm.org/extra/clang-tidy/",
+        "license": "Apache-2.0 WITH LLVM-exception",
+        "vendor": "LLVM Project"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[clang-tidy]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "clang-tidy"
+          ]
+        }
+      }
+    },
+    {
       "name": "cloudbuild-gcp",
       "category": [
         "ci-context"
@@ -2856,6 +2881,31 @@
           "argv_prefix": [
             "aws",
             "cloudtrail"
+          ]
+        }
+      }
+    },
+    {
+      "name": "cmake",
+      "category": [
+        "build"
+      ],
+      "upstream": {
+        "name": "CMake",
+        "source": "https://gitlab.kitware.com/cmake/cmake",
+        "license": "BSD-3-Clause",
+        "vendor": "Kitware"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[cmake]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "cmake"
           ]
         }
       }
@@ -2987,6 +3037,62 @@
           "argv_prefix": [
             "cosign",
             "verify"
+          ]
+        }
+      }
+    },
+    {
+      "name": "cppcheck",
+      "category": [
+        "lint"
+      ],
+      "upstream": {
+        "name": "Cppcheck",
+        "source": "https://github.com/danmar/cppcheck",
+        "license": "GPL-3.0-or-later",
+        "vendor": "Cppcheck team"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[cppcheck]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "cppcheck"
+          ]
+        }
+      }
+    },
+    {
+      "name": "ctest",
+      "category": [
+        "unit-test"
+      ],
+      "upstream": {
+        "name": "CTest",
+        "source": "https://cmake.org/cmake/help/latest/manual/ctest.1.html",
+        "license": "BSD-3-Clause",
+        "vendor": "Kitware"
+      },
+      "emits_formats": [
+        "test-results"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[ctest]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "ctest"
           ]
         }
       }
