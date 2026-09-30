@@ -3,6 +3,7 @@ import CilockCi.Token
 import CilockCi.Plan
 import CilockCi.Login
 import CilockCi.Automode
+import CilockCi.Review
 import CilockCi.Trust
 
 /-!
@@ -160,6 +161,21 @@ def evalCase (j : Json) : Except String Json := do
       | .refuse .interactiveInCI => ("refuse", "", "interactiveInCI")
       | .refuse (.gitlab r) => ("refuse", "", "gitlab:" ++ (refusalKind r).1)
     pure (Json.mkObj [("tier", k), ("var", v), ("why", w)])
+  | "review" =>
+    let vs ← (← (← field j "versions").getArr?).toList.mapM fun v => do
+      pure ({ head := ← str v "head", createdAt := ← nat v "createdAt" } : Review.Version)
+    let as ← (← (← field j "approvals").getArr?).toList.mapM fun a => do
+      pure ({ user := ← nat a "user", approvedAt := ← nat a "at" } : Review.Approval)
+    let skew ← nat j "skew"
+    let author : Option Nat := match j.getObjVal? "author" with
+      | .ok (.num n) => some n.mantissa.toNat
+      | _ => none
+    let t ← nat j "t"
+    let bound := match Review.boundHead skew vs t with
+      | some h => Json.str h
+      | none => Json.null
+    pure (Json.mkObj [("bound", bound),
+      ("count", Json.num (Review.countFor skew vs as (← nat j "mergedAt") (← str j "head") author))])
   | "jctlAnswer" =>
     let a : Answer ← match ← str j "answer" with
       | "matched" => pure (.matched { tenant := "t", product := "p" })

@@ -1,4 +1,5 @@
 import CilockCi.Proofs
+import CilockCi.Review
 import CilockCi.Trust
 
 /-! Axiom audit: every headline theorem must depend only on Lean's core
@@ -33,3 +34,10 @@ open CilockCi
 -- jctl's reading of the platform's answer
 #print axioms jctl_refuses_no_match
 #print axioms jctl_session_only_via_match
+
+-- gitlab-review exact-sha binding
+#print axioms Review.counts_only_bound_sha
+#print axioms Review.other_sha_not_counted
+#print axioms Review.late_approval_not_counted
+#print axioms Review.parent_sha_approval_fails
+#print axioms Review.tie_unbound

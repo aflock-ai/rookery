@@ -1,0 +1,28 @@
+{
+  "_source": "gitlab.com (Ultimate, group testifysec/judge-parity-sandbox) projects/87019852/merge_requests/1/versions as attestor, 2026-09-29T08:07:01Z",
+  "response": [
+    {
+      "base_commit_sha": "bbd7522a84544abe0a0c68f27b0357c61db47685",
+      "created_at": "2026-09-29T08:05:06.191Z",
+      "head_commit_sha": "d7c95a09fb23e86fe66c0f1ec50dffa368ad938d",
+      "id": 2061124250,
+      "merge_request_id": 540060339,
+      "patch_id_sha": "3cbe6d05529477ea1d4cf0b9a3609f7816297cf8",
+      "real_size": "1",
+      "start_commit_sha": "bbd7522a84544abe0a0c68f27b0357c61db47685",
+      "state": "collected"
+    },
+    {
+      "base_commit_sha": "bbd7522a84544abe0a0c68f27b0357c61db47685",
+      "created_at": "2026-09-29T08:04:57.901Z",
+      "head_commit_sha": "11f971282d4d006bf682b626f3cc5b8795eca8ad",
+      "id": 2061123791,
+      "merge_request_id": 540060339,
+      "patch_id_sha": "8f71df93875a6f04a507725446bdc5d9b0cfb47f",
+      "real_size": "1",
+      "start_commit_sha": "bbd7522a84544abe0a0c68f27b0357c61db47685",
+      "state": "collected"
+    }
+  ],
+  "status": 200
+}
