@@ -9,8 +9,9 @@ leaves L2 and L3 to a separate assessment:
 -- see (monorepo, outside this tree): docs/slsa-posture.md:22-26
 
 In CI, CI/lock signs keyless with the job's ambient OIDC identity, read from
-the job environment in-process:
--- cite: cilock/internal/auth/workflow.go:26-29 sha256:ef9c2193fb3f22e14fb91086a17b4e60928e54b9551895c942b0d65805416b5f
+the job environment in-process (GitHub Actions: its token endpoint; GitLab CI:
+the id_tokens it declared, attestation/cijobtoken):
+-- cite: cilock/internal/auth/workflow.go:28-37 sha256:9154936aa581132410d16346e245b28f62d8fa19d3bdb70d2601a6f5528a5f61
 -- cite: plugins/signers/fulcio/fulcio.go:284-297 sha256:b6572c193dc1269f2fd9f58ae02237d5c1ba130432c734eb884ce680be96af66
 and, on GitLab CI, Buildkite and CircleCI, from the id_tokens variable or the
 vendor's token command (#9839); the GitLab variable is in the job

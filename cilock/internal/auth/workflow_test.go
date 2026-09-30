@@ -94,7 +94,7 @@ func TestAmbientWorkflowLogin(t *testing.T) {
 		t.Cleanup(func() { workflowOIDCFetcher = orig })
 		workflowOIDCFetcher = func(string) (string, error) { return "probe-token", nil }
 		stubBinding(t, func(_, _, _ string) (platformauth.Binding, error) {
-			return platformauth.Binding{}, fmt.Errorf("resolve-binding: request failed: connection refused")
+			return platformauth.Binding{}, &platformauth.BindingUnavailableError{Reason: "resolve-binding: request failed: connection refused"}
 		})
 
 		cred, err := AmbientWorkflowLogin("https://p", "https://p/login", "")
@@ -103,6 +103,25 @@ func TestAmbientWorkflowLogin(t *testing.T) {
 		}
 		if cred.ProductID != "" || cred.TenantID != "" {
 			t.Fatalf("no binding expected on transport failure, got %+v", cred)
+		}
+	})
+
+	t.Run("ambient present, platform answers 401 -> login refused, no marker", func(t *testing.T) {
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://token.example/req")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "bearer-xyz")
+		orig := workflowOIDCFetcher
+		t.Cleanup(func() { workflowOIDCFetcher = orig })
+		workflowOIDCFetcher = func(string) (string, error) { return "probe-token", nil }
+		stubBinding(t, func(_, _, _ string) (platformauth.Binding, error) {
+			return platformauth.Binding{}, fmt.Errorf("resolve-binding: https://p/api/auth/resolve-binding returned 401: no credential")
+		})
+
+		// The model's answerOut: noMatch refuses. Before, any non-typed error
+		// kept the marker and login printed "workflow identity active" for an
+		// identity the platform had just rejected.
+		cred, err := AmbientWorkflowLogin("https://p", "https://p/login", "")
+		if err == nil || cred != nil {
+			t.Fatalf("a platform that refused the identity must refuse the login, got cred=%+v err=%v", cred, err)
 		}
 	})
 

@@ -43,6 +43,9 @@ func (ro *RunOptions) holdAmbientIdentityToStore(cmd *cobra.Command) {
 	if repo := os.Getenv("GITHUB_REPOSITORY"); repo != "" {
 		name = "GitHub Actions job in " + repo
 	}
+	if proj := os.Getenv("CI_PROJECT_PATH"); os.Getenv("GITLAB_CI") == "true" && proj != "" {
+		name = "GitLab CI job in " + proj
+	}
 	ro.platformPrincipal = &platformPrincipal{Kind: "workflow identity", Name: name}
 	if !archivistaFlagExplicit(cmd) {
 		ro.ArchivistaOptions.Enable = true

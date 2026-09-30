@@ -17,20 +17,28 @@ import (
 	"github.com/aflock-ai/rookery/platformauth"
 )
 
-// WorkflowOIDCAvailable reports whether an ambient CI workflow OIDC identity is
-// present. It checks for the GitHub Actions OIDC token endpoint env vars
-// (ACTIONS_ID_TOKEN_REQUEST_URL + ACTIONS_ID_TOKEN_REQUEST_TOKEN), NOT the
-// broad GITHUB_ACTIONS flag — a self-hosted runner sets GITHUB_ACTIONS=true but
-// may lack the token endpoint (no `id-token: write` permission), and treating
-// that as an identity would be a false positive.
+// WorkflowOIDCAvailable reports whether this process is a CI job with its own
+// OIDC identity: GitHub Actions with the token endpoint
+// (ACTIONS_ID_TOKEN_REQUEST_URL + ACTIONS_ID_TOKEN_REQUEST_TOKEN, i.e.
+// `permissions: id-token: write`; the broad GITHUB_ACTIONS flag is not enough,
+// a self-hosted runner sets it without the endpoint), or a GitLab CI job,
+// whose ID tokens are the ones it declared under `id_tokens:`. For GitLab a
+// token exists per audience, so a caller still gets a refusal naming the
+// missing `id_tokens:` entry from FetchCIOIDCToken.
 func WorkflowOIDCAvailable() bool {
-	return os.Getenv("ACTIONS_ID_TOKEN_REQUEST_URL") != "" &&
-		os.Getenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN") != ""
+	switch CIProviderFromEnv(os.Getenv) {
+	case CIGitLab:
+		_, ok := GitLabJob()
+		return ok
+	case CIGitHub:
+		return GitHubCanMint(os.Getenv)
+	}
+	return false
 }
 
 // workflowOIDCFetcher obtains an ambient workflow OIDC token for the given
 // audience. It is a package var so tests can stub the network call.
-var workflowOIDCFetcher = fetchWorkflowOIDCToken
+var workflowOIDCFetcher = FetchCIOIDCToken
 
 // resolveBindingFn resolves the repository→tenant/product binding from the
 // platform. A package var so tests can stub the network exchange.
@@ -60,27 +68,32 @@ var resolveBindingFn = platformauth.ResolveBinding
 func AmbientWorkflowLogin(platformURL, audience, selectorProductID string) (*Credential, error) {
 	if !WorkflowOIDCAvailable() {
 		return nil, fmt.Errorf("no ambient workflow OIDC identity " +
-			"(ACTIONS_ID_TOKEN_REQUEST_URL/TOKEN not set — not in GitHub Actions, " +
-			"or the job is missing `permissions: id-token: write`)")
+			"(not in GitHub Actions with `permissions: id-token: write`, nor in a GitLab CI job)")
 	}
-	// Mint a login-audience token and confirm the identity is usable. Retained
-	// only for the binding exchange below; never persisted, never logged.
+	// Mint (GitHub) or select (GitLab) a login-audience token and confirm the
+	// identity is usable. Retained only for the binding exchange below; never
+	// persisted, never logged.
 	token, err := workflowOIDCFetcher(audience)
 	if err != nil {
-		return nil, fmt.Errorf("workflow-identity login probe failed: %w", err)
+		return nil, fmt.Errorf("workflow-identity login: %w", err)
 	}
 
 	cred := &Credential{PlatformURL: platformURL, AuthMode: AuthModeWorkflowOIDC}
 
 	binding, err := resolveBindingFn(platformURL, token, selectorProductID)
 	if err != nil {
-		// A genuine, reachable-endpoint config error is actionable — surface it.
-		if errors.Is(err, platformauth.ErrRepositoryNotMapped) || errors.Is(err, platformauth.ErrAmbiguousProduct) {
-			return nil, err
+		// Only an endpoint that is not there to ask (404, 5xx, transport) keeps
+		// the marker without a binding, so a client that ships ahead of the
+		// server still logs in; the run-entry gate re-resolves. A platform that
+		// ANSWERED and refused (401/403: no tenant credential matches this job's
+		// token; repository not mapped; ambiguous product) refuses the login: a
+		// marker there would print "workflow identity active" for an identity the
+		// platform just rejected. This is the model's `answerOut`
+		// (formal/cilock-ci, CilockCi/Login.lean).
+		if errors.Is(err, platformauth.ErrBindingUnavailable) {
+			return cred, nil
 		}
-		// Transport/availability failure (endpoint not deployed yet, 5xx): keep
-		// the workflow-identity marker without a binding; the run gate resolves.
-		return cred, nil
+		return nil, fmt.Errorf("workflow-identity login refused by %s: %w", platformURL, err)
 	}
 	cred.TenantID = binding.TenantID
 	cred.TenantName = binding.TenantName

@@ -42,7 +42,7 @@ import (
 // Actions OIDC endpoint.
 var (
 	bindingResolveFn        = platformauth.ResolveBinding
-	bindingMintLoginTokenFn = fetchGitHubOIDCToken
+	bindingMintLoginTokenFn = ciOIDCToken
 )
 
 var DefaultAttestors = []string{"environment", "git", "platform"}
@@ -282,7 +282,7 @@ func applyWorkflowKeylessFulcioToken(cmd *cobra.Command, fulcioURL, audience str
 	if cur := fulcioFlagURL(cmd); cur != "" && !sameOrigin(cur, fulcioURL) {
 		return false, nil
 	}
-	oidcToken, err := fetchGitHubOIDCToken(audience)
+	oidcToken, err := ciFulcioToken(cmd, audience)
 	if err != nil {
 		log.Debugf("workflow keyless OIDC mint skipped: %v", err)
 		return false, nil
@@ -295,7 +295,7 @@ func applyWorkflowKeylessFulcioToken(cmd *cobra.Command, fulcioURL, audience str
 	}
 
 	refresh := func() error {
-		fresh, mintErr := fetchGitHubOIDCToken(audience)
+		fresh, mintErr := ciFulcioToken(cmd, audience)
 		if mintErr != nil {
 			return fmt.Errorf("re-minting the workflow OIDC signing token: %w", mintErr)
 		}
@@ -810,6 +810,7 @@ func (ro *RunOptions) resolvePlatformIdentity(cmd *cobra.Command, pc platformcon
 		// the helper fails open (no CI OIDC, explicit override, foreign Fulcio),
 		// and an over-claimed identity would misstate the signing path.
 		ro.signerWorkflowIdentity, ro.refreshFulcioToken = applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+		ro.useGitLabJobTokens(cmd)
 
 		// Expose the platform URL to the platform attestor so it binds the run to
 		// the tenant even with no prior `cilock login`: in CI the ambient GitHub
@@ -819,16 +820,10 @@ func (ro *RunOptions) resolvePlatformIdentity(cmd *cobra.Command, pc platformcon
 		// credential. Same-origin guard: never advertise the platform binding for an
 		// upload aimed at a third-party --archivista-server (the OIDC token, and the
 		// binding it implies, only make sense against the platform's own Archivista).
-		if ro.ArchivistaOptions.OIDC && sameOrigin(ro.ArchivistaOptions.Url, pc.Archivista) {
-			normalized := auth.NormalizeURL(ro.PlatformURL)
-			_ = os.Setenv(platformURLEnv, normalized)
-			// In-process trust handshake: authorize the platform attestor to emit a
-			// workflow-identity binding for THIS url. CILOCK_PLATFORM_URL alone is
-			// user-controllable (inheritable env), so the attestor additionally
-			// requires this marker — set only here, after the same-origin check — to
-			// match before binding. Closes the confused-deputy gap where a hostile CI
-			// step exports CILOCK_PLATFORM_URL to forge a platform binding.
-			platformconfig.MarkTrustedPlatformBinding(normalized)
+		// A no-login ambient identity whose upload reaches the platform's own
+		// Archivista is a principal the evidence gate holds: its evidence is
+		// stored, or the run is refused (GitHub and GitLab alike).
+		if ro.markAmbientPlatformBinding(pc) {
 			ro.holdAmbientIdentityToStore(cmd)
 		}
 		return true
@@ -949,10 +944,13 @@ func explicitFulcioTokenSource(cmd *cobra.Command) bool {
 //     local signing needs no platform identity.
 //   - an explicit --signer-fulcio-token / -token-path / -oidc-issuer is set: the
 //     operator brought their own Fulcio token (CI OIDC, interactive issuer).
-//   - ambient CI workflow OIDC is available (GitHub Actions id-token: write): the
-//     keyless identity is minted per-call, so no `cilock login` is needed.
-//   - a stored platform session exists (LookupAny != nil): the operator is logged
-//     in (browser/token session OR a workflow-identity marker).
+//   - a bearer platform session exists: it is exchanged for a signing token.
+//   - GitHub Actions with `id-token: write`: the keyless identity is minted per call.
+//   - a GitLab CI job that declared an ID token for exactly aud "sigstore". A
+//     GitLab job that did not is refused here, before its build, with the
+//     `id_tokens:` entry to add (decideSigningRoute).
+//   - a Buildkite / CircleCI job: the signer fetches the job's own OIDC token at
+//     signing time (selectAmbientCIFulcio chose that path).
 func (ro *RunOptions) PreflightIdentity(cmd *cobra.Command) error {
 	// Platform disabled — no hosted Fulcio in play, so there is nothing to gate.
 	if (cmd.Flags().Changed("platform-url") || ro.Offline) && ro.PlatformURL == "" {
@@ -963,25 +961,23 @@ func (ro *RunOptions) PreflightIdentity(cmd *cobra.Command) error {
 	if nonFulcioSignerSelected(cmd) || explicitFulcioTokenSource(cmd) {
 		return nil
 	}
-	// Ambient CI workflow OIDC identity (GitHub Actions id-token: write) signs
-	// keyless with no `cilock login` step — never block the CI path.
-	if auth.WorkflowOIDCAvailable() {
-		return nil
-	}
-	// A stored session (browser/token) or workflow-identity marker means the
-	// operator is logged in to this platform — let the run proceed.
-	if cred, lookupErr := auth.LookupAny(ro.PlatformURL); lookupErr == nil && cred != nil {
-		return nil
-	}
-	// No local key, no token, no CI identity, no session — the run would otherwise
-	// dead-end inside Fulcio signer construction with an opaque error and never run
-	// the wrapped command. Steer the operator to the fix.
+	// Everything else is decideSigningRoute: a bearer session exchanges at the
+	// platform; a GitHub job mints from its endpoint; a GitLab job signs with
+	// the ID token it declared for exactly "sigstore", and when it declared
+	// none (or only one for another audience, or another job's) the run is
+	// refused HERE, naming the `id_tokens:` entry to add, instead of after the
+	// build; Buildkite and CircleCI tokens are fetched by the signer; anything
+	// else is not signed in. A workflow-identity marker with no CI identity to
+	// sign with is not signed in either.
 	platformURL := auth.NormalizeURL(ro.PlatformURL)
 	if platformURL == "" {
 		platformURL = platformconfig.DefaultPlatformURL
 	}
-	return fmt.Errorf("not signed in to %s — run 'cilock login' first, "+
-		"or pass -k/--signer-file-key-path for a local key (or --offline to skip platform signing)", platformURL)
+	route := decideSigningRoute(ro.signingInputsFor(cmd), platformURL)
+	if route.Kind == routeRefuse {
+		return route.Err
+	}
+	return nil
 }
 
 // EnforcePlatformBinding is the client-side fail-closed product-binding gate. It
@@ -1190,6 +1186,13 @@ func (ro *RunOptions) applyPlatformCredential(cmd *cobra.Command, cred *auth.Cre
 		// the helper fails open (no CI OIDC, explicit override, foreign Fulcio),
 		// and an over-claimed identity would misstate the signing path.
 		ro.signerWorkflowIdentity, ro.refreshFulcioToken = applyWorkflowKeylessFulcioToken(cmd, pc.Fulcio, pc.OIDCClientID)
+		ro.useGitLabJobTokens(cmd)
+		// A workflow-identity marker has no bearer: the upload is authenticated
+		// by the CI token, so the platform attestor needs the same in-process
+		// trust mark the no-login ambient path sets. Without it a `cilock login`
+		// then `cilock run` in CI recorded no platform binding at all ("untrusted
+		// CILOCK_PLATFORM_URL", GitLab CE 19.4.1 pipeline 8 job 24).
+		ro.markAmbientPlatformBinding(pc)
 	} else {
 		ro.keylessAssurance, ro.refreshFulcioToken = applyKeylessFulcioToken(cmd, ro.PlatformURL, pc.Fulcio, cred.Token)
 	}
@@ -1535,12 +1538,12 @@ func (o *ArchivistaOptions) Client() (*archivista.Client, error) {
 		if err := archivistaAudienceNamesDestination(audience, o.Url); err != nil {
 			return nil, err
 		}
-		source := newGitHubOIDCTokenSource(audience, fetchGitHubOIDCToken)
+		source := newGitHubOIDCTokenSource(audience, ciOIDCToken)
 		if _, err := source(); err != nil {
 			return nil, fmt.Errorf("archivista OIDC auth: %w", err)
 		}
 		opts = append(opts, archivista.WithAuthTokenSource(source))
-		log.Infof("Using GitHub Actions OIDC token for Archivista (audience: %s)", audience)
+		log.Infof("Using the CI job OIDC token for Archivista (audience: %s)", audience)
 	}
 
 	// A caller-supplied source wins over ambient CI OIDC, which is the same
@@ -1660,7 +1663,7 @@ func newGitHubOIDCTokenSource(audience string, fetch func(string) (string, error
 		}
 		t, err := fetch(audience)
 		if err != nil {
-			return "", fmt.Errorf("mint github actions oidc token: %w", err)
+			return "", fmt.Errorf("CI job OIDC token: %w", err)
 		}
 		token, mintedAt = t, time.Now()
 		return token, nil
