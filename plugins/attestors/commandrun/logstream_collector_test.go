@@ -3,8 +3,11 @@ package commandrun
 
 import (
 	"errors"
+	"fmt"
+	"io/fs"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -14,14 +17,18 @@ const (
 	testPredicate = `senderImagePath CONTAINS[c] "sandbox"`
 )
 
+// exactRuleListed is the documented rule as `sudo -l` prints it.
+const exactRuleListed = `(root) NOPASSWD: /usr/bin/log stream --style ndjson --predicate senderImagePath CONTAINS\[c\] "sandbox"`
+
 // fakeCollectorHost is the fake exec: it answers the membership question and
-// records every argv the chooser asked sudo about.
+// the sudo listing, and counts how often the listing was asked for.
 type fakeCollectorHost struct {
 	root     bool
 	admin    bool
 	adminErr error
+	listing  string
 	sudoErr  error
-	asked    [][]string
+	asked    int
 }
 
 func (f *fakeCollectorHost) host() collectorHost {
@@ -29,9 +36,9 @@ func (f *fakeCollectorHost) host() collectorHost {
 		userName: func() string { return "ci" },
 		isRoot:   func() bool { return f.root },
 		isAdmin:  func() (bool, error) { return f.admin, f.adminErr },
-		sudoAllows: func(argv []string) error {
-			f.asked = append(f.asked, slices.Clone(argv))
-			return f.sudoErr
+		sudoList: func() (string, error) {
+			f.asked++
+			return f.listing, f.sudoErr
 		},
 	}
 }
@@ -49,8 +56,8 @@ func TestCollectorAdminRunsLogDirectly(t *testing.T) {
 	if got.viaSudo || !slices.Equal(got.argv, wantDirect()) {
 		t.Fatalf("admin launch = %+v, want direct %q", got, wantDirect())
 	}
-	if len(f.asked) != 0 {
-		t.Fatalf("an admin must not consult sudo, asked %q", f.asked)
+	if f.asked != 0 {
+		t.Fatalf("an admin must not consult sudo, asked %d times", f.asked)
 	}
 }
 
@@ -60,13 +67,13 @@ func TestCollectorRootRunsLogDirectly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("chooseCollector: %v", err)
 	}
-	if got.viaSudo || !slices.Equal(got.argv, wantDirect()) || len(f.asked) != 0 {
-		t.Fatalf("root launch = %+v (sudo asked %q), want direct", got, f.asked)
+	if got.viaSudo || !slices.Equal(got.argv, wantDirect()) || f.asked != 0 {
+		t.Fatalf("root launch = %+v (sudo asked %d times), want direct", got, f.asked)
 	}
 }
 
 func TestCollectorNonAdminWithRuleRunsThroughSudo(t *testing.T) {
-	f := &fakeCollectorHost{}
+	f := &fakeCollectorHost{listing: "User ci may run the following commands on mint-1:\n    " + exactRuleListed + "\n"}
 	got, err := chooseCollector(f.host(), testLogPath, testSudoPath, testPredicate)
 	if err != nil {
 		t.Fatalf("chooseCollector: %v", err)
@@ -75,10 +82,8 @@ func TestCollectorNonAdminWithRuleRunsThroughSudo(t *testing.T) {
 	if !got.viaSudo || !slices.Equal(got.argv, want) {
 		t.Fatalf("launch = %+v, want sudo argv %q", got, want)
 	}
-	// The check asks about exactly the command it will run, predicate as ONE
-	// element: sudo -n -l is given the same argv the launch uses.
-	if len(f.asked) != 1 || !slices.Equal(f.asked[0], wantDirect()) {
-		t.Fatalf("sudo was asked about %q, want exactly [%q]", f.asked, wantDirect())
+	if f.asked != 1 {
+		t.Fatalf("sudo listing asked %d times, want once", f.asked)
 	}
 }
 
@@ -111,8 +116,8 @@ func TestCollectorMembershipErrorRefuses(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "opendirectoryd unavailable") {
 		t.Fatalf("membership lookup failure must refuse and carry the cause, got %v", err)
 	}
-	if len(f.asked) != 0 {
-		t.Fatalf("sudo must not be consulted on an unknown membership, asked %q", f.asked)
+	if f.asked != 0 {
+		t.Fatalf("sudo must not be consulted on an unknown membership, asked %d times", f.asked)
 	}
 }
 
@@ -141,5 +146,19 @@ func TestCollectorRefusalHintOnlyForAdminRefusal(t *testing.T) {
 	}
 	if h := collectorRefusalHint("some other failure", "ci", testLogPath, testPredicate); h != "" {
 		t.Fatalf("unrelated stderr must add nothing, got %q", h)
+	}
+}
+
+// Inside another sandbox, starting sudo at all is refused (EPERM). That is the
+// nesting case, and the refusal must say so, not only name the sudoers fixes.
+func TestCollectorSudoExecNotPermittedNamesNesting(t *testing.T) {
+	f := &fakeCollectorHost{sudoErr: fmt.Errorf("wrapped: %w", &fs.PathError{Op: "fork/exec", Path: testSudoPath, Err: syscall.EPERM})}
+	_, err := chooseCollector(f.host(), testLogPath, testSudoPath, testPredicate)
+	if err == nil || !strings.Contains(err.Error(), "sandboxes do not nest") {
+		t.Fatalf("EPERM starting sudo must explain nesting, got %v", err)
+	}
+	f = &fakeCollectorHost{sudoErr: errors.New("exit status 1: a password is required")}
+	if _, err := chooseCollector(f.host(), testLogPath, testSudoPath, testPredicate); err == nil || strings.Contains(err.Error(), "nest") {
+		t.Fatalf("an ordinary sudo refusal must not blame nesting, got %v", err)
 	}
 }
