@@ -6,4 +6,5 @@ import CilockEvaluators.Vsa
 import CilockEvaluators.Verdict
 import CilockEvaluators.Nested
 import CilockEvaluators.Holdout
+import CilockEvaluators.Seeded.Proofs
 import CilockEvaluators.Audit

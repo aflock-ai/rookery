@@ -17,6 +17,7 @@
 -/
 import Lean.Data.Json
 import CilockEvaluators.Vsa
+import CilockEvaluators.Seeded.Oracle
 import CilockEvaluators.Verdict
 import CilockEvaluators.Nested
 
@@ -290,6 +291,7 @@ def runCase (line : String) : String :=
       | "ai" => aiCase j
       | "gate" => gateCase j
       | "vsa" => vsaCase j
+      | "seeded" => Seeded.Oracle.seededCase j
       | "verdict" => verdictCase j
       | k => throw s!"case kind {k}"
     match r with

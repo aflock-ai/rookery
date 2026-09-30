@@ -54,6 +54,9 @@ core axioms (`propext`, `Quot.sound`, `Classical.choice`). There is no
 | `Nested.lean` | Nested externals (`childPolicyDigest`, `timestampConstraint`): the newest admitted child VSA decides, at its signed time. **`latest_sound`**, **`parent_sound`**, `admit_time_is_signed`; `tsa_ordering_restamp_passes` refutes ordering by TSA time. |
 | `Holdout.lean` | Predictions for four real test fixtures (below). |
 | `Oracle.lean`, `OracleMain.lean` | The model as an executable (`cilock-evaluators-oracle`) for differential testing. |
+| `Seeded/Json.lean`, `Seeded/Rules.lean` | The seeded Rego rules of `cilock policy` (`cilock/cli/policy_rules.go`), one function per rule over a JSON value type, following the Rego text rule by rule, including the total accessor `field()` and Rego's undefined-is-deny reading. |
+| `Seeded/Proofs.lean` | What each seeded rule admits: E8 below. The seven rules on main are bound to OPA by `TestFormalDifferentialSeededRules`. |
+| `Seeded/Oracle.lean` | The `seeded` case kind of the oracle. |
 | `Audit.lean` | `#print axioms` for every result. |
 
 ## Results
@@ -71,6 +74,7 @@ built.
 | E5 | Model pinning | **Proved on both paths.** Jev requires a `jev-X.Y.Z` name and `resolved == requested`. The generative path was **refuted as built** by the first version of this model (`generative_model_not_verified`, testifysec/judge#9820): the verdict recorded the policy's model and never learned which model the server ran. **Fixed by #9871**: the Ollama reply's `model` must equal the policy's, and `EvaluateAIPolicyWithProvider` refuses any answer whose recorded model is empty or differs, for every provider. | `Ai.jev_model_pinned`, `Ai.generative_model_pinned`, `Ai.generative_other_model_refused`, `Ai.gate_pass_all_pass` |
 | E6 | VSA exact policy | **Proved under `Assumptions` and `ExactPolicyRego`.** The engine itself guarantees the signature, the requested subject and an allowed signer (`accepts_iff`). Result, policy digest and freshness hold when the consumer's Rego checks them. | `Vsa.accepts_iff`, `Vsa.vsa_exact_policy_sound` |
 | E7 | VSA non-amplification | **Proved under the same premises.** An accepted VSA stands for a real upstream run that accepted, under the byte-identical policy, about the requested subject. | `Vsa.vsa_non_amplification`, `Vsa.emit_sound`, `Vsa.emit_refusal_none` |
+| E8 | Seeded rules fail closed | **Proved for all 19 rules.** No rule admits the empty predicate, whatever its fill value (`admits_empty`); evidence that is not a JSON object is refused by every rule (`admits_nonobject`); a rule that reads only its own predicate gives the same verdict with or without an attestationsFrom edge (`admits_wrapped_eq`). Per rule, an admitted predicate has every decision field present with the kind the rule compares, and meets exactly the condition of the rule table in `docs/design/cilock-policy-init.md` (`*_sound`, `*_iff`). The malformed-evidence cases Codex found on #10194 are theorems: a non-empty findings list, even of `null`, is never clean (`secretscan_nonempty_findings_refused`), and every SARIF level an admitted result carries is in the enum (`sarif_levels_in_enum`). Numbers are integers (the oracle refuses a fraction). | `Seeded.admits_empty`, `Seeded.admits_nonobject`, `Seeded.admits_wrapped_eq`, `Seeded.*_empty`, `Seeded.*_sound`, `Seeded.commandSucceeded_iff`, `Seeded.productRecorded_iff`, `Seeded.secretscanClean_iff`, `Seeded.slsaProvenance_iff`, `Seeded.traced_iff`, `Seeded.settled_iff`, `Seeded.secretscan_nonempty_findings_refused`, `Seeded.sarif_levels_in_enum` |
 
 Two further facts matter to anyone composing on this model. `Vsa.policy_subject_matches_every_artifact`: every VSA of a policy names that policy's digest as a subject. And `Gate.refusal_is_not_a_verdict`: a refusal, an AI refusal or a Rego deadline, never becomes a completed pass or fail.
 
@@ -139,6 +143,10 @@ the update, seed 1 at 600 cases and seeds 7, 31, 977 and 4242 at 3,000
 cases gave **0 mismatches** in all four suites. No suite generates a Rego
 deadline, so the deadline refusal (`Rego.refused_only_on_deadline`,
 `Gate.env_rego_deadline_refuses`) is checked by proof only.
+
+### Seeded rules
+
+`TestFormalDifferentialSeededRules` (`cilock/cli/formal_seeded_rules_differential_test.go`) evaluates every rule in `ruleTemplates` with the verifier's own evaluator (`policy.EvaluateRegoPolicy`) and the oracle on the same case: an admitted base per rule, then one to three random mutations (deleted keys, values of the wrong kind, boundary numbers, empty and path-traversal strings, SARIF references by index, id, rule object and sub-rule id), a quarter of them behind an attestationsFrom wrapper. Each rule must have at least one admitted case, and a rule the oracle does not know is a failure. Measured against the seven rules on main at 5de89acda3: seeds 20260928, 1, 2, 3 and 7 at 2,000 cases per rule, 14,000 cases each (about 29% admitted), 0 mismatches. The model as first written tracked the stack rather than main and disagreed on 95 of 2,800 cases (seed 20260928, 400 per rule): tests-pass counts must be nonnegative and `skipped` numeric, SARIF reads `rule.index`, `rule.id`, sub-rule ids, `toolComponent`, overrides and policies, and govulncheck-no-reachable does not read `scanRoots` on main. The twelve rules of the later layers are modelled and proved here but have no code on main to compare against yet.
 
 ## Holdout
 

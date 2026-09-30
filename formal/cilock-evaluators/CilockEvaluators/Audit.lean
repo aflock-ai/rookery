@@ -5,6 +5,7 @@
   `Lean.ofReduceBool` in any line fails the axiom audit.
 -/
 import CilockEvaluators.Holdout
+import CilockEvaluators.Seeded.Proofs
 import CilockEvaluators.Verdict
 import CilockEvaluators.Nested
 
@@ -75,6 +76,61 @@ open CilockEvaluators
 #print axioms Holdout.h2_refusals
 #print axioms Holdout.h3_optional_rejected_external_fails
 #print axioms Holdout.h4_nonstring_deny
+
+-- Seeded rules (cilock policy authoring): what each rule admits.
+#print axioms Seeded.commandSucceeded_empty
+#print axioms Seeded.commandPin_empty
+#print axioms Seeded.productRecorded_empty
+#print axioms Seeded.testsPass_empty
+#print axioms Seeded.sarifNoErrors_empty
+#print axioms Seeded.secretscanClean_empty
+#print axioms Seeded.govulncheckReachable_empty
+#print axioms Seeded.trivySeverity_empty
+#print axioms Seeded.slsaProvenance_empty
+#print axioms Seeded.sbomInventory_empty
+#print axioms Seeded.reviewApproved_empty
+#print axioms Seeded.tracePresent_empty
+#print axioms Seeded.traceNetwork_empty
+#print axioms Seeded.traceExec_empty
+#print axioms Seeded.traceWrites_empty
+#print axioms Seeded.traceCredentialReads_empty
+#print axioms Seeded.govulnScan_empty
+#print axioms Seeded.sarifScan_empty
+#print axioms Seeded.vexCovered_govuln_empty
+#print axioms Seeded.vexCovered_sarif_empty
+#print axioms Seeded.productsFrom_empty
+#print axioms Seeded.admits_empty
+#print axioms Seeded.admits_nonobject
+#print axioms Seeded.predOf_wrapped
+#print axioms Seeded.predOf_plain
+#print axioms Seeded.admits_wrapped_eq
+#print axioms Seeded.commandSucceeded_iff
+#print axioms Seeded.commandPin_sound
+#print axioms Seeded.productRecorded_iff
+#print axioms Seeded.testsPass_sound
+#print axioms Seeded.secretscanClean_iff
+#print axioms Seeded.secretscan_nonempty_findings_refused
+#print axioms Seeded.sarifNoErrors_sound
+#print axioms Seeded.unreadableRun_false
+#print axioms Seeded.sarif_levels_in_enum
+#print axioms Seeded.govulncheckReachable_sound
+#print axioms Seeded.scanned_nonempty
+#print axioms Seeded.vexCovered_sound
+#print axioms Seeded.settled_iff
+#print axioms Seeded.govulnScan_sound
+#print axioms Seeded.trivySeverity_sound
+#print axioms Seeded.slsaProvenance_iff
+#print axioms Seeded.hasDigest_sound
+#print axioms Seeded.sbomInventory_sound
+#print axioms Seeded.reviewApproved_sound
+#print axioms Seeded.productsFrom_sound
+#print axioms Seeded.digestOf_nonempty
+#print axioms Seeded.traced_iff
+#print axioms Seeded.tracePresent_iff
+#print axioms Seeded.traceNetwork_sound
+#print axioms Seeded.traceExec_sound
+#print axioms Seeded.traceWrites_sound
+#print axioms Seeded.traceCredentialReads_sound
 -- Failure verdicts and stepResults
 #print axioms Vsa.emit_names_externals
 #print axioms Verdict.denies_join
