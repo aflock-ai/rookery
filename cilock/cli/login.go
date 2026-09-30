@@ -20,7 +20,7 @@ import (
 func LoginCmd() *cobra.Command {
 	var platformURL, token, tenant, product string
 	var tenantID, tenantName, productID, productName string
-	var interactive, workflowIdentity, allowTrust bool
+	var interactive, workflowIdentity, allowTrust, noBrowser bool
 	cmd := &cobra.Command{
 		Use:   "login",
 		Short: "Sign in to the TestifySec platform and store a session credential",
@@ -39,7 +39,9 @@ func LoginCmd() *cobra.Command {
 			"                        never falls back to the browser.\n" +
 			"  3. browser            interactive loopback login (default for local use)\n\n" +
 			"--interactive forces the browser. --workflow-identity forces ambient OIDC (and on\n" +
-			"GitHub Actions is required to send a workflow token to a non-default --platform-url).",
+			"GitHub Actions is required to send a workflow token to a non-default --platform-url).\n\n" +
+			"--no-browser never opens a browser: login fails at once with the headless options\n" +
+			"instead of waiting for a callback nobody will make. In CI a browser never opens.",
 		Example: "  # Interactive browser login (binds tenant+product on the approve page)\n" +
 			"  cilock login\n\n" +
 			"  # CI on GitHub Actions: use the ambient workflow identity (auto-detected)\n" +
@@ -64,7 +66,7 @@ func LoginCmd() *cobra.Command {
 			if err := config.RequireSecurePlatformURL(url); err != nil {
 				return err
 			}
-			cred, err := resolveLoginCredential(cmd, url, token, tenant, product, interactive, workflowIdentity, allowTrust)
+			cred, err := resolveLoginCredential(cmd, url, token, tenant, product, interactive, workflowIdentity, allowTrust, noBrowser)
 			if err != nil {
 				return err
 			}
@@ -96,6 +98,7 @@ func LoginCmd() *cobra.Command {
 	cmd.Flags().StringVar(&productName, "product-name", "", "Product name to record with --product-id")
 	cmd.Flags().BoolVar(&interactive, "interactive", false, "Force the interactive browser login (skip ambient CI workflow identity)")
 	cmd.Flags().BoolVar(&workflowIdentity, "workflow-identity", false, "Use the CI job's own OIDC identity (GitHub Actions: auto-detected on the default platform, and required to send a workflow token to a non-default --platform-url; GitLab CI: the job's id_tokens entry for <platform-url>/login, used on any platform)")
+	cmd.Flags().BoolVar(&noBrowser, noBrowserFlag, false, "Never open a browser: fail with the headless options instead (a browser never opens in CI either)")
 	cmd.Flags().BoolVar(&allowTrust, "allow-trust", false, "Also grant the narrow oidc:write scope so this session can register CI trust with `cilock trust` (off by default)")
 	return cmd
 }
@@ -221,7 +224,7 @@ func loginTierInputFromEnv(url, token string, interactive, workflowIdentity bool
 }
 
 // resolveLoginCredential obtains a session credential per decideLoginTierCI.
-func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product string, interactive, workflowIdentity, allowTrust bool) (*auth.Credential, error) {
+func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product string, interactive, workflowIdentity, allowTrust, noBrowser bool) (*auth.Credential, error) {
 	tier, err := decideLoginTierCI(loginTierInputFromEnv(url, token, interactive, workflowIdentity))
 	if err != nil {
 		return nil, err
@@ -234,6 +237,12 @@ func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product stri
 		// products) can bind exactly one product at login.
 		return auth.AmbientWorkflowLogin(url, config.Derive(url).OIDCLoginAudience, product)
 	default: // tierBrowser
+		// decideLoginTierCI already refused CI; this catches --no-browser.
+		if reason := browserBlockedReason(viperEnv, interactive || isTerminal(cmd.InOrStdin()), noBrowser); reason != "" {
+			return nil, browserRefusal("cilock login", reason,
+				"Without a browser: pipe a JWT with `--token -` plus --tenant-id and --product-id, or use the\n"+
+					"ambient CI identity (--workflow-identity).")
+		}
 		return auth.BrowserLogin(url, auth.LoginParams{
 			Tenant:     tenant,
 			Product:    product,

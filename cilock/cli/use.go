@@ -20,6 +20,7 @@ import (
 func UseCmd() *cobra.Command {
 	var platformURL, tenant, product string
 	var tenantID, tenantName, productID, productName string
+	var noBrowser bool
 	cmd := &cobra.Command{
 		Use:   "use",
 		Short: "Set the working tenant and product for the stored session",
@@ -57,6 +58,10 @@ func UseCmd() *cobra.Command {
 			// Otherwise re-drive the approve page, which resolves names to ids and
 			// auto-provisions a default tenant/product when the user has none. cilock
 			// has no GraphQL client of its own, so the page is the resolver.
+			if reason := browserBlockedReason(viperEnv, isTerminal(cmd.InOrStdin()), noBrowser); reason != "" {
+				return browserRefusal("cilock use", reason,
+					"Without a browser: bind by id with --product-id (and --tenant-id).")
+			}
 			cred, err := auth.BrowserLogin(url, auth.LoginParams{
 				Tenant:  tenant,
 				Product: product,
@@ -78,6 +83,7 @@ func UseCmd() *cobra.Command {
 	cmd.Flags().StringVar(&tenantName, "tenant-name", "", "Tenant name to record alongside --tenant-id")
 	cmd.Flags().StringVar(&productID, "product-id", "", "Product UUID to bind directly (no browser)")
 	cmd.Flags().StringVar(&productName, "product-name", "", "Product name to record alongside --product-id")
+	cmd.Flags().BoolVar(&noBrowser, noBrowserFlag, false, "Never open a browser: fail unless --product-id binds directly (the default in CI with no terminal)")
 	return cmd
 }
 

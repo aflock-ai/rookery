@@ -82,6 +82,9 @@ Sign in and store a session credential. The browser approve page binds a working
 | `--tenant-id <uuid>` / `--product-id <uuid>` | (none) | Bind tenant/product directly for a headless `--token` login. |
 | `--tenant-name` / `--product-name <str>` | (none) | Label to record alongside `--tenant-id` / `--product-id`. |
 | `--allow-trust` | `false` | Also grant the narrow `oidc:write` scope so this session can run [`cilock trust`](#cilock-trust). Off by default. |
+| `--no-browser` | `false` | Never open a browser: fail at once with the headless options instead. |
+
+In CI (`CI=true` or a detected CI provider) `cilock login` never opens a browser, `--interactive` included: it fails immediately and names the headless options instead of waiting five minutes for a callback nobody will make.
 
 ```bash
 # Interactive browser login (binds tenant+product on the approve page)
@@ -105,6 +108,7 @@ Switch the working tenant + product the stored session binds attestations to, so
 | `--product-name` / `--tenant-name <str>` | (none) | Label recorded alongside the id. |
 | `--product <id\|name>` / `--tenant <id\|name>` | (none) | Select by name on the approve page (re-opens the browser to resolve names → ids, auto-creating a default tenant/product if you have none). |
 | `--platform-url <url>` | `https://platform.testifysec.com` | Platform whose session to rebind. Must match the `login`. |
+| `--no-browser` | `false` | Never open a browser; only `--product-id` / `--tenant-id` bind. Also the behaviour in CI with no terminal. |
 
 ```bash
 # Switch the working product by id (no browser)
