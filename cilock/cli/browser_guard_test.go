@@ -60,8 +60,10 @@ func TestBrowserBlockedReason(t *testing.T) {
 // decideLoginTierCI owns this refusal; the test pins that it stays fast.
 func TestLoginInCIRefusesTheBrowserFast(t *testing.T) {
 	isolateAgentConfig(t)
+	for _, k := range []string{"GITHUB_ACTIONS", "GITLAB_CI", "BUILDKITE", "CIRCLECI", "ACTIONS_ID_TOKEN_REQUEST_URL"} {
+		t.Setenv(k, "")
+	}
 	t.Setenv("CI", "true")
-	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
 	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
 	t.Setenv("BROWSER", "none")
 
@@ -73,11 +75,14 @@ func TestLoginInCIRefusesTheBrowserFast(t *testing.T) {
 	require.True(t, strings.Contains(err.Error(), "CI"), "the refusal says why: %v", err)
 }
 
-// --no-browser refuses outside CI too, and `cilock use` honours it.
+// --no-browser refuses outside CI too, and `cilock use` honours it. Every
+// marker auth.InCI reads is cleared, or a CI runner (GITHUB_ACTIONS=true in the
+// merge queue) takes the CI refusal instead.
 func TestNoBrowserFlagRefuses(t *testing.T) {
 	isolateAgentConfig(t)
-	t.Setenv("CI", "")
-	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+	for _, k := range []string{"CI", "GITHUB_ACTIONS", "GITLAB_CI", "BUILDKITE", "CIRCLECI", "ACTIONS_ID_TOKEN_REQUEST_URL"} {
+		t.Setenv(k, "")
+	}
 	t.Setenv("BROWSER", "none")
 	for _, args := range [][]string{{"login", "--no-browser"}, {"use", "--no-browser"}} {
 		err := executeCmd(args...)
