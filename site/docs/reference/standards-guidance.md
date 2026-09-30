@@ -69,6 +69,34 @@ steps:
 
 Docs: https://cilock.dev/getting-started/quickstart-ci
 
+#### `slsa-hosted-runner-gitlab` (to L2, available)
+
+SLSA Build L2 needs a hosted build platform. On gitlab.com that is a GitLab-hosted runner. A self-managed GitLab has no provider-hosted runner, so it depends on whether you treat your runner operator as the build platform.
+
+**Action:** On gitlab.com, run the job on a GitLab-hosted runner. On a self-managed GitLab, decide whether your runner operator counts as the build platform and record why.
+
+```yaml
+build:
+  tags: [saas-linux-small-amd64]
+```
+
+#### `slsa-workflow-identity-gitlab` (to L2, available)
+
+SLSA Build L2 needs provenance signed by the platform's workload identity, not a key or a person's session.
+
+**Action:** Sign keyless with the GitLab job's own ID token: declare an `id_tokens` entry with audience `sigstore` and run cilock with no signing key. This works on gitlab.com and on a self-managed GitLab whose issuer the platform Fulcio trusts.
+
+```yaml
+build:
+  id_tokens:
+    SIGSTORE_ID_TOKEN:
+      aud: sigstore
+  script:
+    - cilock run --step build -a slsa -- <your build command>
+```
+
+Docs: https://cilock.dev/tutorials/gitlab-ci-pipeline
+
 #### `slsa-timestamp` (to L2, available)
 
 The envelope carries no trusted timestamp, so a short-lived keyless leaf cannot be verified later.
@@ -125,6 +153,12 @@ cilock enroll agent
 ALPS 1 needs a non-human principal the platform issued. In CI that is the job's workload OIDC identity, which this job did not sign with.
 
 **Action:** Sign with the job's workload identity against the platform Fulcio. On GitHub Actions grant the job `id-token: write`. On gitlab.com, Buildkite or CircleCI use a CI/lock newer than 4.5.0, which fetches the job token itself (on gitlab.com declare an `id_tokens` entry with audience `sigstore`). Other CI has no platform-issued identity yet.
+
+#### `alps-workflow-identity-gitlab` (to ALPS-1, available)
+
+ALPS 1 needs a non-human principal the platform issued. In GitLab CI that is the job's own ID token, which this job did not sign with.
+
+**Action:** Declare an `id_tokens` entry with audience `sigstore` and sign keyless against the platform Fulcio (no signing key). This works on gitlab.com and on a self-managed GitLab whose issuer the platform Fulcio trusts.
 
 #### `alps-timestamp` (to ALPS-1, available)
 

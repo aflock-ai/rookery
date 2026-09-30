@@ -54,6 +54,7 @@ steps:
     status: available
     closes: hosted_runner
     when: any
+    not_ci: [gitlab]
     why: >-
       SLSA Build L2 needs a hosted build platform. A laptop is never one. On a self-hosted
       runner, CircleCI or Kubernetes it depends on whether you treat your runner operator as
@@ -75,6 +76,7 @@ steps:
     status: available
     closes: workflow_signer
     when: any
+    not_ci: [gitlab]
     why: >-
       SLSA Build L2 needs provenance signed by the platform's workload identity, not a key
       or a person's session.
@@ -103,6 +105,50 @@ steps:
             step: build
             command: "<your build command>"
             attestations: environment git github slsa
+  - id: slsa-hosted-runner-gitlab
+    target_level: L2
+    status: available
+    closes: hosted_runner
+    when: any
+    ci: [gitlab]
+    why: >-
+      SLSA Build L2 needs a hosted build platform. On gitlab.com that is a GitLab-hosted
+      runner. A self-managed GitLab has no provider-hosted runner, so it depends on whether
+      you treat your runner operator as the build platform.
+    action: >-
+      On gitlab.com, run the job on a GitLab-hosted runner. On a self-managed GitLab, decide
+      whether your runner operator counts as the build platform and record why.
+    agent_action: >-
+      On gitlab.com, move the job to a GitLab-hosted runner (a `saas-linux-*` tag). On a
+      self-managed GitLab, tell your human that this level depends on whether they treat the
+      runner operator as the build platform.
+    snippet: |
+      build:
+        tags: [saas-linux-small-amd64]
+  - id: slsa-workflow-identity-gitlab
+    target_level: L2
+    status: available
+    closes: workflow_signer
+    when: any
+    ci: [gitlab]
+    why: >-
+      SLSA Build L2 needs provenance signed by the platform's workload identity, not a key
+      or a person's session.
+    action: >-
+      Sign keyless with the GitLab job's own ID token: declare an `id_tokens` entry with
+      audience `sigstore` and run cilock with no signing key. This works on gitlab.com and on
+      a self-managed GitLab whose issuer the platform Fulcio trusts.
+    agent_action: >-
+      Add an `id_tokens` entry with audience `sigstore` to the job that runs cilock, drop
+      any `-k` signing key, and re-run it.
+    docs: https://cilock.dev/tutorials/gitlab-ci-pipeline
+    snippet: |
+      build:
+        id_tokens:
+          SIGSTORE_ID_TOKEN:
+            aud: sigstore
+        script:
+          - cilock run --step build -a slsa -- <your build command>
   - id: slsa-timestamp
     target_level: L2
     status: available

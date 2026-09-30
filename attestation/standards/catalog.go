@@ -117,7 +117,10 @@ type Step struct {
 	When        string `yaml:"when" json:"when"`
 	// CI restricts the step to runs observed on these platforms; empty means
 	// every platform. Values are the CI* constants.
-	CI              []string `yaml:"ci,omitempty" json:"ci,omitempty"`
+	CI []string `yaml:"ci,omitempty" json:"ci,omitempty"`
+	// NotCI keeps the step off runs observed on these platforms, where a
+	// platform-specific variant (listed with CI) replaces it.
+	NotCI           []string `yaml:"not_ci,omitempty" json:"not_ci,omitempty"`
 	Why             string   `yaml:"why" json:"why"`
 	Action          string   `yaml:"action" json:"action"`
 	AgentAction     string   `yaml:"agent_action" json:"agent_action"`
@@ -293,8 +296,8 @@ func (s Step) validate(levelStatus map[string]string, obs []string) error {
 		return fmt.Errorf("closes %q, not one of %v", s.Closes, obs)
 	case s.When != WhenAny && s.When != WhenCI && s.When != WhenLocal:
 		return fmt.Errorf("when %q", s.When)
-	case !allKnownCI(s.CI):
-		return fmt.Errorf("ci %v: not all of %v", s.CI, ciPlatforms)
+	case !allKnownCI(s.CI) || !allKnownCI(s.NotCI):
+		return fmt.Errorf("ci %v / not_ci %v: not all of %v", s.CI, s.NotCI, ciPlatforms)
 	case s.Why == "" || s.Action == "" || s.AgentAction == "":
 		return fmt.Errorf("why, action and agent_action are required")
 	}

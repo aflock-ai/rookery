@@ -62,6 +62,7 @@ steps:
     status: available
     closes: principal_issued
     when: ci
+    not_ci: [gitlab]
     why: >-
       ALPS 1 needs a non-human principal the platform issued. In CI that is the job's
       workload OIDC identity, which this job did not sign with.
@@ -75,6 +76,22 @@ steps:
       On GitHub Actions add `permissions: id-token: write` to the job that runs cilock; on
       gitlab.com add an `id_tokens` entry with audience `sigstore` (CI/lock newer than 4.5.0,
       as on Buildkite and CircleCI). Then re-run it.
+  - id: alps-workflow-identity-gitlab
+    target_level: ALPS-1
+    status: available
+    closes: principal_issued
+    when: ci
+    ci: [gitlab]
+    why: >-
+      ALPS 1 needs a non-human principal the platform issued. In GitLab CI that is the job's
+      own ID token, which this job did not sign with.
+    action: >-
+      Declare an `id_tokens` entry with audience `sigstore` and sign keyless against the
+      platform Fulcio (no signing key). This works on gitlab.com and on a self-managed GitLab
+      whose issuer the platform Fulcio trusts.
+    agent_action: >-
+      Add an `id_tokens` entry with audience `sigstore` to the job that runs cilock, drop any
+      `-k` signing key, and re-run it.
   - id: alps-timestamp
     target_level: ALPS-1
     status: available

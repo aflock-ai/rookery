@@ -1,0 +1,93 @@
+{
+  "schema": "cilock.standards-guidance/v1",
+  "scope": "run",
+  "audience": "human",
+  "notice": "A ceiling is the highest level this evidence could support. It is not a verified level: a SLSA Build level needs an assessment of the build platform, and an ALPS level needs an independent verifier.",
+  "slsa_build": {
+    "spec": "SLSA v1.2 Build track",
+    "ceiling": "none",
+    "basis": "this run carries no SLSA provenance",
+    "verified_level": null,
+    "observed": {
+      "hosted_runner": false,
+      "provenance": false,
+      "timestamped": true,
+      "trusted_builder": false,
+      "workflow_signer": false
+    },
+    "unavailable": [
+      {
+        "level": "L3",
+        "status": "future",
+        "requires": "not reachable on this CI today: its signer identity is pipeline-wide, so a build step can mint it. The only paths are the GitHub Actions provenance workflow (coming) and cilockd on a runner you operate (not yet available)."
+      }
+    ]
+  },
+  "alps": {
+    "spec": "ALPS 0.1",
+    "ceiling": "ALPS-0",
+    "basis": "signed by a signing key, not a platform-issued non-human principal",
+    "verified_level": null,
+    "observed": {
+      "boundary_by_observer": false,
+      "isolated": false,
+      "principal_issued": false,
+      "signed": true,
+      "timestamped": true
+    },
+    "unavailable": [
+      {
+        "level": "ALPS-3",
+        "status": "future",
+        "requires": "requires cilockd (not yet available)"
+      }
+    ]
+  },
+  "next_steps": [
+    {
+      "id": "slsa-provenance-attestor",
+      "standard": "slsa_build",
+      "target_level": "L1",
+      "status": "available",
+      "why": "SLSA Build L1 needs provenance, and this run produced none.",
+      "action": "Add the slsa attestor to the cilock run invocation.",
+      "command": "cilock run --step build -a slsa -- \u003cyour build command\u003e"
+    },
+    {
+      "id": "slsa-hosted-runner-gitlab",
+      "standard": "slsa_build",
+      "target_level": "L2",
+      "status": "available",
+      "why": "SLSA Build L2 needs a hosted build platform. On gitlab.com that is a GitLab-hosted runner. A self-managed GitLab has no provider-hosted runner, so it depends on whether you treat your runner operator as the build platform.",
+      "action": "On gitlab.com, run the job on a GitLab-hosted runner. On a self-managed GitLab, decide whether your runner operator counts as the build platform and record why.",
+      "snippet": "build:\n  tags: [saas-linux-small-amd64]\n"
+    },
+    {
+      "id": "slsa-workflow-identity-gitlab",
+      "standard": "slsa_build",
+      "target_level": "L2",
+      "status": "available",
+      "why": "SLSA Build L2 needs provenance signed by the platform's workload identity, not a key or a person's session.",
+      "action": "Sign keyless with the GitLab job's own ID token: declare an `id_tokens` entry with audience `sigstore` and run cilock with no signing key. This works on gitlab.com and on a self-managed GitLab whose issuer the platform Fulcio trusts.",
+      "snippet": "build:\n  id_tokens:\n    SIGSTORE_ID_TOKEN:\n      aud: sigstore\n  script:\n    - cilock run --step build -a slsa -- \u003cyour build command\u003e\n",
+      "docs": "https://cilock.dev/tutorials/gitlab-ci-pipeline"
+    },
+    {
+      "id": "alps-workflow-identity-gitlab",
+      "standard": "alps",
+      "target_level": "ALPS-1",
+      "status": "available",
+      "why": "ALPS 1 needs a non-human principal the platform issued. In GitLab CI that is the job's own ID token, which this job did not sign with.",
+      "action": "Declare an `id_tokens` entry with audience `sigstore` and sign keyless against the platform Fulcio (no signing key). This works on gitlab.com and on a self-managed GitLab whose issuer the platform Fulcio trusts."
+    },
+    {
+      "id": "alps-boundary-attestation",
+      "standard": "alps",
+      "target_level": "ALPS-2",
+      "status": "planned",
+      "why": "ALPS 2 needs an enforced sandbox and a non-agent observer that signs the boundary. cilock records no boundary today, so no run can present ALPS 2 evidence yet.",
+      "action": "Coming: boundary attestation in alps-evidence. Until it ships, run the agent inside the recommended sandbox so the run already has the boundary the attestation will record.",
+      "docs": "https://pushgate.dev/docs/agent-sandbox"
+    }
+  ]
+}

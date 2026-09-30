@@ -1,0 +1,25 @@
+  standards: observed ceilings, NOT verified levels (a ceiling is the most a verifier could grant)
+    SLSA Build: ceiling none (this run carries no SLSA provenance)
+      to reach L1:
+        - Add `-a slsa` to your `cilock run` command and re-run it.
+          $ cilock run --step build -a slsa -- <your build command>
+      to reach L2:
+        - On gitlab.com, move the job to a GitLab-hosted runner (a `saas-linux-*` tag). On a self-managed GitLab, tell your human that this level depends on whether they treat the runner operator as the build platform.
+          | build:
+          |   tags: [saas-linux-small-amd64]
+        - Add an `id_tokens` entry with audience `sigstore` to the job that runs cilock, drop any `-k` signing key, and re-run it.
+          | build:
+          |   id_tokens:
+          |     SIGSTORE_ID_TOKEN:
+          |       aud: sigstore
+          |   script:
+          |     - cilock run --step build -a slsa -- <your build command>
+          docs: https://cilock.dev/tutorials/gitlab-ci-pipeline
+      L3: not reachable on this CI today: its signer identity is pipeline-wide, so a build step can mint it. The only paths are the GitHub Actions provenance workflow (coming) and cilockd on a runner you operate (not yet available).
+    ALPS 0.1: ceiling ALPS-0 (signed by a signing key, not a platform-issued non-human principal)
+      to reach ALPS-1:
+        - Add an `id_tokens` entry with audience `sigstore` to the job that runs cilock, drop any `-k` signing key, and re-run it.
+      to reach ALPS-2:
+        - Coming, not yet available: boundary attestation. You cannot sandbox yourself; ask your human to launch you inside the recommended sandbox (https://pushgate.dev/docs/agent-sandbox) so your runs already have the boundary the attestation will record.
+          docs: https://pushgate.dev/docs/agent-sandbox
+      ALPS-3: requires cilockd (not yet available)

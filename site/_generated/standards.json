@@ -47,6 +47,9 @@
           "status": "available",
           "closes": "hosted_runner",
           "when": "any",
+          "not_ci": [
+            "gitlab"
+          ],
           "why": "SLSA Build L2 needs a hosted build platform. A laptop is never one. On a self-hosted runner, CircleCI or Kubernetes it depends on whether you treat your runner operator as the build platform; a provider-hosted runner (GitHub-hosted, gitlab.com SaaS, Buildkite hosted) removes that question.",
           "action": "Run the build on a provider-hosted runner (GitHub-hosted, gitlab.com SaaS, or Buildkite hosted), or decide that your runner operator counts as the build platform and record why.",
           "agent_action": "Move this build into a CI job on a provider-hosted runner, for example a GitHub Actions job with `runs-on: ubuntu-latest`. On a self-hosted runner, tell your human that this level depends on whether they treat the runner operator as the build platform.",
@@ -58,11 +61,43 @@
           "status": "available",
           "closes": "workflow_signer",
           "when": "any",
+          "not_ci": [
+            "gitlab"
+          ],
           "why": "SLSA Build L2 needs provenance signed by the platform's workload identity, not a key or a person's session.",
           "action": "Sign keyless with your CI's workload OIDC identity. GitHub Actions works with the platform Fulcio or public Sigstore (grant `id-token: write` and use cilock-action). gitlab.com, Buildkite hosted and CircleCI cloud work with the platform Fulcio from the CI/lock release after 4.5.0, which fetches their job token itself (on gitlab.com declare an `id_tokens` entry with audience `sigstore`); with CI/lock 4.5.0 or earlier, and on Kubernetes, sign through public Sigstore Fulcio.",
           "agent_action": "Sign with the CI job's OIDC identity instead of a key. On GitHub Actions add `permissions: id-token: write` and run cilock through `aflock-ai/cilock-action`. On gitlab.com, Buildkite or CircleCI with a CI/lock newer than 4.5.0, sign keyless against the platform Fulcio (on gitlab.com add an `id_tokens` entry with audience `sigstore`); with CI/lock 4.5.0 or earlier, or on Kubernetes, sign keyless against public Sigstore Fulcio.",
           "snippet": "permissions:\n  id-token: write\n  contents: read\nsteps:\n  - uses: aflock-ai/cilock-action@v1.0.4   # pin to a 40-character commit SHA\n    with:\n      step: build\n      command: \"<your build command>\"\n      attestations: environment git github slsa\n",
           "docs": "https://cilock.dev/getting-started/quickstart-ci"
+        },
+        {
+          "id": "slsa-hosted-runner-gitlab",
+          "target_level": "L2",
+          "status": "available",
+          "closes": "hosted_runner",
+          "when": "any",
+          "ci": [
+            "gitlab"
+          ],
+          "why": "SLSA Build L2 needs a hosted build platform. On gitlab.com that is a GitLab-hosted runner. A self-managed GitLab has no provider-hosted runner, so it depends on whether you treat your runner operator as the build platform.",
+          "action": "On gitlab.com, run the job on a GitLab-hosted runner. On a self-managed GitLab, decide whether your runner operator counts as the build platform and record why.",
+          "agent_action": "On gitlab.com, move the job to a GitLab-hosted runner (a `saas-linux-*` tag). On a self-managed GitLab, tell your human that this level depends on whether they treat the runner operator as the build platform.",
+          "snippet": "build:\n  tags: [saas-linux-small-amd64]\n"
+        },
+        {
+          "id": "slsa-workflow-identity-gitlab",
+          "target_level": "L2",
+          "status": "available",
+          "closes": "workflow_signer",
+          "when": "any",
+          "ci": [
+            "gitlab"
+          ],
+          "why": "SLSA Build L2 needs provenance signed by the platform's workload identity, not a key or a person's session.",
+          "action": "Sign keyless with the GitLab job's own ID token: declare an `id_tokens` entry with audience `sigstore` and run cilock with no signing key. This works on gitlab.com and on a self-managed GitLab whose issuer the platform Fulcio trusts.",
+          "agent_action": "Add an `id_tokens` entry with audience `sigstore` to the job that runs cilock, drop any `-k` signing key, and re-run it.",
+          "snippet": "build:\n  id_tokens:\n    SIGSTORE_ID_TOKEN:\n      aud: sigstore\n  script:\n    - cilock run --step build -a slsa -- <your build command>\n",
+          "docs": "https://cilock.dev/tutorials/gitlab-ci-pipeline"
         },
         {
           "id": "slsa-timestamp",
@@ -157,9 +192,25 @@
           "status": "available",
           "closes": "principal_issued",
           "when": "ci",
+          "not_ci": [
+            "gitlab"
+          ],
           "why": "ALPS 1 needs a non-human principal the platform issued. In CI that is the job's workload OIDC identity, which this job did not sign with.",
           "action": "Sign with the job's workload identity against the platform Fulcio. On GitHub Actions grant the job `id-token: write`. On gitlab.com, Buildkite or CircleCI use a CI/lock newer than 4.5.0, which fetches the job token itself (on gitlab.com declare an `id_tokens` entry with audience `sigstore`). Other CI has no platform-issued identity yet.",
           "agent_action": "On GitHub Actions add `permissions: id-token: write` to the job that runs cilock; on gitlab.com add an `id_tokens` entry with audience `sigstore` (CI/lock newer than 4.5.0, as on Buildkite and CircleCI). Then re-run it."
+        },
+        {
+          "id": "alps-workflow-identity-gitlab",
+          "target_level": "ALPS-1",
+          "status": "available",
+          "closes": "principal_issued",
+          "when": "ci",
+          "ci": [
+            "gitlab"
+          ],
+          "why": "ALPS 1 needs a non-human principal the platform issued. In GitLab CI that is the job's own ID token, which this job did not sign with.",
+          "action": "Declare an `id_tokens` entry with audience `sigstore` and sign keyless against the platform Fulcio (no signing key). This works on gitlab.com and on a self-managed GitLab whose issuer the platform Fulcio trusts.",
+          "agent_action": "Add an `id_tokens` entry with audience `sigstore` to the job that runs cilock, drop any `-k` signing key, and re-run it."
         },
         {
           "id": "alps-timestamp",

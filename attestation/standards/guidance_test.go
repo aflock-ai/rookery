@@ -63,6 +63,12 @@ var shapes = map[string]Observations{
 		Signed: true, Provenance: true, Timestamped: true, HostedRunner: true,
 		Principal: PrincipalWorkflow, CI: true, CIPlatform: CIGitLab,
 	},
+	// A self-managed GitLab job signing with a job key (GitLab CE 19.4.1,
+	// pipeline 9 job 31): the next steps are GitLab's (id_tokens, no GitHub
+	// `id-token: write` or cilock-action snippet).
+	"gitlab-self-managed-key": {
+		Signed: true, Timestamped: true, Principal: PrincipalKey, CI: true, CIPlatform: CIGitLab,
+	},
 	// CircleCI reports no hosted runner, so L2 depends on interpretation I2.
 	"circleci-keyless": {
 		Signed: true, Provenance: true, Timestamped: true,
@@ -133,6 +139,7 @@ func TestShapeCeilings(t *testing.T) {
 		"run-failed":              {"none", "unknown"},
 		"gitlab-saas-keyless":     {"L2", "ALPS-0"},
 		"circleci-keyless":        {"L1", "ALPS-0"},
+		"gitlab-self-managed-key": {"none", "ALPS-0"},
 	}
 	for name, o := range shapes {
 		g := Compute(o, ScopeRun, AudienceHuman)

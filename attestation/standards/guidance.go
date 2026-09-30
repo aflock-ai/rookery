@@ -313,6 +313,9 @@ func (o Observations) stepApplies(s Step) bool {
 	if (s.When == WhenCI && !o.CI) || (s.When == WhenLocal && o.CI) {
 		return false
 	}
+	if contains(s.NotCI, o.platform()) {
+		return false
+	}
 	return len(s.CI) == 0 || contains(s.CI, o.platform())
 }
 
