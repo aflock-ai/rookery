@@ -172,6 +172,20 @@ var deliberateExclusionsWhitelist = map[string]struct{}{
 	// prewalk_override_test.go.
 	"DefaultPrewalkSkipDirs": {},
 
+	// The cijobtoken Default*Var constants are the documented NAMES of GitLab
+	// id_tokens variables, not tuning values. cijobtoken.Select finds a token by
+	// its claims (aud, iss, job id), never by its name, so any variable name
+	// works with no cilock setting; the constant only breaks a tie and shows up
+	// in the fix a refusal suggests. The name is chosen in the user's
+	// .gitlab-ci.yml, and for the Fulcio token `--signer-fulcio-token-env`
+	// (cilock/internal/options/ambient_ci.go, a different package, so the
+	// same-package heuristic misses it) restricts selection to one named
+	// variable. Covered by cijobtoken tests and signing_route_differential_test.go.
+	"DefaultFulcioVar":     {},
+	"DefaultLoginVar":      {},
+	"DefaultArchivistaVar": {},
+	"DefaultOtherVar":      {},
+
 	// DefaultManifestURL (cilock/internal/updatecheck) IS overridable via
 	// Config.ManifestURL; the env coupling (CILOCK_DIST_BASE, the same
 	// override install.sh honors) lives in cilock/cli/updatecheck.go — a
