@@ -57,6 +57,7 @@ type bindPushgateOpts struct {
 	mode        string
 	reason      string
 	platformURL string
+	json        bool
 }
 
 // PolicyBindPushgateCmd is `cilock policy bind pushgate`.
@@ -86,6 +87,7 @@ credential it holds can read a repository's assignment back. Confirm on the page
 	f.StringVar(&o.repo, "repo", "", "Repository route, e.g. github.com/owner/name (required)")
 	f.StringVar(&o.mode, "mode", "warn", "Mode the human should choose in the review: warn or block")
 	f.StringVar(&o.reason, "reason", "", "Reason to give in the review (shown to the human; they type the final one)")
+	f.BoolVar(&o.json, jsonFlag, false, jsonFlagUsage+" (applied is always false: only the human's approval applies it)")
 	f.StringVar(&o.platformURL, "platform-url", "", "Platform whose discovery names the Pushgate origin (default: selected login)")
 	_ = cmd.MarkFlagRequired("release")
 	_ = cmd.MarkFlagRequired("repo")
@@ -140,6 +142,9 @@ func runBindPushgate(out io.Writer, o bindPushgateOpts) error {
 		return errors.New("the platform does not advertise a Pushgate origin; nothing to open")
 	}
 	review := assignReviewURL(origin, o.release, o.repo)
+	if o.json {
+		return writeBindPushgateJSON(out, o, review, openReviewURL(review))
+	}
 	_, _ = fmt.Fprintf(out, "Repository assignment for your human to review and apply:\n")
 	_, _ = fmt.Fprintf(out, "  repository: %s\n  release:    %s\n  mode:       %s\n", o.repo, o.release, o.mode)
 	if r := strings.TrimSpace(o.reason); r != "" {

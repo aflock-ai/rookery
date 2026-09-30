@@ -31,7 +31,8 @@ var (
 )
 
 func VersionCmd() *cobra.Command {
-	return &cobra.Command{
+	var asJSON bool
+	cmd := &cobra.Command{
 		Use:               "version",
 		Short:             "Prints out the cilock version",
 		Long:              `Prints out the cilock version`,
@@ -39,6 +40,10 @@ func VersionCmd() *cobra.Command {
 		SilenceUsage:      true,
 		DisableAutoGenTag: true,
 		Run: func(cmd *cobra.Command, args []string) {
+			if asJSON {
+				_ = writeVersionJSON(cmd.OutOrStdout())
+				return
+			}
 			// First line MUST stay exactly "cilock <Version>": the release-fanout
 			// and ci.yml cilock-version-stamp-guard both match it. Both extract it
 			// IN-SHELL (`got="${ver_out%%$'\n'*}"`); do NOT reintroduce `| head -n1`.
@@ -68,4 +73,6 @@ func VersionCmd() *cobra.Command {
 			}
 		},
 	}
+	cmd.Flags().BoolVar(&asJSON, jsonFlag, false, jsonFlagUsage)
+	return cmd
 }

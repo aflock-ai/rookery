@@ -49,7 +49,7 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock skill install` / `path` / `show` | Install, locate or print the Pushgate skill embedded in this binary for a coding agent. |
 | `cilock get <tool>` | Install a trusted tool only if its release artifact matches the SHA-256 pin embedded in this binary. |
 | `cilock completion <shell>` | Emit shell completion script (bash, zsh, fish, powershell). |
-| `cilock version` | Print the `cilock` version. |
+| `cilock version` | Print the `cilock` version (`--json` for `version`, `commit`, `built`, `embedded_trust`). |
 
 ## Global flags
 
@@ -128,10 +128,12 @@ Show the platform session â€” the logged-in tenant, bound product, and expiry â€
 | Flag | Default | Description |
 |---|---|---|
 | `--platform-url <url>` | `https://platform.testifysec.com` | Platform whose session to show. Must match the `login`. |
+| `--json` | `false` | Emit one JSON object (`logged_in`, `platform_url`, `session`, `auth_mode`, tenant, product, `email`, `expires_at`, `agent_id`). With no session it prints `"logged_in": false` and exits non-zero, like the text form. |
 
 ```bash
 cilock whoami
 cilock whoami --platform-url https://platform.example.com
+cilock whoami --json
 ```
 
 ### `cilock logout`
@@ -788,6 +790,7 @@ cilock policy bind --definition supply-chain --tag v1.0.0 --product my-service
 | `--repo <route>` | (required) | Repository route, e.g. `github.com/owner/name`. |
 | `--mode <warn\|block>` | `warn` | Mode the human should choose in the review. |
 | `--reason <text>` | (none) | Reason to show in the review (the human types the final one). |
+| `--json` | `false` | Emit one JSON object (`repository`, `release`, `mode`, `reason`, `review_url`, `opened`, `applied`). `applied` is always `false`. |
 | `--platform-url <url>` | the selected login | Platform whose discovery names the Pushgate origin. |
 
 ```bash

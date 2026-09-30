@@ -382,6 +382,7 @@ func whoamiNoSession(out io.Writer, url string) error {
 // WhoamiCmd shows the current stored session for a platform.
 func WhoamiCmd() *cobra.Command {
 	var platformURL string
+	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "whoami",
 		Short: "Show the current TestifySec platform session",
@@ -407,37 +408,51 @@ func WhoamiCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if asJSON {
+				if err := writeWhoamiJSON(cmd.OutOrStdout(), url, resolved); err != nil {
+					return err
+				}
+				if resolved == nil {
+					return fmt.Errorf("no active session")
+				}
+				return nil
+			}
 			if resolved == nil {
 				return whoamiNoSession(cmd.OutOrStdout(), url)
 			}
-			cred := resolved.Credential
-			out := cmd.OutOrStdout()
-			_, _ = fmt.Fprintf(out, "platform: %s\n", cred.PlatformURL)
-			// Provenance: which source vouched for this session + its capability
-			// posture (trust-pinning / expiry / audience). The trust gate in
-			// `cilock verify` keys on these capabilities, so surfacing them here
-			// explains its verdict without the operator reverse-engineering it.
-			_, _ = fmt.Fprintf(out, "session:  %s\n", resolved.Posture())
-			if cred.AuthMode == auth.AuthModeWorkflowOIDC {
-				_, _ = fmt.Fprintf(out, "auth:     workflow identity (%s)\n", workflowIdentityLabel())
-			}
-			if cred.TenantName != "" || cred.TenantID != "" {
-				_, _ = fmt.Fprintf(out, "tenant:   %s %s\n", cred.TenantName, cred.TenantID)
-			}
-			if cred.ProductName != "" || cred.ProductID != "" {
-				_, _ = fmt.Fprintf(out, "product:  %s %s\n", cred.ProductName, cred.ProductID)
-			}
-			if cred.Email != "" {
-				_, _ = fmt.Fprintf(out, "email:    %s\n", cred.Email)
-			}
-			if !cred.ExpiresAt.IsZero() {
-				_, _ = fmt.Fprintf(out, "expires:  %s\n", cred.ExpiresAt.Format("2006-01-02 15:04 MST"))
-			}
+			printWhoami(cmd.OutOrStdout(), resolved)
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&platformURL, "platform-url", "", "TestifySec platform URL (default "+config.DefaultPlatformURL+")")
+	cmd.Flags().BoolVar(&asJSON, jsonFlag, false, jsonFlagUsage+"; exits non-zero with logged_in false when there is no session")
 	return cmd
+}
+
+// printWhoami writes the text form of a resolved session.
+func printWhoami(out io.Writer, resolved *auth.Resolved) {
+	cred := resolved.Credential
+	_, _ = fmt.Fprintf(out, "platform: %s\n", cred.PlatformURL)
+	// Provenance: which source vouched for this session + its capability
+	// posture (trust-pinning / expiry / audience). The trust gate in
+	// `cilock verify` keys on these capabilities, so surfacing them here
+	// explains its verdict without the operator reverse-engineering it.
+	_, _ = fmt.Fprintf(out, "session:  %s\n", resolved.Posture())
+	if cred.AuthMode == auth.AuthModeWorkflowOIDC {
+		_, _ = fmt.Fprintf(out, "auth:     workflow identity (%s)\n", workflowIdentityLabel())
+	}
+	if cred.TenantName != "" || cred.TenantID != "" {
+		_, _ = fmt.Fprintf(out, "tenant:   %s %s\n", cred.TenantName, cred.TenantID)
+	}
+	if cred.ProductName != "" || cred.ProductID != "" {
+		_, _ = fmt.Fprintf(out, "product:  %s %s\n", cred.ProductName, cred.ProductID)
+	}
+	if cred.Email != "" {
+		_, _ = fmt.Fprintf(out, "email:    %s\n", cred.Email)
+	}
+	if !cred.ExpiresAt.IsZero() {
+		_, _ = fmt.Fprintf(out, "expires:  %s\n", cred.ExpiresAt.Format("2006-01-02 15:04 MST"))
+	}
 }
 
 // workflowIdentityLabel says which CI identity a workflow-identity session
