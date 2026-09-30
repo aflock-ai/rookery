@@ -1,4 +1,5 @@
 import CilockCi.Proofs
+import CilockCi.Trust
 
 /-! Axiom audit: every headline theorem must depend only on Lean's core
 axioms (propext, Quot.sound, Classical.choice). No `sorry`, no
@@ -20,6 +21,11 @@ open CilockCi
 #print axioms login_only_via_match
 #print axioms gitlab_login_never_browser
 #print axioms ci_login_never_browser
+#print axioms held_uploads_unless_opted_out
+#print axioms held_never_silent
+#print axioms gate_refuses_silent_loss
+#print axioms foreign_archivista_not_held
+#print axioms gitlab_held_needs_archivista_token
 #print axioms provider_is_ci
 #print axioms gitlab_login_aud
 #print axioms automode_ci_parity

@@ -3,6 +3,7 @@ import CilockCi.Token
 import CilockCi.Plan
 import CilockCi.Login
 import CilockCi.Automode
+import CilockCi.Trust
 
 /-!
 # JSON evaluation, for the Go differential tests
@@ -132,6 +133,13 @@ def evalCase (j : Json) : Except String Json := do
       | .gitlabToken t => ("gitlabToken", t.var)
       | .none => ("none", "")
     pure (Json.mkObj [("upload", k), ("var", v)])
+  | "trusted" =>
+    let sf ← field j "store"
+    let s : StoreFlags := { explicit := ← bool sf "explicit", value := ← bool sf "value",
+                            sameOrigin := ← bool sf "sameOrigin" }
+    let d := trusted p (← runFlags j) s env (← str j "archivistaAud") (← nat j "now")
+    let g : String := match d.gate with | .proceed => "proceed" | .refuse => "refuse"
+    pure (Json.mkObj [("held", d.held), ("enabled", d.enabled), ("gate", g)])
   | "login" =>
     let f ← field j "flags"
     let tok ← bool f "token"
