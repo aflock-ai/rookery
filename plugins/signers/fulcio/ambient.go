@@ -22,6 +22,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/aflock-ai/rookery/attestation/cijobtoken"
 )
 
 // DefaultGitLabOIDCVariable is the id_tokens variable CI/lock reads on GitLab when
@@ -29,7 +31,7 @@ import (
 // example uses: "The token can be used by Cosign automatically when it is set
 // in the SIGSTORE_ID_TOKEN environment variable."
 // (https://docs.gitlab.com/ci/yaml/signing_examples/)
-const DefaultGitLabOIDCVariable = "SIGSTORE_ID_TOKEN"
+const DefaultGitLabOIDCVariable = cijobtoken.DefaultFulcioVar
 
 // fulcioAudience is the audience every Fulcio CA (public Sigstore and the
 // TestifySec platform) requires; a token minted for another audience is refused.
@@ -41,15 +43,17 @@ const ambientFetchTimeout = 30 * time.Second
 // their CI marker variables; any other value does not count.
 const envTrue = "true"
 
-// ambientSource is the process environment and a command runner, injected so
-// the detection can be tested without a real CI.
+// ambientSource is the process environment, a command runner and a clock,
+// injected so the detection can be tested without a real CI.
 type ambientSource struct {
-	getenv func(string) string
-	run    func(ctx context.Context, name string, args ...string) (string, error)
+	getenv  func(string) string
+	environ func() []string
+	now     func() int64
+	run     func(ctx context.Context, name string, args ...string) (string, error)
 }
 
 func osAmbientSource() ambientSource {
-	return ambientSource{getenv: os.Getenv, run: runTokenCommand}
+	return ambientSource{getenv: os.Getenv, environ: os.Environ, now: func() int64 { return time.Now().Unix() }, run: runTokenCommand}
 }
 
 func runTokenCommand(ctx context.Context, name string, args ...string) (string, error) {
@@ -84,18 +88,16 @@ func ambientCIToken(ctx context.Context, src ambientSource, gitlabTokenEnv strin
 		// GitLab sets GITLAB_CI=true in every job; the ID token exists only if
 		// the job declares it with id_tokens.
 		// https://docs.gitlab.com/ci/secrets/id_token_authentication/
+		// cijobtoken.Select takes only a token this job's GitLab issued to this
+		// job for exactly aud "sigstore", under any variable name (or only the
+		// one named with --signer-fulcio-token-env).
 		ci = "GitLab CI"
-		name := gitlabTokenEnv
-		if name == "" {
-			name = DefaultGitLabOIDCVariable
+		job, _ := cijobtoken.JobFromEnv(src.getenv)
+		tok, selErr := cijobtoken.Select(src.environ(), job, fulcioAudience, gitlabTokenEnv, src.now())
+		if selErr != nil {
+			return "", ci, fmt.Errorf("%w (or pass --signer-fulcio-token)", selErr)
 		}
-		raw := src.getenv(name)
-		if strings.TrimSpace(raw) == "" {
-			return "", ci, fmt.Errorf("gitlab ci: $%s is empty; declare it in the job with `id_tokens: {%s: {aud: sigstore}}`, "+
-				"name another variable with --signer-fulcio-token-env, or pass --signer-fulcio-token", name, name)
-		}
-		token, err = checkJWT(ci, raw)
-		return token, ci, err
+		return tok.Raw, ci, nil
 	case src.getenv("BUILDKITE") == envTrue:
 		// https://buildkite.com/docs/agent/v3/cli-oidc
 		ci = "Buildkite"

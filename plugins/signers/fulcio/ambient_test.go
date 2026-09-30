@@ -18,6 +18,8 @@ package fulcio
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -32,9 +34,25 @@ type fakeCI struct {
 	calls [][]string
 }
 
+// gitlabJWT is an unsigned compact JWT with GitLab ID token claims; the
+// selection reads claims only, and Fulcio checks the signature.
+func gitlabJWT(aud any, jobID string) string {
+	enc := func(v any) string { b, _ := json.Marshal(v); return base64.RawURLEncoding.EncodeToString(b) }
+	return enc(map[string]string{"alg": "RS256"}) + "." +
+		enc(map[string]any{"iss": "https://gitlab.example", "aud": aud, "job_id": jobID}) + "." + enc("sig")
+}
+
 func (f *fakeCI) source() ambientSource {
 	return ambientSource{
 		getenv: func(k string) string { return f.env[k] },
+		environ: func() []string {
+			out := make([]string, 0, len(f.env))
+			for k, v := range f.env {
+				out = append(out, k+"="+v)
+			}
+			return out
+		},
+		now: func() int64 { return 1000 },
 		run: func(_ context.Context, name string, args ...string) (string, error) {
 			f.calls = append(f.calls, append([]string{name}, args...))
 			return f.out, f.err
@@ -42,25 +60,61 @@ func (f *fakeCI) source() ambientSource {
 	}
 }
 
+func gitlabJobEnv(extra map[string]string) map[string]string {
+	env := map[string]string{"GITLAB_CI": "true", "CI_SERVER_URL": "https://gitlab.example", "CI_JOB_ID": "10"}
+	for k, v := range extra {
+		env[k] = v
+	}
+	return env
+}
+
 func TestAmbientCITokenGitLabReadsTheConfiguredIDTokenVariable(t *testing.T) {
-	f := &fakeCI{env: map[string]string{"GITLAB_CI": "true", "SIGSTORE_ID_TOKEN": fakeJWT + "\n"}}
+	want := gitlabJWT("sigstore", "10")
+	f := &fakeCI{env: gitlabJobEnv(map[string]string{"SIGSTORE_ID_TOKEN": want + "\n"})}
 	tok, ci, err := ambientCIToken(context.Background(), f.source(), "")
-	if err != nil || ci != "GitLab CI" || tok != fakeJWT {
+	if err != nil || ci != "GitLab CI" || tok != want {
 		t.Fatalf("got (%q, %q, %v), want the SIGSTORE_ID_TOKEN value", tok, ci, err)
 	}
 	if len(f.calls) != 0 {
 		t.Fatalf("GitLab must not exec anything, ran %v", f.calls)
 	}
 
-	f = &fakeCI{env: map[string]string{"GITLAB_CI": "true", "MY_TOKEN": fakeJWT}}
-	tok, _, err = ambientCIToken(context.Background(), f.source(), "MY_TOKEN")
-	if err != nil || tok != fakeJWT {
-		t.Fatalf("a renamed id_tokens variable must be honoured: (%q, %v)", tok, err)
+	// Any variable name works: the token is found by its claims.
+	f = &fakeCI{env: gitlabJobEnv(map[string]string{"MY_TOKEN": want})}
+	if tok, _, err = ambientCIToken(context.Background(), f.source(), ""); err != nil || tok != want {
+		t.Fatalf("a renamed id_tokens variable must be found: (%q, %v)", tok, err)
+	}
+	// An explicitly named variable is the only one considered.
+	f = &fakeCI{env: gitlabJobEnv(map[string]string{"MY_TOKEN": want, "OTHER": want})}
+	if tok, _, err = ambientCIToken(context.Background(), f.source(), "MY_TOKEN"); err != nil || tok != want {
+		t.Fatalf("a named id_tokens variable must be honoured: (%q, %v)", tok, err)
+	}
+}
+
+// TestAmbientCITokenGitLabNeverForwardsAnotherAudienceOrJob: a token minted
+// for the platform login, for several audiences at once, or for another job
+// must never reach Fulcio. Each case goes red if the selection is loosened.
+func TestAmbientCITokenGitLabNeverForwardsAnotherAudienceOrJob(t *testing.T) {
+	for name, env := range map[string]map[string]string{
+		"login audience":      {"SIGSTORE_ID_TOKEN": gitlabJWT("https://p/login", "10")},
+		"multi audience":      {"SIGSTORE_ID_TOKEN": gitlabJWT([]string{"sigstore", "https://p/login"}, "10")},
+		"another job":         {"SIGSTORE_ID_TOKEN": gitlabJWT("sigstore", "11")},
+		"CI_JOB_JWT only":     {"CI_JOB_JWT": gitlabJWT("https://gitlab.example", "10")},
+		"not a JWT":           {"SIGSTORE_ID_TOKEN": "not-a-jwt"},
+		"no id_tokens at all": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := &fakeCI{env: gitlabJobEnv(env)}
+			tok, _, err := ambientCIToken(context.Background(), f.source(), "")
+			if err == nil || tok != "" {
+				t.Fatalf("want a refusal, got token %q", tok)
+			}
+		})
 	}
 }
 
 func TestAmbientCITokenGitLabRefusesClearlyWhenTheVariableIsAbsent(t *testing.T) {
-	f := &fakeCI{env: map[string]string{"GITLAB_CI": "true"}}
+	f := &fakeCI{env: gitlabJobEnv(nil)}
 	_, ci, err := ambientCIToken(context.Background(), f.source(), "")
 	if err == nil || ci != "GitLab CI" {
 		t.Fatalf("want a refusal on GitLab without the token variable, got (%q, %v)", ci, err)
@@ -138,6 +192,8 @@ func TestSignerRefusesOnGitLabWithoutTheIDToken(t *testing.T) {
 	t.Setenv("GITHUB_ACTIONS", "")
 	t.Setenv("GITLAB_CI", "true")
 	t.Setenv("SIGSTORE_ID_TOKEN", "")
+	t.Setenv("CI_SERVER_URL", "https://gitlab.example")
+	t.Setenv("CI_JOB_ID", "10")
 	fsp := New(WithFulcioURL("https://fulcio.invalid"))
 	_, err := fsp.Signer(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "SIGSTORE_ID_TOKEN") {
