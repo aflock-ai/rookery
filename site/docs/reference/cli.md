@@ -758,7 +758,7 @@ cilock policy publish -f deploy/pushgate/judge-gates.policy.json -d judge-gates 
 
 ## `cilock policy bind --definition --product`
 
-> Binds a published policy to a product on the platform. It resolves the named PolicyDefinition and the target product, then creates a PolicyBinding linking them. Pass `--release` (a release id) or `--tag` (resolved to a release under the definition) to pin a specific release; omit both to bind the definition itself. Creating the binding needs `policy:write`.
+> Binds a published policy to a product on the platform. It resolves the named PolicyDefinition and the target product, then creates a PolicyBinding linking them. Pass `--release` (a release id) or `--tag` (resolved to a release under the definition) to pin a specific release. One of them is required: a binding with no release is enforced nowhere, so bind refuses to create one. Creating the binding needs `policy:write`.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -771,6 +771,23 @@ cilock policy publish -f deploy/pushgate/judge-gates.policy.json -d judge-gates 
 ```bash
 # Bind a definition's v1.0.0 release to a product (by exact name)
 cilock policy bind --definition supply-chain --tag v1.0.0 --product my-service
+```
+
+## `cilock policy bind pushgate`
+
+> Prepares a repository assignment and opens its review on Pushgate's Gates page. The only act that changes anything is a human's: a tenant owner or admin picks the mode, gives the reason, presses Sign and apply, and completes the approval bound to that exact change. The command does not wait for the assignment and never reports it done.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--release <uuid>` | (required) | Exact PolicyRelease id to assign; a name, tag or latest never selects one. |
+| `--repo <route>` | (required) | Repository route, e.g. `github.com/owner/name`. |
+| `--mode <warn\|block>` | `warn` | Mode the human should choose in the review. |
+| `--reason <text>` | (none) | Reason to show in the review (the human types the final one). |
+| `--platform-url <url>` | the selected login | Platform whose discovery names the Pushgate origin. |
+
+```bash
+cilock policy bind pushgate --release 11111111-1111-4111-8111-111111111111 \
+  --repo github.com/testifysec/judge --mode warn --reason "one-day side by side"
 ```
 
 ## `cilock keyid show`
