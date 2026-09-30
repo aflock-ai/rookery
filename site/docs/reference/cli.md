@@ -767,6 +767,7 @@ cilock policy publish -f deploy/pushgate/judge-gates.policy.json -d judge-gates 
 | `--release <id>` | (none) | PolicyRelease id to bind (overrides `--tag`). |
 | `--tag, -t <t>` | (none) | Release tag to resolve under the definition. |
 | `--platform-url <url>` | the logged-in platform | TestifySec platform URL. |
+| `--dry-run` | `false` | Resolve the definition, release and product and print the binding without creating it. |
 
 ```bash
 # Bind a definition's v1.0.0 release to a product (by exact name)

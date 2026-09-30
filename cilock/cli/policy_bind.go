@@ -35,6 +35,7 @@ func PolicyBindCmd() *cobra.Command {
 		tag         string
 		product     string
 		platformURL string
+		dryRun      bool
 	)
 
 	cmd := &cobra.Command{
@@ -50,6 +51,8 @@ func PolicyBindCmd() *cobra.Command {
 			"for a missing scope, run `cilock login` again to pick up policy:write.",
 		Example: "  # Bind a definition's v1.0.0 release to a product (by exact name)\n" +
 			"  cilock policy bind --definition supply-chain --tag v1.0.0 --product my-service\n\n" +
+			"  # See what that would bind, without binding it\n" +
+			"  cilock policy bind --definition supply-chain --tag v1.0.0 --product my-service --dry-run\n\n" +
 			"  # Pin an exact release by id\n" +
 			"  cilock policy bind -d supply-chain --release 6a4e31bc-a182-4cdf-a909-c4419377c802 --product my-service",
 		Args:          cobra.NoArgs,
@@ -62,6 +65,7 @@ func PolicyBindCmd() *cobra.Command {
 				tag:         tag,
 				product:     product,
 				platformURL: platformURL,
+				dryRun:      dryRun,
 			})
 		},
 	}
@@ -72,6 +76,7 @@ func PolicyBindCmd() *cobra.Command {
 	f.StringVarP(&tag, "tag", "t", "", "Release tag to resolve under the definition")
 	f.StringVarP(&product, "product", "p", "", "Product id or exact name to bind to (required)")
 	f.StringVar(&platformURL, "platform-url", "", "TestifySec platform URL (default: the logged-in platform)")
+	f.BoolVar(&dryRun, "dry-run", false, "Resolve the definition, release and product and print the binding without creating it")
 
 	_ = cmd.MarkFlagRequired("definition")
 	_ = cmd.MarkFlagRequired("product")
@@ -86,6 +91,7 @@ type policyBindOpts struct {
 	tag         string
 	product     string
 	platformURL string
+	dryRun      bool
 }
 
 // bindReleaseRe is the exact release id form: a canonical lowercase UUID.
@@ -142,6 +148,12 @@ func runPolicyBind(cmd *cobra.Command, o policyBindOpts) error {
 	prod, err := pc.ResolveProduct(ctx, o.product)
 	if err != nil {
 		return err
+	}
+
+	if o.dryRun {
+		_, _ = fmt.Fprintf(out, "would bind %q to product %q (dry run: nothing was changed)\n", def.Name, prod.Name)
+		_, _ = fmt.Fprintf(out, "  definition: %s\n  product:    %s\n  release:    %s (%s)\n", def.ID, prod.ID, releaseID, releaseTag)
+		return nil
 	}
 
 	binding, err := pc.CreatePolicyBinding(ctx, sess.cred.TenantID, def.ID, releaseID, prod.ID)
