@@ -1,0 +1,15 @@
+{
+  "_source": "gitlab.com (Ultimate, group testifysec/judge-parity-sandbox) version as attestor, 2026-09-29T08:05:09Z",
+  "response": {
+    "enterprise": true,
+    "kas": {
+      "enabled": true,
+      "externalK8sProxyUrl": "https://kas.gitlab.com/k8s-proxy",
+      "externalUrl": "grpcs://kas.gitlab.com",
+      "version": "19.5.0-rc1+bb0cb96905437d9951f26f762d4e0fc3bdead467"
+    },
+    "revision": "3cc6923670d",
+    "version": "19.5.0-pre"
+  },
+  "status": 200
+}
