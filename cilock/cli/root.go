@@ -56,7 +56,12 @@ func New() *cobra.Command {
 cilock checks cilock.dev at most once a day for a newer release and prints a
 notice when one exists (never prompting, never blocking, never changing exit
 codes). Set CILOCK_SKIP_VERSION_CHECK=1 to disable the check, e.g. in
-air-gapped environments.
+air-gapped environments. CILOCK_DIST_BASE points the check (and install.sh)
+at a mirror of cilock.dev.
+
+CILOCK_SESSION_TTL (a Go duration such as 24h) bounds a stored session whose
+token carries no expiry; the default is 720h. A token's own expiry always
+wins, and an unset or invalid value keeps the default.
 
 Set CILOCK_STATE_DIR to an existing canonical absolute 0700 directory to isolate
 Cilock human-session and agent-credential stores without changing HOME. Explicit

@@ -257,8 +257,13 @@ func AgentStatusCmd() *cobra.Command {
 	var platformURL string
 	var jsonOutput bool
 	cmd := &cobra.Command{
-		Use:           "status",
-		Short:         "Show the agent principal this machine would sign as",
+		Use:   "status",
+		Short: "Show the agent principal this machine would sign as",
+		Example: "  # Which agent would sign on this machine, and until when\n" +
+			"  cilock agent status\n" +
+			"\n" +
+			"  # The same as one JSON object, for a script\n" +
+			"  cilock agent status --json --platform-url https://platform.example.com\n",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -337,6 +342,11 @@ func AgentLogoutCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "logout",
 		Short: "Remove this machine's agent credential",
+		Example: "  # Remove this machine's agent credential for the default platform\n" +
+			"  cilock agent logout\n" +
+			"\n" +
+			"  # ... for another platform (pass the same URL the agent enrolled with)\n" +
+			"  cilock agent logout --platform-url https://platform.example.com\n",
 		Long: "Remove this machine's copy of the agent credential.\n\n" +
 			"This is a local delete, not a revocation: the principal stays valid on the\n" +
 			"platform until a human revokes it there.",

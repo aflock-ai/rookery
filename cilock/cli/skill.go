@@ -155,6 +155,11 @@ func skillShowCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "show [file]",
 		Short: "Print the embedded skill (SKILL.md, or one of its reference files)",
+		Example: "  # Print the skill an agent reads\n" +
+			"  cilock skill show\n" +
+			"\n" +
+			"  # Print one of its reference files\n" +
+			"  cilock skill show references/refusals.md\n",
 		Long: `Print the Pushgate skill embedded in this cilock to stdout. With no argument it
 prints SKILL.md; name a file, such as references/refusals.md, to print that.
 This is the copy that matches this binary's commands.`,
@@ -188,6 +193,11 @@ func skillPathCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "path",
 		Short: "Print where `cilock skill install` would write the skill, and whether it is there",
+		Example: "  # Where the skill would go for the detected agent, and whether it is there\n" +
+			"  cilock skill path\n" +
+			"\n" +
+			"  # ... for Codex, in this repository only\n" +
+			"  cilock skill path --agent codex --scope project\n",
 		Long: `Print the directory ` + "`cilock skill install`" + ` would write for the same flags, on
 the first line by itself, followed by whether the skill is installed there and
 the discovery rule that makes the agent find it. Writes nothing.`,

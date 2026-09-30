@@ -48,6 +48,11 @@ func VerifyBundleCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "verify-bundle --bundle FILE (--certificate-identity SAN --certificate-oidc-issuer URL | --key PEM) [--trusted-root FILE] [--staging] FILE|sha256:DIGEST",
 		Short: "Verify a Sigstore bundle (application/vnd.dev.sigstore.bundle*)",
+		Example: "  # Verify a keyless GitHub Actions signature over a release artifact\n" +
+			"  cilock verify-bundle --bundle app.sigstore.json --certificate-identity https://github.com/acme/app/.github/workflows/release.yml@refs/tags/v1.2.0 --certificate-oidc-issuer https://token.actions.githubusercontent.com app.tar.gz\n" +
+			"\n" +
+			"  # Verify a managed-key signature against a digest\n" +
+			"  cilock verify-bundle --bundle app.sigstore.json --key cosign.pub sha256:3f0a9c1e7b2d4a5f8e6c0b1d2a3f4e5d6c7b8a9f0e1d2c3b4a5f6e7d8c9b0a1f\n",
 		Long: `Verify a Sigstore bundle under the Sigstore client verification procedure.
 
 A certificate-signed bundle must match both --certificate-identity (the exact

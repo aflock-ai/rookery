@@ -61,8 +61,10 @@ type bundleCreateOptions struct {
 func bundleCreateCmd() *cobra.Command {
 	o := bundleCreateOptions{}
 	cmd := &cobra.Command{
-		Use:               "create",
-		Short:             "Build a bundle by walking an Archivista subject graph",
+		Use:   "create",
+		Short: "Build a bundle by walking an Archivista subject graph",
+		Example: "  # Bundle everything linked to one artifact digest into a tar.gz\n" +
+			"  cilock bundle create -s sha256:3f0a9c1e7b2d4a5f8e6c0b1d2a3f4e5d6c7b8a9f0e1d2c3b4a5f6e7d8c9b0a1f -o evidence.tar.gz\n",
 		Long:              "Pulls every DSSE envelope reachable from the given subject digest(s) via Archivista's subject graph and packs them into a tar.gz bundle.",
 		DisableAutoGenTag: true,
 		SilenceErrors:     true,

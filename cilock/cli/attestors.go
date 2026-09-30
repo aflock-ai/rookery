@@ -66,8 +66,10 @@ func ListCmd() *cobra.Command {
 
 func SchemaCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:               "schema",
-		Short:             "Show the JSON schema of a specific attestor",
+		Use:   "schema",
+		Short: "Show the JSON schema of a specific attestor",
+		Example: "  # The predicate schema the git attestor emits\n" +
+			"  cilock attestors schema git\n",
 		Long:              "Print the JSON schema of the predicate that the specified attestor generates",
 		SilenceErrors:     true,
 		SilenceUsage:      true,

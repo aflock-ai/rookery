@@ -309,8 +309,13 @@ func tokenCredential(cmd *cobra.Command, url, token string) (*auth.Credential, e
 func LogoutCmd() *cobra.Command {
 	var platformURL string
 	cmd := &cobra.Command{
-		Use:           "logout",
-		Short:         "Remove the stored TestifySec platform session credential",
+		Use:   "logout",
+		Short: "Remove the stored TestifySec platform session credential",
+		Example: "  # Remove the stored session for the default platform\n" +
+			"  cilock logout\n" +
+			"\n" +
+			"  # ... for another platform\n" +
+			"  cilock logout --platform-url https://platform.example.com\n",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -369,8 +374,13 @@ func whoamiNoSession(out io.Writer, url string) error {
 func WhoamiCmd() *cobra.Command {
 	var platformURL string
 	cmd := &cobra.Command{
-		Use:           "whoami",
-		Short:         "Show the current TestifySec platform session",
+		Use:   "whoami",
+		Short: "Show the current TestifySec platform session",
+		Example: "  # The session for the default platform\n" +
+			"  cilock whoami\n" +
+			"\n" +
+			"  # The session for another platform (sessions are stored per platform)\n" +
+			"  cilock whoami --platform-url https://platform.example.com\n",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,

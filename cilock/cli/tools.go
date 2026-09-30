@@ -215,6 +215,11 @@ func toolsTestPlanCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "test-plan",
 		Short: "Emit a per-detector test plan (markdown or JSON)",
+		Example: "  # The plan for every detector, as markdown\n" +
+			"  cilock tools test-plan\n" +
+			"\n" +
+			"  # One detector, as JSON for a test runner\n" +
+			"  cilock tools test-plan --only trivy --format json\n",
 		Long: `Generates a structured test plan describing how to validate each
 detector. For each one, the plan covers what triggers it (argv, env, file,
 or probe), the expected fire decision, and a negative case where the

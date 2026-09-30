@@ -111,11 +111,9 @@ bundles use, via one or more -k flags. The subcommand derives each
 key's keyid (hex(sha256(PEM(pub))), same as 'cilock keyid show') and
 matches it against the signatures[].keyid values it finds in the
 bundles. Bundles signed by an unknown key get a placeholder PublicKey
-entry the user must fill in before the policy can be signed.
-
-Examples:
-  cilock policy from-bundles -k signer.pub *.bundle.json > policy.json
-  cilock policy from-bundles -k signer.pub -k otherteam.pub --output policy.json source-git.bundle.json build.bundle.json`,
+entry the user must fill in before the policy can be signed.`,
+		Example: "  cilock policy from-bundles -k signer.pub build.bundle.json\n" +
+			"  cilock policy from-bundles -k signer.pub -k otherteam.pub --output policy.json source-git.bundle.json build.bundle.json",
 		Args:          cobra.MinimumNArgs(1),
 		SilenceErrors: true,
 		SilenceUsage:  true,
