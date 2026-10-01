@@ -593,3 +593,23 @@ func TestSanitizeRemoteURL(t *testing.T) {
 		})
 	}
 }
+
+// A GitLab merge request pipeline names its target branch the way a GitHub
+// pull_request event does, and the base comes from it; the same variable
+// outside a GitLab job is ignored.
+func TestBaseRefFromGitLabMergeRequest(t *testing.T) {
+	f := newRepo(t)
+	base := f.commit("base one")
+	f.commit("feature one")
+	f.setRef("refs/remotes/origin/release", base)
+
+	env := map[string]string{"GITLAB_CI": "true", EnvGitLabBaseRef: "release"}
+	a := attest(t, f.dir, WithEnv(func(k string) string { return env[k] }))
+	require.Equal(t, "release", a.BaseRef)
+	require.Equal(t, BaseRefSourceGitLabEnv, a.BaseRefSource)
+	require.Equal(t, RelationshipCurrent, a.Relationship)
+
+	delete(env, "GITLAB_CI")
+	a = attest(t, f.dir, WithEnv(func(k string) string { return env[k] }))
+	require.Empty(t, a.BaseRef)
+}

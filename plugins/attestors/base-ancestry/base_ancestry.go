@@ -83,6 +83,10 @@ const (
 	// is given. GitHub Actions sets it on pull_request events to the PR's
 	// target branch name; other CI systems can export the same name.
 	EnvBaseRef = "GITHUB_BASE_REF"
+
+	// EnvGitLabBaseRef is the same thing on GitLab CI: a merge request
+	// pipeline sets it to the MR target branch. Read only in a GitLab job.
+	EnvGitLabBaseRef = "CI_MERGE_REQUEST_TARGET_BRANCH_NAME"
 )
 
 // Relationship is where the head sits relative to the base, in git's own
@@ -112,6 +116,7 @@ const (
 const (
 	BaseRefSourceFlag       = "flag"
 	BaseRefSourceEnv        = "env:" + EnvBaseRef
+	BaseRefSourceGitLabEnv  = "env:" + EnvGitLabBaseRef
 	BaseRefSourceRemoteHead = "remote-head"
 )
 
@@ -259,7 +264,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 
 	ref, source := a.chooseBaseRef(repo)
 	if ref == "" {
-		a.warn("no base ref: pass --attestor-base-ancestry-base-ref, set " + EnvBaseRef +
+		a.warn("no base ref: pass --attestor-base-ancestry-base-ref, set " + EnvBaseRef + " (GitLab: run in a merge request pipeline, which sets " + EnvGitLabBaseRef + ")" +
 			", or fetch the remote so refs/remotes/" + a.remote + "/HEAD names its default branch")
 		return nil
 	}
@@ -284,6 +289,11 @@ func (a *Attestor) chooseBaseRef(repo *git.Repository) (string, string) {
 	}
 	if v := strings.TrimSpace(a.getenv(EnvBaseRef)); v != "" {
 		return v, BaseRefSourceEnv
+	}
+	if a.getenv("GITLAB_CI") == "true" {
+		if v := strings.TrimSpace(a.getenv(EnvGitLabBaseRef)); v != "" {
+			return v, BaseRefSourceGitLabEnv
+		}
 	}
 	// refs/remotes/<remote>/HEAD is a symbolic ref git clone writes to point at
 	// the remote's default branch. Resolved WITHOUT following it, so the

@@ -41,10 +41,10 @@ contract:
     - name: gitlab-ci-job-jwt
       type: oidc
       provided: ambient
-      env_vars: ["CI_JOB_JWT"]
+      env_vars: ["SIGSTORE_ID_TOKEN", "CI_JOB_JWT"]
       scopes: []
       required: false
-      description: "Optional GitLab CI OIDC ID token, injected ambiently by the GitLab runner (CI_JOB_JWT, deprecated in GitLab >= 17.0). Can be overridden via a configured token env var (WithTokenEnvVar) or literal token (WithToken). When present it is verified against the JWKS endpoint (WITNESS_GITLAB_JWKS_URL or <CI_SERVER_URL>/oauth/discovery/keys). The attestor still runs and succeeds without it; only the GITLAB_CI=true ambient environment is strictly required to execute."
+      description: "Optional GitLab CI job ID token, declared by the job under `id_tokens:` (GitLab 17 removed the ambient CI_JOB_JWT). Any variable name works: the attestor takes the one whose claims say it was issued by CI_SERVER_URL to CI_JOB_ID, preferring SIGSTORE_ID_TOKEN, or only the variable named with --attestor-gitlab-token-env. Its signature is verified against the issuer JWKS (WITNESS_GITLAB_JWKS_URL or <CI_SERVER_URL>/oauth/discovery/keys, which an air-gapped runner reaches on its own GitLab); a token that does not verify fails the attestor. Without one the attestor still records the job context from the GITLAB_CI=true environment, and warns that no signed job claims were recorded."
   fixtures:
     - name: gitlab-ci
       role: canonical

@@ -22,10 +22,12 @@ import (
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/cijobtoken"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/detection"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/redact"
+	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/aflock-ai/rookery/plugins/attestors/jwt"
 	"github.com/invopop/jsonschema"
 )
@@ -66,7 +68,22 @@ type GitLabAttestor interface {
 func init() {
 	attestation.RegisterAttestation(Name, Type, RunType, func() attestation.Attestor {
 		return New()
-	})
+	},
+		registry.StringConfigOption(
+			"token-env",
+			"The id_tokens variable whose signed job claims to record. If empty, the job's own ID token is found by its claims "+
+				"(issued by CI_SERVER_URL to CI_JOB_ID), preferring "+cijobtoken.DefaultFulcioVar+".",
+			"",
+			func(a attestation.Attestor, val string) (attestation.Attestor, error) {
+				att, ok := a.(*Attestor)
+				if !ok {
+					return a, fmt.Errorf("invalid attestor type: %T", a)
+				}
+				WithTokenEnvVar(val)(att)
+				return att, nil
+			},
+		),
+	)
 	detection.Register(Name, detectorYAML)
 }
 
@@ -166,23 +183,22 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 		jwksUrl = fmt.Sprintf("%s/oauth/discovery/keys", serverURL)
 	}
 
-	var jwtString string
-	if a.token != "" {
-		jwtString = a.token
-	} else if a.tokenEnvVar != "" {
-		jwtString = os.Getenv(a.tokenEnvVar)
-	} else {
-		// Only works in GitLab < 17.0
-		jwtString = os.Getenv("CI_JOB_JWT")
+	jwtString, err := a.jobToken()
+	if err != nil {
+		return err
 	}
-
 	if jwtString != "" {
+		// The jwt attestor verifies the signature against the issuer's JWKS
+		// (self-managed: <CI_SERVER_URL>/oauth/discovery/keys, reachable from
+		// an air-gapped runner) and fails the attestor when it does not
+		// verify: an unverified token is never recorded as claims.
 		a.JWT = jwt.New(jwt.WithToken(jwtString), jwt.WithJWKSUrl(jwksUrl))
 		if err := a.JWT.Attest(ctx); err != nil {
 			return err
 		}
 	} else {
-		log.Warn("(attestation/gitlab) no jwt token found in environment")
+		log.Warn("(attestation/gitlab) this job declared no ID token, so no signed job claims are recorded " +
+			"(GitLab 17 removed CI_JOB_JWT); declare one with `id_tokens: {" + cijobtoken.DefaultFulcioVar + ": {aud: sigstore}}`")
 	}
 
 	a.CIConfigPath = os.Getenv("CI_CONFIG_PATH")
@@ -239,4 +255,50 @@ func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
 	}
 
 	return backRefs
+}
+
+// jobToken returns the JWT whose claims the attestor records: the literal
+// WithToken value, else this job's own ID token (cijobtoken.SelectAny: issued
+// by CI_SERVER_URL to CI_JOB_ID, any audience, since the claims are only
+// recorded and the token is never sent anywhere), restricted to the variable
+// WithTokenEnvVar names when one is named. The pre-17 CI_JOB_JWT is found the
+// same way when a GitLab still sets it. "" means the job has no ID token.
+func (a *Attestor) jobToken() (string, error) {
+	if a.token != "" {
+		return a.token, nil
+	}
+	job, _ := cijobtoken.JobFromEnv(os.Getenv)
+	tok, ok, err := cijobtoken.SelectAny(os.Environ(), job, a.tokenEnvVar)
+	if err != nil {
+		return "", fmt.Errorf("gitlab attestor: %w", err)
+	}
+	if !ok {
+		if a.tokenEnvVar != "" {
+			return "", fmt.Errorf("gitlab attestor: $%s holds no ID token for this job; declare it with `id_tokens: {%s: {aud: ...}}`",
+				a.tokenEnvVar, a.tokenEnvVar)
+		}
+		// GitLab < 17 still sets the pre-17 CI_JOB_JWT for every job; keep recording it (the jwt
+		// attestor verifies its signature) when no ID token was declared, but only when it was
+		// issued to this job by this GitLab, the binding the id_tokens scan enforces.
+		return legacyJobToken(job), nil
+	}
+	return tok.Raw, nil
+}
+
+// legacyJobToken returns CI_JOB_JWT when it names this job and this GitLab, else "". The pre-15.9
+// token's iss is the bare host (CI_SERVER_HOST), JWT_V2's is the server URL; either is this GitLab.
+func legacyJobToken(job cijobtoken.Job) string {
+	raw := os.Getenv("CI_JOB_JWT")
+	if raw == "" {
+		return ""
+	}
+	c, ok := cijobtoken.ParseClaims(raw)
+	iss := strings.TrimRight(strings.TrimSpace(c.Iss), "/")
+	thisGitLab := iss != "" && (iss == strings.TrimRight(strings.TrimSpace(job.ServerURL), "/") ||
+		iss == strings.TrimSpace(os.Getenv("CI_SERVER_HOST")))
+	if !ok || job.JobID == "" || c.JobID != job.JobID || !thisGitLab {
+		log.Warn("(attestation/gitlab) CI_JOB_JWT was not issued to this job by this GitLab, so its claims are not recorded")
+		return ""
+	}
+	return raw
 }

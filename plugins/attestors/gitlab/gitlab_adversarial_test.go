@@ -391,32 +391,14 @@ func TestAdversarial_BackRefsNondeterminism(t *testing.T) {
 // =============================================================================
 
 func TestAdversarial_LegacyJWTFallback(t *testing.T) {
-	t.Setenv("GITLAB_CI", "true")
-	t.Setenv("CI_SERVER_URL", "https://gitlab.com")
-	t.Setenv("CI_JOB_JWT", fakeJWT()) // Legacy env var
+	g := newFakeGitLab(t)
+	g.job(t)
+	t.Setenv("CI_JOB_JWT", g.token(t, g.key, "sigstore", "10"))
 
-	jwksServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"keys":[]}`))
-	}))
-	defer jwksServer.Close()
-
-	t.Setenv("WITNESS_GITLAB_JWKS_URL", jwksServer.URL+"/jwks")
-
-	a := New() // No explicit token or tokenEnvVar
-	ctx, err := attestation.NewContext("test", []attestation.Attestor{})
-	require.NoError(t, err)
-
-	err = a.Attest(ctx)
-	// Will get past the JWT fetch but may fail at signature verification
-	t.Logf("Attest with legacy CI_JOB_JWT: %v", err)
-
-	// The attestor should at least attempt JWT attestation
-	assert.NotNil(t, a.JWT,
-		"JWT should be set from legacy CI_JOB_JWT fallback")
-
-	t.Log("NOTE: CI_JOB_JWT fallback uses a deprecated, less-secure token mechanism. " +
-		"Consider requiring explicit token configuration for GitLab >= 17.0.")
+	a := New()
+	require.NoError(t, attest(t, a))
+	require.NotNil(t, a.JWT, "JWT should be set from this job's legacy CI_JOB_JWT")
+	assert.Equal(t, "10", a.JWT.Claims["job_id"])
 }
 
 // =============================================================================

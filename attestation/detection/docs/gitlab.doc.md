@@ -36,12 +36,17 @@ In any GitLab CI pipeline. The embedded JWT gives the verifier a GitLab-signed p
 
 ## Flags
 
-None. JWT discovery is configured via environment, not flags:
+- `--attestor-gitlab-token-env <NAME>`: record the claims of the ID token in `$NAME` only. By default the attestor finds the job's own ID token by its claims: any variable holding a JWT issued by `CI_SERVER_URL` to `CI_JOB_ID`, preferring `SIGSTORE_ID_TOKEN`. A named variable that holds no token for this job is an error.
 
-- `WITNESS_GITLAB_JWKS_URL` — override the JWKS endpoint (defaults to `${CI_SERVER_URL}/oauth/discovery/keys`).
-- `CI_JOB_JWT` — fallback token source when no programmatic token / env-var override is set. Note: `CI_JOB_JWT` was removed in GitLab 17.0; for GitLab >= 17 the caller must inject a token (e.g. via `id_tokens:` in `.gitlab-ci.yml`) and point the attestor at it.
+The JWKS endpoint is `${CI_SERVER_URL}/oauth/discovery/keys`, or `WITNESS_GITLAB_JWKS_URL` when set. Programmatic options (Go API): `WithToken(string)`, `WithTokenEnvVar(string)`.
 
-Programmatic options (Go API): `WithToken(string)`, `WithTokenEnvVar(string)`.
+The job declares its token in `.gitlab-ci.yml`; the audience does not matter to this attestor (it records claims and sends the token nowhere), so the token cilock already signs with serves:
+
+```yaml
+id_tokens:
+  SIGSTORE_ID_TOKEN:
+    aud: sigstore
+```
 
 ## Output shape
 
@@ -72,9 +77,9 @@ Subjects: `` `pipelineurl:<url>` ``, `` `joburl:<url>` ``, `` `projecturl:<url>`
 ## Gotchas
 
 - **Not in GitLab CI**: if `GITLAB_CI` is unset or not `"true"`, the attestor returns `ErrNotGitlab` and produces no output.
-- **No JWT in env**: if no token is supplied via `WithToken`, `WithTokenEnvVar`, or `CI_JOB_JWT`, the attestor logs `no jwt token found in environment` and continues — you get the `CI_*` fields but no JWT proof. On GitLab 17+, this is the default unless you configure `id_tokens:`.
-- **`CI_JOB_JWT` is legacy**: it only exists on GitLab < 17.0. For 17.0+, declare an ID token in `.gitlab-ci.yml` (e.g. `` `id_tokens: { WITNESS_TOKEN: { aud: "..." } }` ``) and pass its env var name via `WithTokenEnvVar`.
-- **Self-hosted GitLab**: JWKS defaults to `${CI_SERVER_URL}/oauth/discovery/keys`. For air-gapped or non-standard installs, override with `WITNESS_GITLAB_JWKS_URL`. The verifier hitting that URL must be able to reach it (or have the keys cached) when validating attestations.
+- **No ID token**: a job that declares no `id_tokens:` has no signed identity on GitLab 17+ (GitLab removed `CI_JOB_JWT`). The attestor still records the `CI_*` fields and warns that no signed job claims were recorded.
+- **Only this job's token**: a token whose `iss` is not `CI_SERVER_URL` or whose `job_id` is not `CI_JOB_ID` is never recorded, whatever variable holds it. On a GitLab older than 17 that still sets `CI_JOB_JWT`, that token is found the same way.
+- **Self-hosted and air-gapped GitLab**: the JWKS is fetched from the job's own GitLab (`${CI_SERVER_URL}/oauth/discovery/keys`), which the runner can always reach, so capture needs no internet. Override with `WITNESS_GITLAB_JWKS_URL` for a non-standard install.
 - **JWT verification failure is fatal**: if a token is present but JWKS verification fails, `Attest()` returns the underlying jwt-attestor error and no gitlab attestation is recorded.
 
 ## CLI example

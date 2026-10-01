@@ -98,6 +98,13 @@ func shouldAutoDetect(attestationsSet, workloadSet bool, workload string) bool {
 // Names returned are merged with --attestations by the caller via dedupe;
 // an operator's explicit choice is never silently dropped.
 func detectCatalogAttestors(argv []string, workdir string) []string {
+	return DetectCatalogAttestorsIn(argv, workdir, envSliceToMap(os.Environ()))
+}
+
+// DetectCatalogAttestorsIn is detectCatalogAttestors over an explicit
+// environment, so a test can run the real detectors against a GitHub job's
+// and a GitLab job's environment side by side.
+func DetectCatalogAttestorsIn(argv []string, workdir string, env map[string]string) []string {
 	if len(argv) == 0 {
 		return nil
 	}
@@ -108,7 +115,7 @@ func detectCatalogAttestors(argv []string, workdir string) []string {
 	}
 	plan := detection.RunPrePlan(detection.PrePlan{
 		Argv: argv,
-		Env:  envSliceToMap(os.Environ()),
+		Env:  env,
 		Cwd:  workdir,
 	})
 	return resolveDetectedAttestors(plan.Fire, registeredAttestorNames(), detection.Default())
