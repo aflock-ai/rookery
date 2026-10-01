@@ -134,9 +134,11 @@ type Attestor struct {
 	ParentHashes       []string             `json:"parenthashes,omitempty"`
 	TreeHash           string               `json:"treehash,omitempty"`
 	Refs               []string             `json:"refs,omitempty"`
-	Remotes            []string             `json:"remotes,omitempty"`
-	// RemotesRefused is the observable trace of every configured remote this
-	// attestor declined to record, and it exists so that A REFUSAL CANNOT LOOK
+	// Remotes holds origin's URLs when a remote named origin exists, else
+	// every remote's, in remote-name order (anchorRemotes).
+	Remotes []string `json:"remotes,omitempty"`
+	// RemotesRefused is the observable trace of every remote anchorRemotes
+	// selected that this attestor declined to record, and it exists so that A REFUSAL CANNOT LOOK
 	// LIKE AN ABSENCE.
 	//
 	// Remotes is the fail-CLOSED half of the contract: a remote whose authority
@@ -1514,6 +1516,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 	if err != nil {
 		return err
 	}
+	remotes = anchorRemotes(remotes)
 
 	// BOTH HALVES OF THE REMOTE RECORD ARE REBUILT FROM THIS OBSERVATION, not
 	// added to whatever was there. RemotesRefused is assigned below, so leaving
@@ -1720,6 +1723,26 @@ func addCommitSubject(subjects map[string]cryptoutil.DigestSet, prefix, sha stri
 			GitOID: false,
 		}: sha,
 	}
+}
+
+// anchorRemotes picks the remotes whose URLs are recorded (testifysec/judge#9233).
+//
+// Every recorded URL becomes a remote: subject, and Judge links a collection to
+// every product whose repository matches any of them. A developer worktree
+// with a dozen remotes therefore anchored a judge commit to
+// aflock-ai/cilock-action. When origin exists it is the repository being
+// attested and the only one returned; a refused origin is NOT replaced by
+// another remote, because that fallback is the wrong-repository anchor again.
+// Without origin every remote is returned, sorted by name: go-git builds the
+// list from a map, and the predicate is signed, so its order must not vary.
+func anchorRemotes(remotes []*git.Remote) []*git.Remote {
+	for _, r := range remotes {
+		if r.Config().Name == "origin" {
+			return []*git.Remote{r}
+		}
+	}
+	sort.Slice(remotes, func(i, j int) bool { return remotes[i].Config().Name < remotes[j].Config().Name })
+	return remotes
 }
 
 func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
