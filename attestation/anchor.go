@@ -47,6 +47,9 @@ type AnchorKind string
 const (
 	KindImageRegistryManifest AnchorKind = "image-registry-manifest"
 	KindImageConfig           AnchorKind = "image-config"
+	// KindGitCommit is the digest space of git commit objects (D15, 3.7): the
+	// object id over "commit <len>\x00" and the commit's canonical bytes.
+	KindGitCommit AnchorKind = "git-commit"
 	// KindFileContent is reserved: no emitter and no acceptor may use it.
 	KindFileContent AnchorKind = "file-content"
 )
@@ -88,14 +91,33 @@ const (
 	NormalizationPURLVersion  Normalization = "purl-version"
 )
 
-// AnchorAlgorithm is the only algorithm an anchor or acceptor may use.
+// AnchorAlgorithm is the algorithm every kind admits. git-commit alone also
+// admits sha1 (A3, a per-kind allowlist; see KindAlgorithms).
 const AnchorAlgorithm = "sha256"
+
+// AlgorithmSHA1 is admitted for KindGitCommit only. Whether a sha1 value came
+// from the hardened (collision-detecting) git path is the registry row's gate,
+// not the encoder's: Canonical reads the value's shape.
+const AlgorithmSHA1 = "sha1"
+
+// kindAlgorithms is A3: the algorithms each kind admits. A kind not listed
+// (the reserved one, an unknown one) admits none.
+var kindAlgorithms = map[AnchorKind][]string{
+	KindImageRegistryManifest: {AnchorAlgorithm},
+	KindImageConfig:           {AnchorAlgorithm},
+	KindGitCommit:             {AlgorithmSHA1, AnchorAlgorithm},
+}
+
+// KindAlgorithms returns a copy of the algorithms kind admits, nil for none.
+func KindAlgorithms(kind AnchorKind) []string {
+	return slices.Clone(kindAlgorithms[kind])
+}
 
 // Identity is the canonical identity: the only thing ever compared.
 type Identity struct {
 	Kind      AnchorKind
 	Algorithm string
-	Value     string // exactly 64 lowercase hex characters
+	Value     string // lowercase hex: 64 characters, or 40 for a sha1 git-commit
 }
 
 // Anchor is one typed value. Key is "<prefix><tail>"; the tail is never compared.
@@ -134,6 +156,9 @@ var errNonCanonical = errors.New("non-canonical anchor value")
 // makes, a reading after percent-decoding) is REJECTED, never resolved to one
 // of them. A false identity match is a substitution; a rejection is safe.
 func Canonical(kind AnchorKind, raw string, rule Normalization) (Identity, error) {
+	if kind == KindGitCommit {
+		return canonicalCommit(raw, rule)
+	}
 	if kind != KindImageRegistryManifest && kind != KindImageConfig {
 		return Identity{}, fmt.Errorf("%w: kind %q is not an admitted kind", errNonCanonical, kind)
 	}
@@ -157,8 +182,36 @@ func Canonical(kind AnchorKind, raw string, rule Normalization) (Identity, error
 	return Identity{Kind: kind, Algorithm: AnchorAlgorithm, Value: value}, nil
 }
 
+// canonicalCommit reads a git-commit value. A commit id is bare lowercase hex
+// and nothing else: 40 characters is a sha1 id, 64 a sha256 one, and the null
+// id (all zeros, git's "no object") names no commit.
+func canonicalCommit(raw string, rule Normalization) (Identity, error) {
+	if rule != NormalizationBareHex {
+		return Identity{}, fmt.Errorf("%w: a git-commit value is bare hex only, not %s", errNonCanonical, rule)
+	}
+	var alg string
+	switch len(raw) {
+	case sha1HexLen:
+		alg = AlgorithmSHA1
+	case sha256.Size * 2:
+		alg = AnchorAlgorithm
+	default:
+		return Identity{}, fmt.Errorf("%w: a git-commit value is 40 or 64 hex characters", errNonCanonical)
+	}
+	if !isLowerHex(raw) || strings.Trim(raw, "0") == "" {
+		return Identity{}, fmt.Errorf("%w: git-commit value is not canonical", errNonCanonical)
+	}
+	return Identity{Kind: KindGitCommit, Algorithm: alg, Value: raw}, nil
+}
+
+const sha1HexLen = 40
+
 func isLowerHex64(s string) bool {
-	if len(s) != sha256.Size*2 {
+	return len(s) == sha256.Size*2 && isLowerHex(s)
+}
+
+func isLowerHex(s string) bool {
+	if s == "" {
 		return false
 	}
 	for i := 0; i < len(s); i++ {
@@ -347,7 +400,7 @@ func validQualifierKey(key string) bool {
 
 // AnchorKinds returns the closed set of kinds, the reserved one last.
 func AnchorKinds() []AnchorKind {
-	return []AnchorKind{KindImageRegistryManifest, KindImageConfig, KindFileContent}
+	return []AnchorKind{KindImageRegistryManifest, KindImageConfig, KindGitCommit, KindFileContent}
 }
 
 // Measurement is a core function from a fixture input artifact to the
@@ -788,8 +841,8 @@ func validateRowIdentity(r AnchorRegistryRow) error {
 	if r.Kind != KindImageRegistryManifest && r.Kind != KindImageConfig {
 		return fmt.Errorf("kind %q is not an admitted kind", r.Kind)
 	}
-	if r.Algorithm != AnchorAlgorithm {
-		return fmt.Errorf("algorithm %q is not %s", r.Algorithm, AnchorAlgorithm)
+	if !slices.Contains(kindAlgorithms[r.Kind], r.Algorithm) {
+		return fmt.Errorf("algorithm %q is not admitted for kind %s", r.Algorithm, r.Kind)
 	}
 	if r.Class == ClassAnchor && r.Role != RoleProduced {
 		return errors.New("an anchor row has role produced")

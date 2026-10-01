@@ -87,7 +87,7 @@ func TestAnchorRegistryGolden(t *testing.T) {
 }
 
 func TestAnchorClosedListsGolden(t *testing.T) {
-	assert.Equal(t, []AnchorKind{KindImageRegistryManifest, KindImageConfig, KindFileContent}, AnchorKinds())
+	assert.Equal(t, []AnchorKind{KindImageRegistryManifest, KindImageConfig, KindGitCommit, KindFileContent}, AnchorKinds())
 	assert.Equal(t, []string{"oci-config-blob"}, AnchorMeasurements(), "L2-1 ships oci-config-blob only")
 	_, ok := LookupMeasurement("oci-registry-manifest")
 	assert.False(t, ok, "oci-registry-manifest is not a measurement until its own lane")
