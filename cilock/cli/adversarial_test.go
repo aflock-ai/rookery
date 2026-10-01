@@ -579,6 +579,7 @@ func TestIsValidHexDigestMultipleColons(t *testing.T) {
 }
 
 func TestVerifyInvalidSubjectDigest(t *testing.T) {
+	clearAmbientGitHubIdentity(t)
 	dir := t.TempDir()
 	keyPath := generateTestKey(t, dir)
 	pubPath := generateTestPublicKey(t, dir, keyPath)
@@ -1712,6 +1713,7 @@ func TestAdversarial_PolicyFileSymlink(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestAdversarial_VerifyMixedSubjects(t *testing.T) {
+	clearAmbientGitHubIdentity(t)
 	dir := t.TempDir()
 	keyPath := generateTestKey(t, dir)
 	pubPath := generateTestPublicKey(t, dir, keyPath)
@@ -2415,6 +2417,7 @@ func TestSecurity_R3_310_AttestationFileReadsArbitraryPaths(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestSecurity_R3_310_CACertReadsArbitraryFiles(t *testing.T) {
+	clearAmbientGitHubIdentity(t)
 	dir := t.TempDir()
 	polFile := filepath.Join(dir, "policy.json")
 	writeFile(t, polFile, `{"payloadType":"test","payload":"dGVzdA==","signatures":[]}`)

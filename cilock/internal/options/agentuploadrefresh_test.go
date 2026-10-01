@@ -248,6 +248,7 @@ func TestAgentUploadRefusesWhenTheRefreshDropsTheUploadBearer(t *testing.T) {
 // guard through the client: the agent's bearer is scoped to the platform's own
 // store and must not reach an operator-chosen third-party server.
 func TestAgentUploadBearerNeverTravelsToAThirdPartyArchivista(t *testing.T) {
+	clearAmbientGitHubIdentity(t)
 	isolateCredentialStore(t)
 	rec := newAgentUploadRecorder(t, agentUploadBearerFirst)
 	seedAgent(t, rec.srv.URL)
@@ -396,6 +397,7 @@ func TestAmbientWorkflowOIDCStillUploadsWithNoAgentEnrolled(t *testing.T) {
 // header path already had: an operator-supplied Authorization wins outright and
 // the refresh must not overwrite it.
 func TestAgentUploadKeepsTheOperatorsExplicitAuthorization(t *testing.T) {
+	clearAmbientGitHubIdentity(t)
 	isolateCredentialStore(t)
 	rec := newAgentUploadRecorder(t, agentUploadBearerFirst, agentUploadBearerSecond)
 	seedAgent(t, rec.srv.URL)

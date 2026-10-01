@@ -54,6 +54,7 @@ func archivistaOptionsFromFlags(t *testing.T, argv ...string) *ArchivistaOptions
 // reached in production. This drives the product's own construction path with
 // nothing but default flags.
 func TestArchivistaClient_RetriesByDefault(t *testing.T) {
+	clearAmbientGitHubIdentity(t)
 	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if calls.Add(1) <= 2 {
@@ -86,6 +87,7 @@ func TestArchivistaClient_RetriesByDefault(t *testing.T) {
 // path — no retry storm against an already-saturated backend, and no turning a
 // permission error into a slow permission error.
 func TestArchivistaClient_StillFailsFastOnForbidden(t *testing.T) {
+	clearAmbientGitHubIdentity(t)
 	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -113,6 +115,7 @@ func TestArchivistaClient_StillFailsFastOnForbidden(t *testing.T) {
 // single-attempt behaviour (or a test harness that cannot tolerate sleeps)
 // must be able to turn retry off.
 func TestArchivistaClient_RetriesDisabledByFlag(t *testing.T) {
+	clearAmbientGitHubIdentity(t)
 	var calls atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
