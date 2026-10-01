@@ -560,9 +560,9 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			// errors.Join keeps the trust-mismatch error reachable via
 			// errors.As at the top level while preserving the original
 			// verifyErr chain for existing callers.
-			return &VerifyExitError{Code: code, Err: fmt.Errorf("failed to verify policy: %w", errors.Join(trustMismatch, verifyErr))}
+			return &VerifyExitError{Code: code, Err: &verifyRejectionError{err: fmt.Errorf("failed to verify policy: %w", errors.Join(trustMismatch, verifyErr)), steps: verifiedEvidence.StepResults}}
 		}
-		return &VerifyExitError{Code: code, Err: fmt.Errorf("failed to verify policy: %w", verifyErr)}
+		return &VerifyExitError{Code: code, Err: &verifyRejectionError{err: fmt.Errorf("failed to verify policy: %w", verifyErr), steps: verifiedEvidence.StepResults}}
 	}
 
 	log.Info("Verification succeeded")

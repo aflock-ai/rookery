@@ -33,6 +33,19 @@ import (
 	"github.com/aflock-ai/rookery/attestation/standards"
 )
 
+// verifyRejectionError is a refused verification with the per-step results
+// that refused it. The message and the unwrap chain are exactly the error it
+// wraps, so every existing caller sees what it saw before; `cilock policy
+// prove` reads the step results to name the step and rule that refused,
+// instead of scraping the log lines runVerify writes.
+type verifyRejectionError struct {
+	err   error
+	steps map[string]policy.StepResult
+}
+
+func (e *verifyRejectionError) Error() string { return e.err.Error() }
+func (e *verifyRejectionError) Unwrap() error { return e.err }
+
 // requireInventoryArtifactBinding refuses a verdict in which no passed step
 // binds the artifact the operator named, as a top-level subject or as a
 // root-verified product/material leaf. A policy that other evidence satisfies
