@@ -83,6 +83,13 @@ flag accepted by ` + "`cilock run`" + ` works identically here.`,
 			if err := o.AgentIdentityError(); err != nil {
 				return err
 			}
+			// --validate-only reports and exits before anything is signed or
+			// run, exactly as `cilock run` does (#9495). The synthesized
+			// command is `true`, so there is no user command to resolve.
+			if o.ValidateOnly {
+				writeRunPreflight(o, nil, nil, preflightAttestorTooling(o.WorkingDir, o.Attestations))
+				return nil
+			}
 			// The same fail-closed start gates `cilock run` applies (H18):
 			// attest signs and stores evidence exactly as run does, so an
 			// unlinkable product binding, or a stored principal that would
