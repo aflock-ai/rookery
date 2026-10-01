@@ -94,6 +94,9 @@ cilock is older than this skill. Tell the human; do not improvise a substitute.
       them. Every `FILL` slot needs your judgment about *this* repository: the
       real command, the rule that separates a pass from a failure, and the
       files that must be present. A generated draft is not the human's intent.
+      To see the fields a rule reads, record the step once and run
+      `cilock policy input <envelope> --attestor <name>` on its outfile. Do
+      not decode envelopes by hand.
    4. `cilock policy prove -p <draft> --step <name> -- <command>` proves the
       draft admits real evidence and refuses a failing run, offline. Its first
       line is your verdict: `Local verify: passed` or

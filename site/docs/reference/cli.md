@@ -853,6 +853,19 @@ Validates a Witness/cilock policy document for schema correctness. An unsigned p
 | `--require-signed` | (none) | `false` | Fail unless the policy is a DSSE envelope with at least one signature (presence only; add `-k` to verify it). |
 | `--format <fmt>` | (none) | `text` | `text` or `json`. `--output`/`-o` are deprecated aliases that print a notice. |
 
+## `cilock policy input <envelope.json>`
+
+Decodes a signed step envelope (the `-o`/`--outfile` of `cilock run` or `cilock attest`) and shows what a Rego rule for that step reads as `input`. Without `--attestor` it lists the step, its subject count, and each attestation with its top-level fields. With `--attestor` it prints exactly that attestation's JSON, the object a rule on that attestor evaluates. A rule reads it as `input.attestation` when the verifier adds cross-step (`attestationsFrom`) or timestamp context, which a platform-signed step always has, and as bare `input` otherwise; read it as the seeded rules do, `pred := object.get(input, "attestation", input)`. An attestor the envelope does not carry is an error that names the ones it does.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--attestor <name>` | (none) | Print one attestation's input: a short name such as `command-run`, or its full type URI. |
+
+```bash
+cilock policy input tests.json
+cilock policy input tests.json --attestor command-run
+```
+
 ## `cilock tools`
 
 > The catalog of detectors cilock knows how to auto-fire (the same source [cilock.dev's tool pages](../tools/) render from). `list` enumerates them, `show` prints one tool's full record, `test-plan` emits a validation plan.
