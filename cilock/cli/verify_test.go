@@ -82,6 +82,7 @@ func TestWriteVSAOutfile(t *testing.T) {
 
 		err := writeVSAOutfile(
 			outPath,
+			map[string]cryptoutil.DigestSet{"out.bin": {cryptoutil.DigestValue{Hash: crypto.SHA256}: "deadbeef"}},
 			buildFakeVerifyResult(slsa.PassedVerificationResult),
 			[]cryptoutil.Signer{signer},
 			nil,
@@ -115,6 +116,7 @@ func TestWriteVSAOutfile(t *testing.T) {
 
 		err := writeVSAOutfile(
 			outPath,
+			map[string]cryptoutil.DigestSet{"out.bin": {cryptoutil.DigestValue{Hash: crypto.SHA256}: "deadbeef"}},
 			buildFakeVerifyResult(slsa.PassedVerificationResult),
 			nil, // no signers
 			nil,
@@ -144,6 +146,7 @@ func TestWriteVSAOutfile(t *testing.T) {
 
 		err := writeVSAOutfile(
 			outPath,
+			map[string]cryptoutil.DigestSet{"out.bin": {cryptoutil.DigestValue{Hash: crypto.SHA256}: "deadbeef"}},
 			buildFakeVerifyResult(slsa.FailedVerificationResult),
 			nil,
 			nil,
@@ -158,6 +161,7 @@ func TestWriteVSAOutfile(t *testing.T) {
 
 		var vsa slsa.VerificationSummary
 		require.NoError(t, json.Unmarshal(stmt.Predicate, &vsa))
+		assert.Equal(t, []string{"FAILED"}, vsa.VerifiedLevels)
 		assert.Equal(t, slsa.FailedVerificationResult, vsa.VerificationResult,
 			"FAILED verifications must still be captured in the emitted VSA — downstream policies may key on this")
 	})
@@ -169,6 +173,7 @@ func TestWriteVSAOutfile(t *testing.T) {
 
 		err := writeVSAOutfile(
 			outPath,
+			map[string]cryptoutil.DigestSet{"out.bin": {cryptoutil.DigestValue{Hash: crypto.SHA256}: "deadbeef"}},
 			buildFakeVerifyResult(slsa.FailedVerificationResult),
 			[]cryptoutil.Signer{signer},
 			nil,

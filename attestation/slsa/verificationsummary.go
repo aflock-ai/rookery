@@ -38,6 +38,8 @@ type ResourceDescriptor struct {
 }
 
 type VerificationSummary struct {
+	ResourceURI        string               `json:"resourceUri"`
+	VerifiedLevels     []string             `json:"verifiedLevels"`
 	Verifier           Verifier             `json:"verifier"`
 	TimeVerified       time.Time            `json:"timeVerified"`
 	Policy             ResourceDescriptor   `json:"policy"`

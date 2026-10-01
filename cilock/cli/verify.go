@@ -25,7 +25,9 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/archivista"
@@ -271,6 +273,15 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	}
 
 	subjects := []cryptoutil.DigestSet{}
+	const fileURIScheme = "file"
+	vsaSubjects := make(map[string]cryptoutil.DigestSet)
+	var resourceURI string
+	addVSASubject := func(name string, digest cryptoutil.DigestSet, uri string) {
+		vsaSubjects[name] = digest
+		if resourceURI == "" {
+			resourceURI = uri
+		}
+	}
 	// suppliedDigests records the algorithm:hex digests the operator asked cilock to
 	// bind (from --directory-path / --artifactfile / --subjects), in supply
 	// order. On a passing verify these drive the "verified: <digest> bound to
@@ -286,6 +297,11 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 
 		log.Infof("subject: sha256:%s (computed from directory %s)", suppliedSHA256(artifactDigestSet), vo.ArtifactDirectoryPath)
 		subjects = append(subjects, artifactDigestSet)
+		absPath, err := filepath.Abs(vo.ArtifactDirectoryPath)
+		if err != nil {
+			return err
+		}
+		addVSASubject(vo.ArtifactDirectoryPath, artifactDigestSet, (&url.URL{Scheme: fileURIScheme, Path: filepath.ToSlash(absPath)}).String())
 		// A directory's digest is a dirhash ("dirHash" in the subject map),
 		// never a plain sha256, so it is bound under its own algorithm name.
 		if names, nerr := artifactDigestSet.ToNameMap(); nerr == nil && names["dirHash"] != "" {
@@ -307,6 +323,11 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 		// verification output — same doctrine as the bound-policy line.
 		log.Infof("subject: sha256:%s (computed from %s)", artifactFileDigestHex, vo.ArtifactFilePath)
 		subjects = append(subjects, artifactDigestSet)
+		absPath, err := filepath.Abs(vo.ArtifactFilePath)
+		if err != nil {
+			return err
+		}
+		addVSASubject(vo.ArtifactFilePath, artifactDigestSet, (&url.URL{Scheme: fileURIScheme, Path: filepath.ToSlash(absPath)}).String())
 		suppliedDigests = append(suppliedDigests, "sha256:"+artifactFileDigestHex)
 	}
 
@@ -316,6 +337,7 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 			return err
 		}
 		subjects = append(subjects, digestSet)
+		addVSASubject(subDigest, digestSet, "urn:"+subDigest)
 		for algorithm, spec := range subjectDigestAlgorithms {
 			if h := digestSet[spec.value]; h != "" {
 				suppliedDigests = append(suppliedDigests, algorithm+":"+h)
@@ -461,7 +483,8 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// A structural artifact-binding failure has no VSA verdict. The workflow's
 	// earlier PASSED summary must not escape as a successful artifact decision.
 	if vo.VSAOutFilePath != "" && artifactBindingErr == nil {
-		if writeErr := writeVSAOutfile(vo.VSAOutFilePath, verifiedEvidence, signers, vo.VSATimestampServers); writeErr != nil {
+		verifiedEvidence.VerificationSummary.ResourceURI = resourceURI
+		if writeErr := writeVSAOutfile(vo.VSAOutFilePath, vsaSubjects, verifiedEvidence, signers, vo.VSATimestampServers); writeErr != nil {
 			// Prefer reporting the verification failure (the more important
 			// signal) but always surface the write failure as well so it is
 			// never silently swallowed.
@@ -644,13 +667,12 @@ func certFingerprint(c *x509.Certificate) string {
 // A failed VSA is legitimately useful — policies may want to inspect that a
 // previous verification FAILED — so this function writes regardless of
 // verification outcome.
-func writeVSAOutfile(path string, evidence workflow.VerifyResult, signers []cryptoutil.Signer, timestampServers []string) error {
-	subjects := map[string]cryptoutil.DigestSet{}
-	for _, sub := range evidence.VerificationSummary.InputAttestations {
-		if sub.URI == "" || len(sub.Digest) == 0 {
-			continue
-		}
-		subjects[sub.URI] = sub.Digest
+func writeVSAOutfile(path string, subjects map[string]cryptoutil.DigestSet, evidence workflow.VerifyResult, signers []cryptoutil.Signer, timestampServers []string) error {
+	evidence.VerificationSummary.Verifier.ID = "https://aflock.ai/cilock/verify@v1"
+	// Generic policy verification does not evaluate a SLSA build level.
+	evidence.VerificationSummary.VerifiedLevels = []string{"SLSA_BUILD_LEVEL_UNEVALUATED"}
+	if evidence.VerificationSummary.VerificationResult == slsa.FailedVerificationResult {
+		evidence.VerificationSummary.VerifiedLevels = []string{"FAILED"}
 	}
 
 	predicateBytes, err := marshalVSAPredicate(evidence)
