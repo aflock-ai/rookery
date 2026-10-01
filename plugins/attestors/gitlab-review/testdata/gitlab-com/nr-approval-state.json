@@ -1,0 +1,169 @@
+{
+  "_source": "gitlab.com (Ultimate, group testifysec/judge-parity-sandbox) projects/87022442/merge_requests/1/approval_state as attestor, 2026-09-29T09:00:46Z",
+  "response": {
+    "approval_rules_overwritten": false,
+    "rules": [
+      {
+        "approvals_required": 1,
+        "approved": false,
+        "approved_by": [],
+        "code_owner": false,
+        "contains_hidden_groups": false,
+        "eligible_approvers": [
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000016,
+            "locked": false,
+            "name": "<name>",
+            "public_email": null,
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000011,
+            "locked": false,
+            "name": "<name>",
+            "public_email": null,
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000003,
+            "locked": false,
+            "name": "<name>",
+            "public_email": "<public_email>",
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000005,
+            "locked": false,
+            "name": "<name>",
+            "public_email": "<public_email>",
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000008,
+            "locked": false,
+            "name": "<name>",
+            "public_email": null,
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000009,
+            "locked": false,
+            "name": "<name>",
+            "public_email": "<public_email>",
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000002,
+            "locked": false,
+            "name": "<name>",
+            "public_email": "<public_email>",
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000012,
+            "locked": false,
+            "name": "<name>",
+            "public_email": "<public_email>",
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000015,
+            "locked": false,
+            "name": "<name>",
+            "public_email": null,
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000007,
+            "locked": false,
+            "name": "<name>",
+            "public_email": "<public_email>",
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000004,
+            "locked": false,
+            "name": "<name>",
+            "public_email": "<public_email>",
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000010,
+            "locked": false,
+            "name": "<name>",
+            "public_email": "<public_email>",
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000013,
+            "locked": false,
+            "name": "<name>",
+            "public_email": "<public_email>",
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          },
+          {
+            "avatar_url": "<avatar_url>",
+            "id": 7000001,
+            "locked": false,
+            "name": "<name>",
+            "public_email": "<public_email>",
+            "state": "active",
+            "username": "<username>",
+            "web_url": "<web_url>"
+          }
+        ],
+        "groups": [],
+        "id": 385795820,
+        "name": "<name>",
+        "overridden": false,
+        "report_type": "any_merge_request",
+        "rule_type": "report_approver",
+        "section": null,
+        "source_rule": {
+          "approvals_required": 1
+        },
+        "users": []
+      }
+    ]
+  },
+  "status": 200
+}

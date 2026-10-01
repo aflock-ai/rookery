@@ -1,6 +1,6 @@
 {
   "generated_from": "registry+detector.yaml",
-  "attestor_count": 149,
+  "attestor_count": 150,
   "attestors": [
     {
       "name": "alps-evidence",
@@ -384,6 +384,60 @@
       "detection": {
         "pre": {
           "env_equals": "GITLAB_CI=true"
+        }
+      }
+    },
+    {
+      "name": "gitlab-review",
+      "predicate_type": "https://aflock.ai/attestations/gitlab-review/v0.1",
+      "run_type": "prematerial",
+      "category": [
+        "code-review"
+      ],
+      "tier": "extended",
+      "upstream": {
+        "name": "GitLab Merge Request Approvals API",
+        "source": "https://docs.gitlab.com/api/merge_request_approvals/",
+        "license": "commercial",
+        "vendor": "GitLab Inc."
+      },
+      "registered": true,
+      "subjects": [
+        {
+          "prefix": "approver:",
+          "description": "each approver, <instance>/<user_id>"
+        },
+        {
+          "prefix": "commitsha:",
+          "description": "the commit attested, sha1"
+        },
+        {
+          "prefix": "mergerequest:",
+          "description": "each merge request, <instance>/<project_id>!<iid>"
+        },
+        {
+          "prefix": "mrhead:",
+          "description": "each reviewed merge request head, sha1"
+        },
+        {
+          "prefix": "project:",
+          "description": "the project, <instance>/<project_id>"
+        }
+      ],
+      "has_contract": true,
+      "applies_when": {
+        "pre": "all_of(env_set:CI_API_V4_URL, env_set:GITLAB_REVIEW_TOKEN)"
+      },
+      "detection": {
+        "pre": {
+          "all_of": [
+            {
+              "env_set": "CI_API_V4_URL"
+            },
+            {
+              "env_set": "GITLAB_REVIEW_TOKEN"
+            }
+          ]
         }
       }
     },

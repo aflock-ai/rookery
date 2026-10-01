@@ -1,0 +1,57 @@
+{
+  "_source": "gitlab.com (Ultimate, group testifysec/judge-parity-sandbox) projects/87019852/merge_requests/1/approvals as attestor, 2026-09-29T08:05:10Z",
+  "response": {
+    "approval_rules_left": [],
+    "approvals_left": 0,
+    "approvals_required": 1,
+    "approved": false,
+    "approved_by": [
+      {
+        "approved_at": "2026-09-29T08:05:01.308Z",
+        "user": {
+          "avatar_url": "<avatar_url>",
+          "id": 7000016,
+          "locked": false,
+          "name": "<name>",
+          "public_email": null,
+          "state": "active",
+          "username": "<username>",
+          "web_url": "<web_url>"
+        }
+      }
+    ],
+    "approver_groups": [],
+    "approvers": [
+      {
+        "user": {
+          "avatar_url": "<avatar_url>",
+          "id": 7000016,
+          "locked": false,
+          "name": "<name>",
+          "public_email": null,
+          "state": "active",
+          "username": "<username>",
+          "web_url": "<web_url>"
+        }
+      }
+    ],
+    "created_at": "2026-09-29T08:04:57.494Z",
+    "description": null,
+    "has_approval_rules": true,
+    "id": 540060339,
+    "iid": 1,
+    "invalid_approvers_rules": [],
+    "merge_request_approvers_available": true,
+    "merge_status": "unchecked",
+    "multiple_approval_rules_available": true,
+    "project_id": 87019852,
+    "require_password_to_approve": false,
+    "state": "opened",
+    "suggested_approvers": [],
+    "title": "binding probe",
+    "updated_at": "2026-09-29T08:04:58.635Z",
+    "user_can_approve": true,
+    "user_has_approved": false
+  },
+  "status": 200
+}

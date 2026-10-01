@@ -1,0 +1,49 @@
+{
+  "name": "gitlab-review",
+  "source": "attestor-backed",
+  "description": "Snapshots GitLab merge request review state for the current commit (approvals bound to the exact sha they approved, approval rules and settings by tier, head pipelines and statuses, unresolved threads) via the GitLab REST API (token: GITLAB_REVIEW_TOKEN, read_api).",
+  "title": "gitlab-review",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "code-review"
+  ],
+  "primaryCategory": "code-review",
+  "upstream": {
+    "name": "GitLab Merge Request Approvals API",
+    "source": "https://docs.gitlab.com/api/merge_request_approvals/",
+    "license": "commercial",
+    "vendor": "GitLab Inc."
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "CI_API_V4_URL"
+    },
+    {
+      "gate": "pre",
+      "kind": "env_set",
+      "value": "GITLAB_REVIEW_TOKEN"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "GitLab merge request review state captured. Each approval carries bound_head_sha: the exact sha it approved, derived from the MR's diff versions; an approval counts only for that sha (count bound approvals for the reviewed head, never GitLab's approved flag). Tier-gated fields the GitLab plan lacks are recorded as unavailable with the reason and never satisfy a requirement. If no merge request brought the commit in, the attestor FAILS and records nothing."
+  },
+  "predicateType": "https://aflock.ai/attestations/gitlab-review/v0.1",
+  "runType": "prematerial",
+  "defaultOn": false,
+  "runExample": null,
+  "detectionCommand": "CI_API_V4_URL=1 cilock plan --format=json -- echo hi",
+  "positiveSetup": "Set env var CI_API_V4_URL (any value)",
+  "negativeSetup": "Run with env var CI_API_V4_URL UNSET",
+  "docSections": [],
+  "hasDoc": false
+}

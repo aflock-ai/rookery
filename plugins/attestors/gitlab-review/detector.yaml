@@ -1,0 +1,60 @@
+apiVersion: cilock.detection/v0.1
+name: gitlab-review
+description: "Snapshots GitLab merge request review state for the current commit (approvals bound to the exact sha they approved, approval rules and settings by tier, head pipelines and statuses, unresolved threads) via the GitLab REST API (token: GITLAB_REVIEW_TOKEN, read_api)."
+
+category: [code-review]
+
+upstream:
+  name: GitLab Merge Request Approvals API
+  source: "https://docs.gitlab.com/api/merge_request_approvals/"
+  license: commercial
+  vendor: GitLab Inc.
+
+recommended_trace: "off"
+
+# Fires in a GitLab CI job that was given a review token. The token's reach is
+# only known at runtime.
+pre:
+  match:
+    all_of:
+      - env_set: CI_API_V4_URL
+      - env_set: GITLAB_REVIEW_TOKEN
+
+llm_hints:
+  on_match: "GitLab merge request review state captured. Each approval carries bound_head_sha: the exact sha it approved, derived from the MR's diff versions; an approval counts only for that sha (count bound approvals for the reviewed head, never GitLab's approved flag). Tier-gated fields the GitLab plan lacks are recorded as unavailable with the reason and never satisfy a requirement. If no merge request brought the commit in, the attestor FAILS and records nothing."
+contract:
+  tier: extended
+  predicate_type: https://aflock.ai/attestations/gitlab-review/v0.1
+  run_type: prematerial
+  stability:
+    level: best-effort
+    notes: "A point-in-time snapshot of mutable GitLab state read over REST: fetched_at is the wall clock at capture, and approvals, rules and discussions change as the MR evolves. bound_head_sha is derived from GitLab's own timestamps (approved_at and diff version created_at), recorded with the clock guard used."
+    volatile_fields: ["fetched_at", "merge_requests"]
+  subjects:
+    - prefix: "commitsha:"
+      description: "the commit attested, sha1"
+    - prefix: "mrhead:"
+      description: "each reviewed merge request head, sha1"
+    - prefix: "project:"
+      description: "the project, <instance>/<project_id>"
+    - prefix: "mergerequest:"
+      description: "each merge request, <instance>/<project_id>!<iid>"
+    - prefix: "approver:"
+      description: "each approver, <instance>/<user_id>"
+  backref_subjects:
+    - "commitsha:"
+    - "mrhead:"
+  schema_required: true
+  credentials:
+    - name: gitlab-review-token
+      type: api-token
+      provided: env
+      env_vars: ["GITLAB_REVIEW_TOKEN"]
+      scopes: ["read_api"]
+      required: true
+  fixtures:
+    # http-mock proof: a REAL merged MR on gitlab.com Ultimate (sandbox
+    # testifysec/judge-parity-sandbox), captured and replayed (see fixture.yaml);
+    # attestation.json was produced by cilock against the live API.
+    - name: merged-exact-sha
+      role: canonical

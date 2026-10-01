@@ -44,6 +44,8 @@ replace github.com/aflock-ai/rookery/plugins/attestors/github => ../plugins/atte
 
 replace github.com/aflock-ai/rookery/plugins/attestors/github-review => ../plugins/attestors/github-review
 
+replace github.com/aflock-ai/rookery/plugins/attestors/gitlab-review => ../plugins/attestors/gitlab-review
+
 replace github.com/aflock-ai/rookery/plugins/attestors/githubaction => ../plugins/attestors/githubaction
 
 replace github.com/aflock-ai/rookery/plugins/attestors/githubwebhook => ../plugins/attestors/githubwebhook
@@ -172,6 +174,7 @@ require (
 	github.com/aflock-ai/rookery/plugins/attestors/githubaction v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/githubwebhook v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/gitlab v0.0.0-00010101000000-000000000000
+	github.com/aflock-ai/rookery/plugins/attestors/gitlab-review v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/go-build v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/govulncheck v0.0.0-00010101000000-000000000000
 	github.com/aflock-ai/rookery/plugins/attestors/inclusion-proof v0.0.0-00010101000000-000000000000

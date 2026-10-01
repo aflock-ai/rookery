@@ -3,6 +3,7 @@
 package file
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/sha256"
 	"encoding/hex"
@@ -148,7 +149,18 @@ func TestAWideTreeDoesNotSpawnAGoroutinePerDirectory(t *testing.T) {
 		}
 	}
 
-	before := runtime.NumGoroutine()
+	// NumGoroutine reads concurrently changing scheduler counters and can
+	// transiently overcount freed goroutines from earlier package tests.
+	// Count complete stack snapshots instead; retain the bound below.
+	stacks := make([]byte, 1<<20)
+	count := func() int {
+		n := runtime.Stack(stacks, true)
+		if n == len(stacks) {
+			return len(stacks) // a truncated snapshot must fail the bound
+		}
+		return bytes.Count(stacks[:n], []byte("\ngoroutine ")) + 1
+	}
+	before := count()
 	peak := before
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
@@ -160,9 +172,10 @@ func TestAWideTreeDoesNotSpawnAGoroutinePerDirectory(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				if n := runtime.NumGoroutine(); n > peak {
+				if n := count(); n > peak {
 					peak = n
 				}
+				runtime.Gosched()
 			}
 		}
 	}()

@@ -24,6 +24,7 @@ Regenerate after adding or renaming an attestor:
 | `gcp-iit` | `plugins/attestors/gcp-iit` | `https://aflock.ai/attestations/gcp-iit/v0.1` |
 | `github-review` | `plugins/attestors/github-review` | `https://aflock.ai/attestations/github-review/v0.1` |
 | `github` | `plugins/attestors/github` | `https://aflock.ai/attestations/github/v0.1` |
+| `gitlab-review` | `plugins/attestors/gitlab-review` | `https://aflock.ai/attestations/gitlab-review/v0.1` |
 | `gitlab` | `plugins/attestors/gitlab` | `https://aflock.ai/attestations/gitlab/v0.1` |
 | `git` | `plugins/attestors/git` | `https://aflock.ai/attestations/git/v0.1` |
 | `instruction-file` | `plugins/attestors/instruction-file` | `https://aflock.ai/attestations/instruction-file/v0.1` |

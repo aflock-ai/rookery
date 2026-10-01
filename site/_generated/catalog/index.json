@@ -1,6 +1,6 @@
 {
   "generatedFrom": "cilock tools show --format json",
-  "count": 148,
+  "count": 149,
   "withDoc": 61,
   "emittedBy": {
     "sbom": [
@@ -781,6 +781,19 @@
       "predicateType": "https://aflock.ai/attestations/gitlab/v0.1",
       "runType": "prematerial",
       "hasDoc": true
+    },
+    {
+      "name": "gitlab-review",
+      "source": "attestor-backed",
+      "categories": [
+        "code-review"
+      ],
+      "primaryCategory": "code-review",
+      "description": "Snapshots GitLab merge request review state for the current commit (approvals bound to the exact sha they approved, approval rules and settings by tier, head pipelines and statuses, unresolved threads) via the GitLab REST API (token: GITLAB_REVIEW_TOKEN, read_api).",
+      "emitsFormats": [],
+      "predicateType": "https://aflock.ai/attestations/gitlab-review/v0.1",
+      "runType": "prematerial",
+      "hasDoc": false
     },
     {
       "name": "gitleaks",

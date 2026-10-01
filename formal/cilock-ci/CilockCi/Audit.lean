@@ -1,4 +1,5 @@
 import CilockCi.Proofs
+import CilockCi.Tier
 import CilockCi.Review
 import CilockCi.Trust
 
@@ -41,3 +42,10 @@ open CilockCi
 #print axioms Review.late_approval_not_counted
 #print axioms Review.parent_sha_approval_fails
 #print axioms Review.tie_unbound
+
+-- Tier: a designed attestor's field above the detected plan
+#print axioms unavailable_never_satisfies
+#print axioms no_requirement_unaffected
+#print axioms unavailable_only_above_plan
+#print axioms failure_is_loud
+#print axioms missing_at_plan_is_loud

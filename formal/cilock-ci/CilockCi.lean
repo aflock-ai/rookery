@@ -4,6 +4,7 @@ import CilockCi.Login
 import CilockCi.Automode
 import CilockCi.Proofs
 import CilockCi.Eval
+import CilockCi.Tier
 import CilockCi.Review
 import CilockCi.Trust
 import CilockCi.Audit

@@ -1,0 +1,32 @@
+[
+  {
+    "body": "approved this merge request",
+    "created_at": "2026-09-29T08:05:03.328Z",
+    "id": 3921971255,
+    "system": true
+  },
+  {
+    "body": "added 1 commit\n\n<ul><li>d7c95a09 - head</li></ul>\n\n[Compare with previous version](/testifysec/judge-parity-sandbox/binding-probe-20260929080449/-/merge_requests/1/diffs?diff_id=2061124250&start_sha=11f971282d4d006bf682b626f3cc5b8795eca8ad)",
+    "created_at": "2026-09-29T08:05:06.625Z",
+    "id": 3921971545,
+    "system": true
+  },
+  {
+    "body": "reset approvals from @<username> by pushing to the branch",
+    "created_at": "2026-09-29T08:05:19.006Z",
+    "id": 3921972732,
+    "system": true
+  },
+  {
+    "body": "approved this merge request",
+    "created_at": "2026-09-29T08:06:59.024Z",
+    "id": 3921981215,
+    "system": true
+  },
+  {
+    "body": "mentioned in commit 5c1a098c9e6fc12a2ef3cb2ac220d5e40725c2ff",
+    "created_at": "2026-09-29T08:07:00.190Z",
+    "id": 3921981313,
+    "system": true
+  }
+]

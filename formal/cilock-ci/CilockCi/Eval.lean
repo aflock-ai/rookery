@@ -3,6 +3,7 @@ import CilockCi.Token
 import CilockCi.Plan
 import CilockCi.Login
 import CilockCi.Automode
+import CilockCi.Tier
 import CilockCi.Review
 import CilockCi.Trust
 
@@ -187,6 +188,25 @@ def evalCase (j : Json) : Except String Json := do
     let k := match jctlAnswerOut a with
       | .session _ => "session" | .markerUnbound => "marker" | .refuse _ => "refuse" | .other _ => "other"
     pure (Json.mkObj [("out", k)])
+  | "tier" =>
+    let plan : String → Except String Plan := fun
+      | "free" => pure .free | "premium" => pure .premium | "ultimate" => pure .ultimate
+      | p => throw s!"unknown plan {p}"
+    let detected ← plan (← str j "detected")
+    let needs ← plan (← str j "needs")
+    let ans : TierAnswer ← match ← str j "answer" with
+      | "ok" => pure (.ok (← nat j "value"))
+      | "tierMissing" => pure .tierMissing
+      | "failure" => pure .failure
+      | a => throw s!"unknown answer {a}"
+    let req : Req := match j.getObjVal? "requireAtLeast" with
+      | .ok (.num n) => .atLeast n.mantissa.toNat
+      | _ => .none
+    match collect detected needs ans with
+    | .error _ => pure (Json.mkObj [("field", "loud")])
+    | .ok f =>
+      let kind := match f with | .observed _ => "observed" | .unavailable _ => "unavailable"
+      pure (Json.mkObj [("field", kind), ("satisfied", satisfied f req)])
   | "ci" =>
     pure (Json.mkObj [("ci", Json.arr ((ciContext (strEnv e)).toArray.map Json.str)), ("provider", providerName p)])
   | f => throw s!"unknown fn {f}"

@@ -1,0 +1,30 @@
+{
+  "_source": "gitlab.com (Ultimate, group testifysec/judge-parity-sandbox) projects/87023380/merge_requests/1/approvals as attestor, 2026-09-29T09:24:32Z",
+  "response": {
+    "approval_rules_left": [],
+    "approvals_left": 0,
+    "approvals_required": 0,
+    "approved": true,
+    "approved_by": [],
+    "approver_groups": [],
+    "approvers": [],
+    "created_at": "2026-09-29T09:22:53.746Z",
+    "description": null,
+    "has_approval_rules": false,
+    "id": 540109028,
+    "iid": 1,
+    "invalid_approvers_rules": [],
+    "merge_request_approvers_available": true,
+    "merge_status": "can_be_merged",
+    "multiple_approval_rules_available": true,
+    "project_id": 87023380,
+    "require_password_to_approve": false,
+    "state": "opened",
+    "suggested_approvers": [],
+    "title": "no rule probe",
+    "updated_at": "2026-09-29T09:22:54.929Z",
+    "user_can_approve": true,
+    "user_has_approved": false
+  },
+  "status": 200
+}

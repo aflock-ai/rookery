@@ -1,0 +1,18 @@
+{
+  "_source": "gitlab.com (Ultimate, group testifysec/judge-parity-sandbox) POST /api/graphql query { project(fullPath: \"testifysec/judge-parity-sandbox/norule-probe-20260929090001\") { mergeRequest(iid: \"1\") { approved approvalsRequired approvalsLeft approvedBy { nodes { id } } } } } as attestor, 2026-09-29T09:00:47Z",
+  "response": {
+    "data": {
+      "project": {
+        "mergeRequest": {
+          "approvalsLeft": 1,
+          "approvalsRequired": 1,
+          "approved": false,
+          "approvedBy": {
+            "nodes": []
+          }
+        }
+      }
+    }
+  },
+  "status": 200
+}
