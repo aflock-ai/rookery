@@ -393,12 +393,26 @@ func TestAdversarial_BackRefsNondeterminism(t *testing.T) {
 func TestAdversarial_LegacyJWTFallback(t *testing.T) {
 	g := newFakeGitLab(t)
 	g.job(t)
-	t.Setenv("CI_JOB_JWT", g.token(t, g.key, "sigstore", "10"))
-
-	a := New()
-	require.NoError(t, attest(t, a))
-	require.NotNil(t, a.JWT, "JWT should be set from this job's legacy CI_JOB_JWT")
-	assert.Equal(t, "10", a.JWT.Claims["job_id"])
+	for _, tc := range []struct {
+		name  string
+		jobID string
+		want  bool
+	}{
+		{name: "current job", jobID: "10", want: true},
+		{name: "another job", jobID: "11", want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CI_JOB_JWT", g.token(t, g.key, "sigstore", tc.jobID))
+			a := New()
+			require.NoError(t, attest(t, a))
+			if tc.want {
+				require.NotNil(t, a.JWT)
+				assert.Equal(t, tc.jobID, a.JWT.Claims["job_id"])
+			} else {
+				assert.Nil(t, a.JWT, "legacy fallback must not record another job's claims")
+			}
+		})
+	}
 }
 
 // =============================================================================
