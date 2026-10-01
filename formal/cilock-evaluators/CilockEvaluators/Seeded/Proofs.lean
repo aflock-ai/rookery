@@ -30,7 +30,8 @@ namespace CilockEvaluators.Seeded
 def ruleIds : List String :=
   ["command-succeeded", "command-pin", "product-recorded", "tests-pass", "sarif-no-errors",
    "secretscan-no-findings", "govulncheck-no-reachable", "govulncheck-vex-covered", "sarif-vex-covered",
-   "trivy-no-blocked-severity", "slsa-provenance", "sbom-inventory", "review-approved", "products-from"]
+   "trivy-no-blocked-severity", "slsa-provenance", "sbom-inventory", "review-approved", "products-from",
+   "trace-present", "trace-network", "trace-exec", "trace-writes", "trace-credential-reads"]
 
 theorem commandSucceeded_empty : commandSucceeded (.obj []) = false := rfl
 theorem commandPin_empty (e : J) : commandPin e (.obj []) = false := rfl
@@ -43,6 +44,11 @@ theorem trivySeverity_empty (b : List String) : trivySeverity b (.obj []) = fals
 theorem slsaProvenance_empty : slsaProvenance (.obj []) = false := rfl
 theorem sbomInventory_empty : sbomInventory (.obj []) = false := rfl
 theorem reviewApproved_empty : reviewApproved (.obj []) = false := rfl
+theorem tracePresent_empty : tracePresent (.obj []) = false := rfl
+theorem traceNetwork_empty (a : List String) : traceNetwork a (.obj []) = false := rfl
+theorem traceExec_empty (a : List String) : traceExec a (.obj []) = false := rfl
+theorem traceWrites_empty (a : List String) : traceWrites a (.obj []) = false := rfl
+theorem traceCredentialReads_empty : traceCredentialReads (.obj []) = false := rfl
 
 theorem govulnScan_empty : govulnScan (.obj []) = none := rfl
 theorem sarifScan_empty : sarifScan (.obj []) = none := rfl
@@ -426,5 +432,121 @@ theorem digestOf_nonempty (l : J) (d : String) (h : digestOf l = some d) : d ≠
   intro he
   subst he
   simp [hexExactly] at hx
+
+theorem traced_iff (p : J) :
+    traced p = true ↔ ∃ ps ph, field p "processes" .null = .arr ps ∧ field p "paths" (.arr []) = .arr ph ∧
+      ps ≠ [] ∧ ∀ x ∈ ps, x.isObj = true := by
+  unfold traced
+  split
+  · rename_i ps ph h1 h2
+    simp [h1, h2, List.isEmpty_iff]
+  · rename_i hne
+    simp only [Bool.false_eq_true, false_iff, not_exists, not_and]
+    intro ps ph h1 h2
+    exact absurd h2 (hne ps ph h1)
+
+theorem tracePresent_iff (p : J) : tracePresent p = true ↔ traced p = true := Iff.rfl
+
+/-- trace-network: every process has an object network record whose
+    connections each pass `connOk` (AF_UNIX, or an allowed address)
+    and whose DNS lookups each name an allowed server. -/
+theorem traceNetwork_sound (a : List String) (p : J) (h : traceNetwork a p = true) :
+    traced p = true ∧ ∀ q ∈ procs p, ∃ net, oget q "network" (.obj []) = some net ∧
+      (∃ cs, elemsOf net "connections" = some cs ∧ ∀ c ∈ cs, connOk a c = true) ∧
+      (∃ ds, elemsOf net "dnsLookups" = some ds ∧ ∀ d ∈ ds, lookupOk a d = true) := by
+  unfold traceNetwork at h
+  simp only [Bool.and_eq_true, List.all_eq_true] at h
+  refine ⟨h.1, fun q hq => ?_⟩
+  have hq' := h.2 q hq
+  split at hq'
+  · rename_i net hn
+    simp only [Bool.and_eq_true] at hq'
+    obtain ⟨h1, h2⟩ := hq'
+    refine ⟨net, hn, ?_, ?_⟩
+    · split at h1
+      · rename_i cs hc; exact ⟨cs, hc, by simpa [List.all_eq_true] using h1⟩
+      · simp at h1
+    · split at h2
+      · rename_i ds hd; exact ⟨ds, hd, by simpa [List.all_eq_true] using h2⟩
+      · simp at h2
+  · simp at hq'
+
+/-- An admitted connection is an object that is AF_UNIX or goes to an
+    allowed IP address (addrOk); its SNI hostname plays no part. -/
+theorem connOk_sound (a : List String) (c : J) (h : connOk a c = true) :
+    c.isObj = true ∧ ((field c "family" (.str "")).isStrEq "AF_UNIX" = true ∨
+      addrOk a (field c "address" (.str "")) = true) := by
+  unfold connOk at h
+  split at h
+  · rename_i fam hf
+    cases c with
+    | obj kvs =>
+      simp only [oget, Option.some.injEq] at hf
+      subst hf
+      simp only [Bool.or_eq_true] at h
+      refine ⟨rfl, ?_⟩
+      simp only [field]
+      rcases h with h1 | h2
+      · exact Or.inl h1
+      · exact Or.inr h2
+    | _ => simp [oget] at hf
+  · simp at h
+
+theorem traceExec_sound (a : List String) (p : J) (h : traceExec a p = true) :
+    traced p = true ∧ ∀ q ∈ procs p,
+      (exePath p q).any (pathOk a) = true ∨
+      (digestSha p (field q "exeDigestId" (.num (-1)))).any (shaOk a) = true ∨
+      (digestSha p (field q "programDigestId" (.num (-1)))).any (shaOk a) = true := by
+  unfold traceExec at h
+  simp only [Bool.and_eq_true, List.all_eq_true, Bool.or_eq_true] at h
+  refine ⟨h.1, fun q hq => ?_⟩
+  rcases (h.2 q hq).2 with (h1 | h2) | h3
+  · exact Or.inl h1
+  · exact Or.inr (Or.inl h2)
+  · exact Or.inr (Or.inr h3)
+
+/-- trace-writes: every touched path is an absolute string with no
+    `.`/`..` segment or `//`, under an allowed prefix, and not inside
+    `.git`. -/
+theorem traceWrites_sound (a : List String) (p : J) (h : traceWrites a p = true) :
+    traced p = true ∧ ∃ xs, touched p = some xs ∧ ∀ x ∈ xs, ∃ s, x = .str s ∧
+      (strStarts s "/" = true ∧ unnormalized s = false) ∧ a.any (strStarts s ·) = true ∧ inGit s = false := by
+  unfold traceWrites at h
+  simp only [Bool.and_eq_true] at h
+  refine ⟨h.1, ?_⟩
+  have h2 := h.2
+  split at h2
+  · rename_i xs hx
+    refine ⟨xs, hx, fun x hxm => ?_⟩
+    simp only [List.all_eq_true] at h2
+    have := h2 x hxm
+    unfold writeOk at this
+    split at this
+    · rename_i s
+      simp only [Bool.and_eq_true, Bool.not_eq_true'] at this
+      exact ⟨s, rfl, this.1.1, this.1.2, this.2⟩
+    · simp at this
+  · simp at h2
+
+/-- trace-credential-reads: every opened path is a normalized absolute
+    string that is not a credential path. -/
+theorem traceCredentialReads_sound (p : J) (h : traceCredentialReads p = true) :
+    traced p = true ∧ ∃ xs, opened p = some xs ∧ ∀ x ∈ xs, ∃ s, x = .str s ∧
+      normalizedAbsolute s = true ∧ sensitive s = false := by
+  unfold traceCredentialReads at h
+  simp only [Bool.and_eq_true] at h
+  refine ⟨h.1, ?_⟩
+  have h2 := h.2
+  split at h2
+  · rename_i xs hx
+    refine ⟨xs, hx, fun x hxm => ?_⟩
+    simp only [List.all_eq_true] at h2
+    have := h2 x hxm
+    split at this
+    · rename_i s
+      simp only [Bool.and_eq_true, Bool.not_eq_true'] at this
+      exact ⟨s, rfl, this.1, this.2⟩
+    · simp at this
+  · simp at h2
 
 end CilockEvaluators.Seeded

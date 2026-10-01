@@ -43,6 +43,7 @@ type templateOptions struct {
 	output           string
 	sbomFormat       string
 	platformURL      string
+	traced           bool
 	withVEX          bool
 	force            bool
 	now              func() time.Time
@@ -92,7 +93,8 @@ Run 'cilock policy guide' for what each goal, attestor and rule means, and
   # Chain: a test step whose materials must be the build step's products
   cilock policy template -p .pushgate/policy.json --add-step test-built --goal tests --artifacts-from app-build
 
-`,
+  # Traced build with network, exec, write and credential-read rules to fill
+  cilock policy template --goal app-build --traced`,
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -112,6 +114,7 @@ Run 'cilock policy guide' for what each goal, attestor and rule means, and
 	f.StringVarP(&o.output, "output", "o", defaultDraftPath, "Write a new draft to this file")
 	f.StringVar(&o.sbomFormat, "sbom-format", "", "For the sbom goal: cyclonedx or spdx (the step's type must match the SBOM the command writes)")
 	f.StringVar(&o.platformURL, "platform-url", "", "Platform whose enrolled agent the functionary names (default: the cilock default platform)")
+	f.BoolVar(&o.traced, "traced", false, "Add the tracing rules (trace-present, trace-network, trace-exec, trace-writes, trace-credential-reads) to each new step")
 	f.BoolVar(&o.withVEX, "with-vex", false, "For the vulns goal: add a vex step and require its OpenVEX statements to cover every finding")
 	f.BoolVar(&o.force, "force", false, "Overwrite an existing file when creating a draft")
 	return cmd
@@ -182,7 +185,7 @@ func templateAddStep(out io.Writer, o templateOptions) error {
 	if len(o.goals) > 1 {
 		return errors.New("--add-step adds one step: pass at most one --goal (and any number of --attestor)")
 	}
-	if len(o.goals) == 0 && len(o.attestors) == 0 && len(o.rules) == 0 {
+	if len(o.goals) == 0 && len(o.attestors) == 0 && len(o.rules) == 0 && !o.traced {
 		return fmt.Errorf("say what step %s requires. Next: add --goal <id> or --attestor <name> (e.g. --attestor command-run for a custom script)", o.addStep)
 	}
 	doc, err := loadDraft(o.policyPath)
@@ -254,6 +257,11 @@ func addGoalSteps(doc draftDoc, id enrolledIdentity, stepName, goalID string, o 
 	}
 	if err := p.addAttestors(o.attestors); err != nil {
 		return nil, err
+	}
+	if o.traced {
+		for _, r := range traceRuleIDs {
+			p.addRule(typeCommandRun, r)
+		}
 	}
 	if err := p.addRuleSpecs(steps, o.rules); err != nil {
 		return nil, err

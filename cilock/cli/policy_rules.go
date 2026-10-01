@@ -17,6 +17,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"regexp"
 	"sort"
 	"strings"
@@ -56,6 +57,11 @@ const (
 	ruleSBOMInventory        = "sbom-inventory"
 	ruleReviewApproved       = "review-approved"
 	ruleProductsFrom         = "products-from"
+	ruleTracePresent         = "trace-present"
+	ruleTraceNetwork         = "trace-network"
+	ruleTraceExec            = "trace-exec"
+	ruleTraceWrites          = "trace-writes"
+	ruleTraceSensitiveReads  = "trace-credential-reads"
 )
 
 // Predicate types the seeded rules attach to: each is the type its attestor
@@ -152,6 +158,27 @@ var ruleTemplates = map[string]ruleTemplate{
 		Param:   "JSON string: the upstream step name (template fills it from --attestations-from)",
 		Example: `"build"`,
 		build:   buildProductsFrom},
+	ruleTracePresent: {ID: ruleTracePresent, Type: typeCommandRun,
+		Summary: "the command ran traced: command-run carries processes[]",
+		build:   fixedModule(tracePresentModule)},
+	ruleTraceNetwork: {ID: ruleTraceNetwork, Type: typeCommandRun,
+		Summary: "every non-AF_UNIX connection and DNS lookup goes to an allowed IP address (the SNI hostname is client-asserted and admits nothing)",
+		Param:   "JSON array of allowed IP addresses; [] means no network at all",
+		Example: `["10.0.0.53","172.16.4.10"]`,
+		build:   buildTraceNetworkAllowlist},
+	ruleTraceExec: {ID: ruleTraceExec, Type: typeCommandRun,
+		Summary: "every traced process ran an allowed executable, by path or by sha256 of its image",
+		Param:   "JSON array of executable paths and/or sha256 hex digests",
+		Example: `["/usr/local/go/bin/go","/usr/bin/git"]`,
+		build:   buildTraceExecAllowlist},
+	ruleTraceWrites: {ID: ruleTraceWrites, Type: typeCommandRun,
+		Summary: "every write, rename, delete and chmod lands under an allowed path prefix, and none inside .git",
+		Param:   "JSON array of absolute path prefixes writes may land under (the workspace, a temp dir, /dev/null)",
+		Example: `["/home/runner/work/app/app/","/tmp/","/dev/null"]`,
+		build:   buildTraceWritesAllowlist},
+	ruleTraceSensitiveReads: {ID: ruleTraceSensitiveReads, Type: typeCommandRun,
+		Summary: "no traced process opened a credential path (~/.ssh, ~/.aws, ~/.config/gcloud, ~/.kube/config, ~/.docker/config.json, .netrc, .git-credentials, ~/.gnupg, private keys and *.pem outside the public system CA stores)",
+		build:   fixedModule(traceCredentialReadsModule)},
 }
 
 func fixedModule(src string) func(json.RawMessage) (string, error) {
@@ -223,6 +250,8 @@ func buildCommandPin(param json.RawMessage) (string, error) {
 	return strings.Replace(commandPinModule, "__ARGV__", lit, 1), nil
 }
 
+var traceRuleIDs = []string{ruleTracePresent, ruleTraceNetwork, ruleTraceExec, ruleTraceWrites, ruleTraceSensitiveReads}
+
 // trivySeverityUnknown is trivy's severity for a finding it could not rate.
 const trivySeverityUnknown = "unknown"
 
@@ -249,6 +278,71 @@ func buildTrivySeverity(param json.RawMessage) (string, error) {
 		return "", err
 	}
 	return strings.Replace(trivySeverityModule, "__SEVERITIES__", lit, 1), nil
+}
+
+func buildTraceAllowlist(src string) func(json.RawMessage) (string, error) {
+	return func(param json.RawMessage) (string, error) {
+		list, err := decodeStringList(param, true)
+		if err != nil {
+			return "", err
+		}
+		lit, err := regoLiteral(list)
+		if err != nil {
+			return "", err
+		}
+		return strings.Replace(src, "__ALLOWED__", lit, 1), nil
+	}
+}
+
+// buildTraceNetworkAllowlist is buildTraceAllowlist for IP addresses only:
+// the SNI hostname is client-asserted, and the attestor's
+// "(host-not-observable)" placeholder names no destination, so neither can
+// be an entry.
+func buildTraceNetworkAllowlist(param json.RawMessage) (string, error) {
+	list, err := decodeStringList(param, true)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range list {
+		if net.ParseIP(e) == nil {
+			return "", fmt.Errorf("trace-network allows IP addresses only; %q is not one (a hostname is client-asserted SNI the trace cannot verify, and (host-not-observable) names no destination)", e)
+		}
+	}
+	return buildTraceAllowlist(traceNetworkModule)(param)
+}
+
+var sha256HexRe = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// buildTraceExecAllowlist is buildTraceAllowlist for absolute executable
+// paths and lowercase sha256 hex digests only: anything else could match
+// neither a recorded path nor a recorded digest, or both.
+func buildTraceExecAllowlist(param json.RawMessage) (string, error) {
+	list, err := decodeStringList(param, true)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range list {
+		if !strings.HasPrefix(e, "/") && !sha256HexRe.MatchString(e) {
+			return "", fmt.Errorf("trace-exec allows absolute paths and sha256 digests only; %q is neither", e)
+		}
+	}
+	return buildTraceAllowlist(traceExecModule)(param)
+}
+
+// buildTraceWritesAllowlist is buildTraceAllowlist for absolute path
+// prefixes only: a relative prefix would admit a relative write, whose
+// destination the .git test cannot see.
+func buildTraceWritesAllowlist(param json.RawMessage) (string, error) {
+	list, err := decodeStringList(param, true)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range list {
+		if !strings.HasPrefix(e, "/") {
+			return "", fmt.Errorf("trace-writes allows absolute path prefixes only; %q is not one", e)
+		}
+	}
+	return buildTraceAllowlist(traceWritesModule)(param)
 }
 
 func buildProductsFrom(param json.RawMessage) (string, error) {
@@ -1047,5 +1141,319 @@ deny[msg] {
 	valid_digest(d)
 	not upstream_digests[d]
 	msg := sprintf("products-from: %v is not, by digest, a product of step %v", [field(l, "path", "an unnamed product"), upstream])
+}
+`
+
+// tracedProcesses is the readable-trace prelude every tracing rule shares.
+const tracedProcesses = `procs := object.get(pred, "processes", null)
+
+paths := object.get(pred, "paths", [])
+
+traced {
+	is_array(procs)
+	count(procs) > 0
+	is_array(paths)
+	not untyped_process
+}
+
+untyped_process { p := procs[_]; not is_object(p) }
+
+path_at(i) = x { x := paths[i] }
+
+# A record whose path index the paths table does not resolve names nothing
+# a rule could judge: unreadable evidence, never an empty path.
+unresolved(i) { not paths[i] }
+
+# A collection field that is present but not an array has no elements for
+# the rules to iterate, so a boolean there would hide every record.
+not_array(x, k) { v := object.get(x, k, []); not is_array(v) }
+
+pid(p) = x { x := object.get(p, "processid", "unknown") }
+
+# A "." or ".." segment or an empty one: a prefix test is on the text, so
+# /work/../etc would pass a /work/ prefix and /etc/ssl/certs/../private a
+# certificate store's.
+unnormalized(x) { contains(x, "/../") }
+
+unnormalized(x) { endswith(x, "/..") }
+
+unnormalized(x) { contains(x, "/./") }
+
+unnormalized(x) { endswith(x, "/.") }
+
+unnormalized(x) { contains(x, "//") }
+
+deny[msg] {
+	not traced
+	msg := "untraced evidence: command-run carries no processes; record the step with cilock run --trace"
+}
+`
+
+const tracePresentModule = `package trace_present
+
+` + predRead + `
+` + tracedProcesses
+
+const traceNetworkModule = `package trace_network
+
+` + predRead + `
+allowed := {a | a := __ALLOWED__[_]}
+
+` + tracedProcesses + `
+connection[c] {
+	p := procs[_]
+	c := object.get(object.get(p, "network", {}), "connections", [])[_]
+}
+
+lookup[d] {
+	p := procs[_]
+	d := object.get(object.get(p, "network", {}), "dnsLookups", [])[_]
+}
+
+internet(c) { object.get(c, "family", "") != "AF_UNIX" }
+
+# The address is what the kernel connected to. The SNI hostname is whatever
+# the client wrote into its ClientHello, and the trace binds it to nothing
+# (a DNS lookup records only the server asked), so it admits nothing and is
+# reported for the reader. Only an IP address names a destination: the
+# attestor's "(host-not-observable)" placeholder, or any other string, admits
+# nothing whatever the allowlist says.
+ip_like(a) { regex.match("^[0-9.]+$", a) }
+
+ip_like(a) { contains(a, ":"); regex.match("^[0-9a-fA-F:.]+$", a) }
+
+permitted_address(a) { ip_like(a); allowed[a] }
+
+permitted(c) { permitted_address(object.get(c, "address", "")) }
+
+deny[msg] {
+	traced
+	p := procs[_]
+	k := ["connections", "dnsLookups"][_]
+	not_array(object.get(p, "network", {}), k)
+	msg := sprintf("unreadable evidence: process %v's network.%v is not an array", [pid(p), k])
+}
+
+deny[msg] {
+	traced
+	c := connection[_]
+	internet(c)
+	not permitted(c)
+	msg := sprintf("network: %v to %v port %v (SNI %v, client-asserted) is not in the allowlist", [object.get(c, "syscall", "a connection"), object.get(c, "address", "an unobserved address"), object.get(c, "port", 0), object.get(c, "hostname", "none")])
+}
+
+deny[msg] {
+	traced
+	d := lookup[_]
+	not permitted_address(object.get(d, "serverAddress", ""))
+	msg := sprintf("network: DNS lookup via %v is not in the allowlist", [object.get(d, "serverAddress", "an unknown server")])
+}
+`
+
+const traceExecModule = `package trace_exec
+
+` + predRead + `
+allowed := {a | a := __ALLOWED__[_]}
+
+digests := object.get(pred, "digests", [])
+
+` + tracedProcesses + `
+exe_path(p) = x { i := object.get(p, "execPathId", -1); i >= 0; x := paths[i] }
+
+exe_sha(p) = x { i := object.get(p, "exeDigestId", -1); i >= 0; x := digests[i].digests.sha256 }
+
+program_sha(p) = x { i := object.get(p, "programDigestId", -1); i >= 0; x := digests[i].digests.sha256 }
+
+# A path entry admits only a path and a digest entry only a sha256, so a
+# digest record whose "sha256" is an allowed path admits nothing.
+allowed_path(x) { startswith(x, "/"); allowed[x] }
+
+allowed_sha(x) { regex.match("^[0-9a-f]{64}$", x); allowed[x] }
+
+permitted(p) { allowed_path(exe_path(p)) }
+
+permitted(p) { allowed_sha(exe_sha(p)) }
+
+permitted(p) { allowed_sha(program_sha(p)) }
+
+describe(p) = x { x := exe_path(p) }
+
+describe(p) = "an unrecorded executable" { not exe_path(p) }
+
+deny[msg] {
+	traced
+	p := procs[_]
+	not permitted(p)
+	msg := sprintf("exec: process %v ran %v, which is not in the allowlist", [object.get(p, "processid", "unknown"), describe(p)])
+}
+`
+
+const traceWritesModule = `package trace_writes
+
+` + predRead + `
+prefixes := __ALLOWED__
+
+` + tracedProcesses + `
+file_ops(p) = ops { ops := object.get(p, "fileOps", {}) }
+
+touched[x] { p := procs[_]; w := object.get(file_ops(p), "writes", [])[_]; x := object.get(w, "path", "") }
+
+touched[x] { p := procs[_]; r := object.get(file_ops(p), "renames", [])[_]; x := object.get(r, "oldPath", "") }
+
+touched[x] { p := procs[_]; r := object.get(file_ops(p), "renames", [])[_]; x := object.get(r, "newPath", "") }
+
+touched[x] { p := procs[_]; d := object.get(file_ops(p), "deletes", [])[_]; x := object.get(d, "path", "") }
+
+touched[x] { p := procs[_]; c := object.get(file_ops(p), "permChanges", [])[_]; x := object.get(c, "path", "") }
+
+touched[x] { p := procs[_]; f := object.get(p, "writtenFiles", [])[_]; x := path_at(object.get(f, "pathId", -1)) }
+
+deny[msg] {
+	traced
+	p := procs[_]
+	k := ["writes", "renames", "deletes", "permChanges"][_]
+	not_array(file_ops(p), k)
+	msg := sprintf("unreadable evidence: process %v's fileOps.%v is not an array", [pid(p), k])
+}
+
+deny[msg] {
+	traced
+	p := procs[_]
+	not_array(p, "writtenFiles")
+	msg := sprintf("unreadable evidence: process %v's writtenFiles is not an array", [pid(p)])
+}
+
+deny[msg] {
+	traced
+	p := procs[_]
+	f := object.get(p, "writtenFiles", [])[_]
+	i := object.get(f, "pathId", -1)
+	unresolved(i)
+	msg := sprintf("unreadable evidence: process %v wrote path index %v, which the trace does not record", [pid(p), i])
+}
+
+inside(x) { pre := prefixes[_]; startswith(x, pre) }
+
+in_git(x) { contains(x, "/.git/") }
+
+in_git(x) { endswith(x, "/.git") }
+
+deny[msg] {
+	traced
+	x := touched[_]
+	not is_string(x)
+	msg := sprintf("unreadable evidence: a traced write path is %v, not a string", [x])
+}
+
+# A relative path names no destination the prefix and .git tests could judge.
+deny[msg] {
+	traced
+	x := touched[_]
+	is_string(x)
+	not startswith(x, "/")
+	msg := sprintf("writes: %v is not an absolute path", [x])
+}
+
+deny[msg] {
+	traced
+	x := touched[_]
+	is_string(x)
+	not inside(x)
+	msg := sprintf("writes: %v was modified outside the allowed paths", [x])
+}
+
+deny[msg] {
+	traced
+	x := touched[_]
+	is_string(x)
+	unnormalized(x)
+	msg := sprintf("writes: %v is not normalized", [x])
+}
+
+deny[msg] {
+	traced
+	x := touched[_]
+	is_string(x)
+	in_git(x)
+	msg := sprintf("writes: %v is inside .git", [x])
+}
+`
+
+const traceCredentialReadsModule = `package trace_credential_reads
+
+` + predRead + `
+` + tracedProcesses + `
+opened[x] { p := procs[_]; f := object.get(p, "openedFiles", [])[_]; x := path_at(object.get(f, "pathId", -1)) }
+
+opened[x] { p := procs[_]; u := object.get(p, "unhashedOpens", [])[_]; x := path_at(object.get(u, "pathId", -1)) }
+
+deny[msg] {
+	traced
+	p := procs[_]
+	k := ["openedFiles", "unhashedOpens"][_]
+	not_array(p, k)
+	msg := sprintf("unreadable evidence: process %v's %v is not an array", [pid(p), k])
+}
+
+deny[msg] {
+	traced
+	p := procs[_]
+	k := ["openedFiles", "unhashedOpens"][_]
+	f := object.get(p, k, [])[_]
+	i := object.get(f, "pathId", -1)
+	unresolved(i)
+	msg := sprintf("unreadable evidence: process %v opened path index %v, which the trace does not record", [pid(p), i])
+}
+
+credential_dirs := ["/.ssh/", "/.aws/", "/.config/gcloud/", "/.azure/", "/.gnupg/", "/.docker/config.json", "/.kube/config", "/.netrc", "/.git-credentials", "/.npmrc", "/.pypirc"]
+
+# The public certificate stores only: /etc/ssl/private and the like hold
+# keys. A directory exempts a normalized path under it; a bundle file is
+# matched exactly, so /etc/ssl/cert.pem.key is a key.
+system_ca_dirs := ["/etc/ssl/certs/", "/etc/pki/tls/certs/", "/etc/pki/ca-trust/", "/usr/share/ca-certificates/", "/private/etc/ssl/certs/", "/usr/local/etc/openssl/certs/", "/usr/local/etc/openssl@3/certs/", "/usr/local/etc/ca-certificates/", "/opt/homebrew/etc/openssl@3/certs/", "/opt/homebrew/etc/ca-certificates/"]
+
+system_ca_files := ["/etc/ssl/cert.pem", "/private/etc/ssl/cert.pem", "/usr/local/etc/openssl/cert.pem", "/usr/local/etc/openssl@3/cert.pem", "/opt/homebrew/etc/openssl@3/cert.pem"]
+
+system_store(x) { startswith(x, system_ca_dirs[_]); not unnormalized(x) }
+
+system_store(x) { x == system_ca_files[_] }
+
+sensitive(x) { contains(x, credential_dirs[_]) }
+
+sensitive(x) { endswith(x, ".pem"); not system_store(x) }
+
+sensitive(x) { endswith(x, ".key"); not system_store(x) }
+
+sensitive(x) { contains(x, "/id_rsa") }
+
+sensitive(x) { contains(x, "/id_ed25519") }
+
+sensitive(x) { contains(x, "/id_ecdsa") }
+
+deny[msg] {
+	traced
+	x := opened[_]
+	not is_string(x)
+	msg := sprintf("unreadable evidence: a traced open path is %v, not a string", [x])
+}
+
+# A path with a "." or ".." segment, or a relative one, resolves to a file
+# none of the substring checks see.
+deny[msg] {
+	traced
+	x := opened[_]
+	is_string(x)
+	not normalized_absolute(x)
+	msg := sprintf("reads: %v is not a normalized absolute path", [x])
+}
+
+normalized_absolute(x) { startswith(x, "/"); not unnormalized(x) }
+
+deny[msg] {
+	traced
+	x := opened[_]
+	is_string(x)
+	sensitive(x)
+	msg := sprintf("reads: a traced process opened %v, a credential path", [x])
 }
 `

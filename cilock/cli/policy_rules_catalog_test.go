@@ -298,6 +298,157 @@ func TestSARIFVEXCoverage(t *testing.T) {
 	require.NoError(t, evalRule(t, ruleSARIFNoErrors, "", finished, nil))
 }
 
+// v02 builds a traced command-run predicate the way v2_marshal.go interns it.
+func v02(procs []map[string]any, paths []string, digests []string) map[string]any {
+	ps := make([]any, 0, len(procs))
+	for _, p := range procs {
+		ps = append(ps, p)
+	}
+	pl := make([]any, 0, len(paths))
+	for _, p := range paths {
+		pl = append(pl, p)
+	}
+	dl := make([]any, 0, len(digests))
+	for _, d := range digests {
+		dl = append(dl, map[string]any{"digests": map[string]any{"sha256": d}})
+	}
+	return map[string]any{"exitcode": 0, "cmd": []any{"make"}, "processes": ps, "paths": pl, "digests": dl}
+}
+
+const hex64 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+func TestTraceRules(t *testing.T) {
+	paths := []string{"/usr/bin/make", "/work/app/out.o", "/home/u/.ssh/id_ed25519", "/work/app/.git/config", "/etc/ssl/cert.pem", "/etc/ssl/private/server.key", "/etc/ssl/certs/ca-bundle.pem", "/etc/ssl/cert.pem.key", "/etc/ssl/certs/../private/server.key", "/home/u/.kube/./config", "home/u/.netrc"}
+	proc := func(extra map[string]any) map[string]any {
+		p := map[string]any{"processid": 7, "execPathId": 0, "exeDigestId": 0, "programDigestId": 0}
+		for k, v := range extra {
+			p[k] = v
+		}
+		return p
+	}
+
+	t.Run("untraced evidence refused", func(t *testing.T) {
+		requireDenied(t, evalRule(t, ruleTracePresent, "", map[string]any{"exitcode": 0, "processes": nil}, nil), "untraced evidence")
+		for id, param := range map[string]string{ruleTraceNetwork: `["10.0.0.1"]`, ruleTraceExec: `["/x"]`, ruleTraceWrites: `["/x"]`} {
+			requireDenied(t, evalRule(t, id, param, map[string]any{"exitcode": 0}, nil), "untraced evidence")
+		}
+		requireDenied(t, evalRule(t, ruleTraceSensitiveReads, "", map[string]any{"exitcode": 0}, nil), "untraced evidence")
+		require.NoError(t, evalRule(t, ruleTracePresent, "", v02([]map[string]any{proc(nil)}, paths, []string{"d0"}), nil))
+	})
+
+	t.Run("network call refused", func(t *testing.T) {
+		conn := map[string]any{"network": map[string]any{"connections": []any{
+			map[string]any{"syscall": "connect", "family": "AF_INET", "address": "93.184.216.34", "port": 443, "hostname": "evil.example"},
+			map[string]any{"syscall": "connect", "family": "AF_UNIX", "address": "/var/run/nscd"},
+		}}}
+		pred := v02([]map[string]any{proc(conn)}, paths, []string{"d0"})
+		requireDenied(t, evalRule(t, ruleTraceNetwork, `["10.0.0.1"]`, pred, nil), "93.184.216.34 port 443 (SNI evil.example, client-asserted) is not in the allowlist")
+		// The SNI is whatever the client wrote into its ClientHello; the trace
+		// binds it to nothing (DNS lookups record only the server), so a
+		// connection to an attacker's address with an allowed SNI is refused.
+		_, err := renderRule(ruleTraceNetwork, json.RawMessage(`["evil.example"]`))
+		require.ErrorContains(t, err, "IP addresses only", "the SNI cannot be allowlisted at all")
+		require.NoError(t, evalRule(t, ruleTraceNetwork, `["93.184.216.34"]`, pred, nil), "the kernel-observed address admits; AF_UNIX is not network")
+		// Codex round 1 on #10908: the allowlist is IP addresses only, so the
+		// attestor's placeholder for a destination it could not observe can
+		// never be allowlisted, and an observed address that is not an IP
+		// admits nothing even if it were.
+		_, err = renderRule(ruleTraceNetwork, json.RawMessage(`["(host-not-observable)"]`))
+		require.ErrorContains(t, err, "IP addresses only")
+		_, err = renderRule(ruleTraceNetwork, json.RawMessage(`["proxy.golang.org"]`))
+		require.ErrorContains(t, err, "IP addresses only")
+		unobserved := map[string]any{"network": map[string]any{"connections": []any{
+			map[string]any{"syscall": "connect", "family": "AF_INET", "address": "(host-not-observable)", "port": 0},
+		}}}
+		requireDenied(t, evalRule(t, ruleTraceNetwork, `["93.184.216.34"]`, v02([]map[string]any{proc(unobserved)}, paths, []string{"d0"}), nil), "(host-not-observable) port 0")
+		dns := map[string]any{"network": map[string]any{"dnsLookups": []any{map[string]any{"serverAddress": "8.8.8.8", "serverPort": 53}}}}
+		requireDenied(t, evalRule(t, ruleTraceNetwork, `[]`, v02([]map[string]any{proc(dns)}, paths, []string{"d0"}), nil), "DNS lookup via 8.8.8.8")
+	})
+
+	t.Run("unexpected executable refused", func(t *testing.T) {
+		pred := v02([]map[string]any{proc(nil), proc(map[string]any{"processid": 8, "execPathId": -1, "exeDigestId": -1, "programDigestId": -1})}, paths, []string{hex64})
+		requireDenied(t, evalRule(t, ruleTraceExec, `["/usr/bin/make"]`, pred, nil), "process 8 ran an unrecorded executable")
+		only := v02([]map[string]any{proc(nil)}, paths, []string{hex64})
+		require.NoError(t, evalRule(t, ruleTraceExec, `["/usr/bin/make"]`, only, nil))
+		require.NoError(t, evalRule(t, ruleTraceExec, `["`+hex64+`"]`, only, nil), "an allowed image digest admits")
+		// Codex round 2 on #10908: a path entry admits only a path, a digest
+		// entry only a sha256; evidence whose "digest" is an allowed path
+		// admits nothing, and the allowlist takes nothing else.
+		forged := v02([]map[string]any{{"processid": 9, "execPathId": 1, "exeDigestId": 0, "programDigestId": 0}}, []string{"/usr/bin/make", "/tmp/unapproved"}, []string{"/usr/bin/make"})
+		requireDenied(t, evalRule(t, ruleTraceExec, `["/usr/bin/make"]`, forged, nil), "process 9 ran /tmp/unapproved")
+		_, err := renderRule(ruleTraceExec, json.RawMessage(`["d0"]`))
+		require.ErrorContains(t, err, "absolute paths and sha256 digests only")
+		requireDenied(t, evalRule(t, ruleTraceExec, `["/usr/bin/cc"]`, only, nil), "process 7 ran /usr/bin/make")
+	})
+
+	t.Run("writes outside the workspace or into .git refused", func(t *testing.T) {
+		ok := map[string]any{"fileOps": map[string]any{"writes": []any{map[string]any{"path": "/work/app/out.o"}}}}
+		require.NoError(t, evalRule(t, ruleTraceWrites, `["/work/app/"]`, v02([]map[string]any{proc(ok)}, paths, []string{"d0"}), nil))
+		gitw := map[string]any{"fileOps": map[string]any{"renames": []any{map[string]any{"oldPath": "/work/app/x", "newPath": "/work/app/.git/config"}}}}
+		requireDenied(t, evalRule(t, ruleTraceWrites, `["/work/app/"]`, v02([]map[string]any{proc(gitw)}, paths, []string{"d0"}), nil), "/work/app/.git/config is inside .git")
+		// Codex round 3 on #10908: a relative path has no known destination,
+		// so neither the prefix test nor the .git test can judge it; the
+		// allowlist takes absolute prefixes only.
+		rel := map[string]any{"fileOps": map[string]any{"writes": []any{map[string]any{"path": ".git/config"}}}}
+		requireDenied(t, evalRule(t, ruleTraceWrites, `["/work/app/"]`, v02([]map[string]any{proc(rel)}, paths, []string{"d0"}), nil), "writes: .git/config is not an absolute path")
+		_, err := renderRule(ruleTraceWrites, json.RawMessage(`["."]`))
+		require.ErrorContains(t, err, "absolute path prefixes only")
+		out := map[string]any{"writtenFiles": []any{map[string]any{"pathId": 2, "digestId": 0}}}
+		requireDenied(t, evalRule(t, ruleTraceWrites, `["/work/app/"]`, v02([]map[string]any{proc(out)}, paths, []string{"d0"}), nil), "/home/u/.ssh/id_ed25519 was modified outside")
+	})
+
+	// Codex round 3 on #10195: a collection the rules iterate that is not an
+	// array yields nothing to refuse, and a path index the table does not
+	// resolve became "", which nothing refuses either. Both are unreadable
+	// evidence.
+	t.Run("a collection that is not an array is unreadable", func(t *testing.T) {
+		net := map[string]any{"network": map[string]any{"connections": false}}
+		requireDenied(t, evalRule(t, ruleTraceNetwork, `[]`, v02([]map[string]any{proc(net)}, paths, []string{"d0"}), nil), "unreadable evidence: process 7's network.connections is not an array")
+		dns := map[string]any{"network": map[string]any{"dnsLookups": "none"}}
+		requireDenied(t, evalRule(t, ruleTraceNetwork, `[]`, v02([]map[string]any{proc(dns)}, paths, []string{"d0"}), nil), "unreadable evidence: process 7's network.dnsLookups is not an array")
+		ops := map[string]any{"fileOps": map[string]any{"writes": false}}
+		requireDenied(t, evalRule(t, ruleTraceWrites, `["/work/app/"]`, v02([]map[string]any{proc(ops)}, paths, []string{"d0"}), nil), "unreadable evidence: process 7's fileOps.writes is not an array")
+		wf := map[string]any{"writtenFiles": map[string]any{}}
+		requireDenied(t, evalRule(t, ruleTraceWrites, `["/work/app/"]`, v02([]map[string]any{proc(wf)}, paths, []string{"d0"}), nil), "unreadable evidence: process 7's writtenFiles is not an array")
+		of := map[string]any{"openedFiles": false}
+		requireDenied(t, evalRule(t, ruleTraceSensitiveReads, "", v02([]map[string]any{proc(of)}, paths, []string{"d0"}), nil), "unreadable evidence: process 7's openedFiles is not an array")
+		uh := map[string]any{"unhashedOpens": 3}
+		requireDenied(t, evalRule(t, ruleTraceSensitiveReads, "", v02([]map[string]any{proc(uh)}, paths, []string{"d0"}), nil), "unreadable evidence: process 7's unhashedOpens is not an array")
+	})
+
+	t.Run("a path index the trace does not record is unreadable", func(t *testing.T) {
+		of := map[string]any{"openedFiles": []any{map[string]any{"pathId": 99, "digestId": 0}}}
+		requireDenied(t, evalRule(t, ruleTraceSensitiveReads, "", v02([]map[string]any{proc(of)}, paths, []string{"d0"}), nil), "unreadable evidence: process 7 opened path index 99, which the trace does not record")
+		uh := map[string]any{"unhashedOpens": []any{map[string]any{}}}
+		requireDenied(t, evalRule(t, ruleTraceSensitiveReads, "", v02([]map[string]any{proc(uh)}, paths, []string{"d0"}), nil), "unreadable evidence: process 7 opened path index -1, which the trace does not record")
+		wf := map[string]any{"writtenFiles": []any{map[string]any{"pathId": "1"}}}
+		requireDenied(t, evalRule(t, ruleTraceWrites, `["/work/app/"]`, v02([]map[string]any{proc(wf)}, paths, []string{"d0"}), nil), "unreadable evidence: process 7 wrote path index 1, which the trace does not record")
+	})
+
+	t.Run("credential reads refused, CA bundles are not credentials", func(t *testing.T) {
+		read := map[string]any{"openedFiles": []any{map[string]any{"pathId": 2, "digestId": 0}}}
+		requireDenied(t, evalRule(t, ruleTraceSensitiveReads, "", v02([]map[string]any{proc(read)}, paths, []string{"d0"}), nil), "opened /home/u/.ssh/id_ed25519")
+		ca := map[string]any{"openedFiles": []any{map[string]any{"pathId": 4, "digestId": 0}, map[string]any{"pathId": 6, "digestId": 0}}}
+		require.NoError(t, evalRule(t, ruleTraceSensitiveReads, "", v02([]map[string]any{proc(ca)}, paths, []string{"d0"}), nil))
+		// Codex round 4 on #10195: the exemption is the public certificate
+		// stores, not every file under /etc/ssl.
+		key := map[string]any{"openedFiles": []any{map[string]any{"pathId": 5, "digestId": 0}}}
+		requireDenied(t, evalRule(t, ruleTraceSensitiveReads, "", v02([]map[string]any{proc(key)}, paths, []string{"d0"}), nil), "opened /etc/ssl/private/server.key, a credential path")
+		// Round 5: a bundle file is matched exactly, and an exempt directory
+		// only with a normalized path.
+		prefixed := map[string]any{"openedFiles": []any{map[string]any{"pathId": 7, "digestId": 0}}}
+		requireDenied(t, evalRule(t, ruleTraceSensitiveReads, "", v02([]map[string]any{proc(prefixed)}, paths, []string{"d0"}), nil), "opened /etc/ssl/cert.pem.key, a credential path")
+		dotdot := map[string]any{"openedFiles": []any{map[string]any{"pathId": 8, "digestId": 0}}}
+		requireDenied(t, evalRule(t, ruleTraceSensitiveReads, "", v02([]map[string]any{proc(dotdot)}, paths, []string{"d0"}), nil), "opened /etc/ssl/certs/../private/server.key, a credential path")
+		// Round 7: an opened path that is not normalized, or not absolute,
+		// hides what it resolves to from every substring check.
+		dot := map[string]any{"openedFiles": []any{map[string]any{"pathId": 9, "digestId": 0}}}
+		requireDenied(t, evalRule(t, ruleTraceSensitiveReads, "", v02([]map[string]any{proc(dot)}, paths, []string{"d0"}), nil), "reads: /home/u/.kube/./config is not a normalized absolute path")
+		rel := map[string]any{"openedFiles": []any{map[string]any{"pathId": 10, "digestId": 0}}}
+		requireDenied(t, evalRule(t, ruleTraceSensitiveReads, "", v02([]map[string]any{proc(rel)}, paths, []string{"d0"}), nil), "reads: home/u/.netrc is not a normalized absolute path")
+	})
+}
+
 // The catalog's predicate types are the ones the attestors actually register.
 func TestCatalogTypesMatchTheRegistry(t *testing.T) {
 	for typ, a := range catalogAttestors {
@@ -370,6 +521,34 @@ func TestProductsFromRule(t *testing.T) {
 // Evidence the spec ("What each rule admits", docs/design/cilock-policy-init.md)
 // refuses, which the rules once admitted.
 func TestSeededRulesRefuseMalformedEvidence(t *testing.T) {
+	t.Run("trace-present needs process objects", func(t *testing.T) {
+		pred := map[string]any{"processes": []any{2}, "paths": []any{}}
+		requireDenied(t, evalRule(t, ruleTracePresent, "", pred, nil), "untraced evidence")
+	})
+	writes := func(paths ...any) map[string]any {
+		ws := make([]any, 0, len(paths))
+		for _, p := range paths {
+			ws = append(ws, map[string]any{"path": p})
+		}
+		return v02([]map[string]any{{"fileOps": map[string]any{"writes": ws}}}, []string{"/usr/bin/make"}, nil)
+	}
+	const prefixes = `["/work/"]`
+	t.Run("trace-writes admits a normalized path under the prefix", func(t *testing.T) {
+		require.NoError(t, evalRule(t, ruleTraceWrites, prefixes, writes("/work/a/b.o"), nil))
+	})
+	t.Run("trace-writes refuses a path that climbs out of the prefix", func(t *testing.T) {
+		for _, p := range []string{"/work/../etc/passwd", "/work/a/..", "/work/./a", "/work/a/.", "/work//a"} {
+			requireDenied(t, evalRule(t, ruleTraceWrites, prefixes, writes(p), nil), "not normalized", p)
+		}
+	})
+	t.Run("trace-writes refuses a path that is not a string", func(t *testing.T) {
+		requireDenied(t, evalRule(t, ruleTraceWrites, prefixes, writes("/work/a", false), nil), "unreadable evidence")
+	})
+	t.Run("trace-credential-reads refuses an opened path that is not a string", func(t *testing.T) {
+		pred := v02([]map[string]any{{"openedFiles": []any{map[string]any{"pathId": 0}}}}, nil, nil)
+		pred["paths"] = []any{5}
+		requireDenied(t, evalRule(t, ruleTraceSensitiveReads, "", pred, nil), "unreadable evidence")
+	})
 	t.Run("govulncheck-vex-covered needs scan roots", func(t *testing.T) {
 		const param = `{"vexStep":"vex","products":[]}`
 		noVEX := map[string]any{"other": map[string]any{}}

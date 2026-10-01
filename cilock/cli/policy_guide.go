@@ -406,8 +406,17 @@ known compilers ran, nothing read ~/.ssh or ~/.aws, nothing wrote into .git). Li
 sandbox backend records paths but not image digests, so allowlist by path there, and it can record a connect
 whose host is not observable ("(host-not-observable)", port 0), which no allowlist entry admits.
 --trace-file-content is macOS-only and adds bounded workspace text snapshots; no seeded rule needs it.
-Rules that read these fields (trace-present, trace-network, trace-exec, trace-writes, trace-credential-reads) arrive
-in a follow-up; a step they will read must already be recorded with cilock run --trace.`)
+Selectable rules (cilock policy template --traced adds all five; --rule <id>[=<json>] adds one):
+`)
+	for _, id := range traceRuleIDs {
+		r := ruleTemplates[id]
+		fmt.Fprintf(&b, "  %s: %s", id, r.Summary)
+		if r.requiresParam() {
+			fmt.Fprintf(&b, " (fill: %s, e.g. %s)", r.Param, r.Example)
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("Record a step these rules read with cilock run --trace. Evidence recorded without a trace carries no\nprocesses, and every rule above refuses it as untraced evidence.")
 	return b.String()
 }
 

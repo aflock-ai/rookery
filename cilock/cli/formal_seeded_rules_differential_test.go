@@ -174,6 +174,39 @@ func seededBase(id string) (param any, pred map[string]any) {
 			map[string]any{"path": "app", "fileDigest": seededHex64},
 			map[string]any{"path": "app.sig", "fileDigest": seededHex64b},
 		}}
+	case ruleTracePresent:
+		return nil, seededTrace(map[string]any{"processid": 1})
+	case ruleTraceNetwork:
+		// Addresses only: the SNI hostname admits nothing.
+		return []any{"1.2.3.4", "10.0.0.1"}, seededTrace(map[string]any{"network": map[string]any{
+			"connections": []any{
+				map[string]any{"family": "AF_INET", "hostname": "proxy.golang.org", "address": "1.2.3.4"},
+				map[string]any{"family": "AF_UNIX", "address": "/run/x.sock"},
+				map[string]any{"address": "10.0.0.1"},
+			},
+			"dnsLookups": []any{map[string]any{"serverAddress": "10.0.0.1"}},
+		}})
+	case ruleTraceExec:
+		return []any{"/usr/bin/go", seededHex64}, seededTrace(
+			map[string]any{"execPathId": 0},
+			map[string]any{"exeDigestId": 0, "execPathId": 1},
+			map[string]any{"programDigestId": 0},
+		)
+	case ruleTraceWrites:
+		return []any{"/work/", "/tmp/"}, seededTrace(map[string]any{
+			"fileOps": map[string]any{
+				"writes":      []any{map[string]any{"path": "/work/a"}},
+				"renames":     []any{map[string]any{"oldPath": "/tmp/x", "newPath": "/work/b"}},
+				"deletes":     []any{map[string]any{"path": "/tmp/y"}},
+				"permChanges": []any{map[string]any{"path": "/work/c"}},
+			},
+			"writtenFiles": []any{map[string]any{"pathId": 2}},
+		})
+	case ruleTraceSensitiveReads:
+		return nil, seededTrace(map[string]any{
+			"openedFiles":   []any{map[string]any{"pathId": 3}, map[string]any{"pathId": 0}},
+			"unhashedOpens": []any{map[string]any{"pathId": 2}},
+		})
 	}
 	return nil, nil
 }
@@ -186,6 +219,21 @@ const (
 
 func seededVEXParam() map[string]any {
 	return map[string]any{"vexStep": "vex", "products": []any{"pkg:golang/app"}}
+}
+
+// seededTrace is a command-run predicate with a process tree, the paths the
+// processes index and one recorded digest.
+func seededTrace(procs ...map[string]any) map[string]any {
+	ps := make([]any, len(procs))
+	for i, p := range procs {
+		ps[i] = p
+	}
+	return map[string]any{
+		"exitcode":  0,
+		"processes": ps,
+		"paths":     []any{"/usr/bin/go", "/bin/sh", "/work/out", "/etc/ssl/cert.pem"},
+		"digests":   []any{map[string]any{"digests": map[string]any{"sha256": seededHex64}}},
+	}
 }
 
 // seededMutateMap applies n random edits to m, keeping only the edits that

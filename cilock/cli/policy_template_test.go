@@ -282,19 +282,30 @@ func TestTemplateAddStep(t *testing.T) {
 	require.Equal(t, []string{expectedPlatformRootError}, validateErrors(t, out))
 }
 
-func TestTemplateVEX(t *testing.T) {
+func TestTemplateTracedAndVEX(t *testing.T) {
 	sandboxCredentials(t, true)
 	out := filepath.Join(t.TempDir(), "policy.json")
-	_, err := templateCmd(t, "--goal", "app-build", "--goal", "vulns", "--with-vex", "-o", out)
+	_, err := templateCmd(t, "--goal", "app-build", "--traced", "--goal", "vulns", "--with-vex", "-o", out)
 	require.NoError(t, err)
 	doc := readDraft(t, out)
+	build := asMap(draftSteps(doc)["app-build"])
+	for _, id := range traceRuleIDs {
+		require.NotNil(t, findRegoEntry(build, id), "trace rule %s", id)
+	}
+	slots := strings.Join(findFillSlots(doc), "\n")
+	require.Contains(t, slots, "__FILL__ trace-network:")
+	require.Contains(t, slots, "__FILL__ trace-exec:")
+	require.Contains(t, slots, "__FILL__ trace-writes:")
+	require.NotContains(t, slots, "trace-present:", "trace-present has nothing to fill")
+
 	vulns := asMap(draftSteps(doc)["vulns"])
 	require.Equal(t, []any{"vex"}, vulns["attestationsFrom"])
 	require.NotNil(t, findRegoEntry(vulns, ruleGovulncheckVEX))
 	require.Nil(t, findRegoEntry(vulns, ruleGovulncheckReachable), "with VEX, coverage replaces the reachability rule")
 	require.Equal(t, []string{typeVEX}, stepAttestationTypes(asMap(draftSteps(doc)["vex"])))
 
-	_, err = templateCmd(t, "-p", out, "--fill", `vulns.govulncheck-vex-covered={"vexStep":"vex","products":["pkg:golang/example.com/app"]}`)
+	_, err = templateCmd(t, "-p", out, "--fill", `vulns.govulncheck-vex-covered={"vexStep":"vex","products":["pkg:golang/example.com/app"]}`,
+		"--fill", `app-build.trace-network=[]`)
 	require.NoError(t, err)
 	require.NotContains(t, strings.Join(findFillSlots(readDraft(t, out)), "\n"), "govulncheck-vex-covered")
 }

@@ -419,6 +419,214 @@ def productsFrom (up : String) (input : J) : Bool :=
     mine.all (fun l => match digestOf l with | some d => upDigests.contains d | none => false)
   | _ => false
 
+/-! ## traces -/
+
+/-- The trace prelude: `traced` needs a non-empty array of process objects
+    and a paths array. -/
+def traced (pred : J) : Bool :=
+  match field pred "processes" .null, field pred "paths" (.arr []) with
+  | .arr ps, .arr _ => !ps.isEmpty && ps.all J.isObj
+  | _, _ => false
+
+def procs (pred : J) : List J := (field pred "processes" .null).elems
+
+/-- `path_at(i)`: the path at index i. `none` when the table does not
+    resolve the index: the Rego `unresolved(i)` deny fires, so no record
+    ever reads as an empty path. -/
+def pathAt (pred : J) (i : J) : Option J := (field pred "paths" (.arr [])).at i
+
+/-- trace_present. -/
+def tracePresent (pred : J) : Bool := traced pred
+
+/-- `object.get(x, k, [])[_]` under the `not_array(x, k)` deny: the elements
+    of an array, `none` on a non-object `x` (a type error) or on a field that
+    is present but not an array (unreadable evidence). -/
+def elemsOf (x : J) (k : String) : Option (List J) :=
+  (oget x k (.arr [])).bind (fun v => match v with | .arr l => some l | _ => none)
+
+/-- `ip_like`: digits and dots, or hex digits, colons and dots with a colon
+    present. The attestor's "(host-not-observable)" placeholder is neither. -/
+def ipLike (s : String) : Bool :=
+  let cs := s.toList
+  !cs.isEmpty &&
+  (cs.all (fun c => c.isDigit || c == '.') ||
+   (cs.any (· == ':') && cs.all (fun c => c.isDigit || c == ':' || c == '.' ||
+     ('a' ≤ c && c ≤ 'f') || ('A' ≤ c && c ≤ 'F'))))
+
+/-- `permitted_address`: an IP-like string in the allowlist. -/
+def addrOk (allowed : List String) (x : J) : Bool :=
+  match x with
+  | .str a => ipLike a && allowed.contains a
+  | _ => false
+
+/-- One connection: AF_UNIX, or an allowed IP address. The SNI hostname is
+    client-asserted and admits nothing. Reading the family is a type error
+    when the connection is not an object. -/
+def connOk (allowed : List String) (c : J) : Bool :=
+  match oget c "family" (.str "") with
+  | some fam => fam.isStrEq "AF_UNIX" || addrOk allowed (field c "address" (.str ""))
+  | none => false
+
+def lookupOk (allowed : List String) (d : J) : Bool :=
+  match oget d "serverAddress" (.str "") with
+  | some a => addrOk allowed a
+  | none => false
+
+/-- trace_network: every non-AF_UNIX connection goes to an allowed address,
+    and every DNS lookup to an allowed server. A network record, or an
+    element of its lists, that is not an object is a type error; a list
+    that is not an array is unreadable evidence. -/
+def traceNetwork (allowed : List String) (pred : J) : Bool :=
+  traced pred &&
+  (procs pred).all (fun p =>
+    match oget p "network" (.obj []) with
+    | some net =>
+      (match elemsOf net "connections" with
+       | some cs => cs.all (connOk allowed)
+       | none => false) &&
+      (match elemsOf net "dnsLookups" with
+       | some ds => ds.all (lookupOk allowed)
+       | none => false)
+    | none => false)
+
+def digestSha (pred : J) (i : J) : Option J :=
+  if i.geZero then
+    ((field pred "digests" (.arr [])).at i).bind (fun d => (d.get "digests").bind (·.get "sha256"))
+  else none
+
+def exePath (pred : J) (p : J) : Option J :=
+  let i := field p "execPathId" (.num (-1))
+  if i.geZero then (field pred "paths" (.arr [])).at i else none
+
+/-- `allowed_path`: an absolute path in the allowlist. -/
+def pathOk (allowed : List String) (x : J) : Bool :=
+  match x with
+  | .str s => strStarts s "/" && allowed.contains s
+  | _ => false
+
+/-- 64 lowercase hex digits. -/
+def isHex64 (s : String) : Bool :=
+  s.length == 64 && s.toList.all (fun c => c.isDigit || ('a' ≤ c && c ≤ 'f'))
+
+/-- `allowed_sha`: a sha256 digest in the allowlist. -/
+def shaOk (allowed : List String) (x : J) : Bool :=
+  match x with
+  | .str s => isHex64 s && allowed.contains s
+  | _ => false
+
+/-- A recorded value that `startswith` or `regex.match` would be handed and
+    is not a string: a type error that fails the whole evaluation. -/
+def notStr (x : Option J) : Bool :=
+  match x with
+  | some (.str _) => false
+  | some _ => true
+  | none => false
+
+/-- trace_exec: every process ran an allowed executable, by absolute path
+    or by the sha256 of its executable or program image; a path entry
+    admits only a path and a digest entry only a digest. A recorded path
+    or digest that is not a string is a type error for every process. -/
+def traceExec (allowed : List String) (pred : J) : Bool :=
+  traced pred &&
+  (procs pred).all (fun p =>
+    !notStr (exePath pred p) &&
+    !notStr (digestSha pred (field p "exeDigestId" (.num (-1)))) &&
+    !notStr (digestSha pred (field p "programDigestId" (.num (-1)))) &&
+    ((exePath pred p).any (pathOk allowed) ||
+     (digestSha pred (field p "exeDigestId" (.num (-1)))).any (shaOk allowed) ||
+     (digestSha pred (field p "programDigestId" (.num (-1)))).any (shaOk allowed)))
+
+/-- `path_at(object.get(f, "pathId", -1))` for each record. -/
+def pathsAt (pred : J) (fs : List J) : Option (List J) :=
+  fs.mapM (fun f => (oget f "pathId" (.num (-1))).bind (pathAt pred))
+
+/-- `object.get(x, k, "")` for each record. -/
+def keyOf (xs : List J) (k : String) : Option (List J) := xs.mapM (fun x => oget x k (.str ""))
+
+/-- The paths one process touched (`none` on a type error: a fileOps or a
+    record that is not an object; on a collection that is not an array; or
+    on a path index the table does not resolve). -/
+def touchedBy (pred p : J) : Option (List J) := do
+  let ops ← oget p "fileOps" (.obj [])
+  let ws ← elemsOf ops "writes"
+  let rs ← elemsOf ops "renames"
+  let ds ← elemsOf ops "deletes"
+  let cs ← elemsOf ops "permChanges"
+  let wf ← elemsOf p "writtenFiles"
+  let a ← keyOf ws "path"
+  let b ← keyOf rs "oldPath"
+  let c ← keyOf rs "newPath"
+  let d ← keyOf ds "path"
+  let e ← keyOf cs "path"
+  let f ← pathsAt pred wf
+  pure (a ++ b ++ c ++ d ++ e ++ f)
+
+/-- Every path a process touched, as `trace_writes` collects them. -/
+def touched (pred : J) : Option (List J) := ((procs pred).mapM (touchedBy pred)).map List.flatten
+
+def unnormalized (x : String) : Bool :=
+  strContains x "/../" || strEnds x "/.." || strContains x "/./" || strEnds x "/." || strContains x "//"
+
+def inGit (x : String) : Bool := strContains x "/.git/" || strEnds x "/.git"
+
+/-- A touched path the writes rule admits: an absolute, normalized string
+    under an allowed prefix, not in .git. A non-string path is refused. -/
+def writeOk (prefixes : List String) (x : J) : Bool :=
+  match x with
+  | .str s => (strStarts s "/" && !unnormalized s) && prefixes.any (strStarts s ·) && !inGit s
+  | _ => false
+
+/-- trace_writes. -/
+def traceWrites (prefixes : List String) (pred : J) : Bool :=
+  traced pred &&
+  (match touched pred with
+   | some xs => xs.all (writeOk prefixes)
+   | none => false)
+
+def credentialDirs : List String :=
+  ["/.ssh/", "/.aws/", "/.config/gcloud/", "/.azure/", "/.gnupg/", "/.docker/config.json", "/.kube/config",
+   "/.netrc", "/.git-credentials", "/.npmrc", "/.pypirc"]
+
+/-- The public certificate stores only: `/etc/ssl/private` and the like hold
+    keys. A directory exempts a normalized path under it; a bundle file is
+    matched exactly. -/
+def systemCADirs : List String :=
+  ["/etc/ssl/certs/", "/etc/pki/tls/certs/", "/etc/pki/ca-trust/", "/usr/share/ca-certificates/",
+   "/private/etc/ssl/certs/", "/usr/local/etc/openssl/certs/", "/usr/local/etc/openssl@3/certs/",
+   "/usr/local/etc/ca-certificates/", "/opt/homebrew/etc/openssl@3/certs/", "/opt/homebrew/etc/ca-certificates/"]
+
+def systemCAFiles : List String :=
+  ["/etc/ssl/cert.pem", "/private/etc/ssl/cert.pem", "/usr/local/etc/openssl/cert.pem",
+   "/usr/local/etc/openssl@3/cert.pem", "/opt/homebrew/etc/openssl@3/cert.pem"]
+
+def systemStore (x : String) : Bool :=
+  (systemCADirs.any (strStarts x ·) && !unnormalized x) || systemCAFiles.contains x
+
+def sensitive (x : String) : Bool :=
+  credentialDirs.any (strContains x ·) ||
+  (strEnds x ".pem" && !systemStore x) ||
+  (strEnds x ".key" && !systemStore x) ||
+  strContains x "/id_rsa" || strContains x "/id_ed25519" || strContains x "/id_ecdsa"
+
+def openedBy (pred p : J) : Option (List J) := do
+  let fs ← elemsOf p "openedFiles"
+  let us ← elemsOf p "unhashedOpens"
+  pathsAt pred (fs ++ us)
+
+def opened (pred : J) : Option (List J) := ((procs pred).mapM (openedBy pred)).map List.flatten
+
+/-- An opened path the reads rule can judge: absolute and normalized, so it
+    names the file the substring checks see. -/
+def normalizedAbsolute (s : String) : Bool := strStarts s "/" && !unnormalized s
+
+/-- trace_credential_reads: every opened path is a normalized absolute
+    string and no traced process opened a credential path. -/
+def traceCredentialReads (pred : J) : Bool :=
+  traced pred &&
+  (match opened pred with
+   | some xs => xs.all (fun x => match x with | .str s => normalizedAbsolute s && !sensitive s | _ => false)
+   | none => false)
+
 /-! ## Dispatch -/
 
 def strList (x : J) : List String := x.elems.filterMap (fun v => match v with | .str s => some s | _ => none)
@@ -448,6 +656,11 @@ def admits (id : String) (param : J) (p : J) (steps : Option J) : Option Bool :=
   | "sbom-inventory" => some (sbomInventory pred)
   | "review-approved" => some (reviewApproved pred)
   | "products-from" => some (productsFrom (match param with | .str s => s | _ => "") input)
+  | "trace-present" => some (tracePresent pred)
+  | "trace-network" => some (traceNetwork (strList param) pred)
+  | "trace-exec" => some (traceExec (strList param) pred)
+  | "trace-writes" => some (traceWrites (strList param) pred)
+  | "trace-credential-reads" => some (traceCredentialReads pred)
   | _ => none
 
 end CilockEvaluators.Seeded
