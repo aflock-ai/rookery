@@ -871,6 +871,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error {
 			ProductDigestMismatches: a.productDigestMismatches,
 
 			FilesScanned: a.filesScanned,
+			Config:       a.scanConfig(),
 		}
 	}
 

@@ -95,6 +95,7 @@ type Attestor struct {
 	compiledIncludeGlob   glob.Glob // Compiled in Attest from includeGlob
 	compiledExcludeGlob   glob.Glob // Compiled in Attest from excludeGlob
 	filesScanned          int       // Files read by the detector this run
+	configDigest          string    // sha256 of the custom gitleaks config read this run
 
 	// Results and state
 	Findings []Finding                       `json:"findings"` // List of detected secrets

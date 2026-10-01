@@ -125,6 +125,43 @@ type ScanScope struct {
 	// Anything skipped as binary or over the size limit is neither counted nor
 	// a subject, and identical bytes reached by two routes count once.
 	FilesScanned int `json:"filesScanned"`
+	// Config is how the files were scanned (testifysec/judge#9533). It is
+	// recorded with every scope, so its absence marks a producer too old to
+	// say, never a default scan.
+	Config *ScanConfig `json:"config,omitempty"`
+}
+
+// ScanConfig is the effective scanner configuration. Each field changes what
+// a scan can find, and the operator being gated is the one who sets it: an
+// allowlist of ".*" turns a tree holding a live key into a clean result.
+type ScanConfig struct {
+	// ConfigDigest is "sha256:<hex>" of the custom gitleaks config file, empty
+	// when the built-in rules were used. Only the named file is digested,
+	// not files it pulls in through [extend].
+	ConfigDigest string `json:"configDigest,omitempty"`
+	// Allowlist is the command-line allowlist in effect. A custom config file
+	// replaces it, so it is recorded only when ConfigDigest is empty.
+	Allowlist *AllowList `json:"allowlist,omitempty"`
+	// MaxFileSizeMB is the size above which a file is skipped unscanned.
+	MaxFileSizeMB int `json:"maxFileSizeMB"`
+	// MaxDecodeLayers is how many encoding layers are unwrapped looking for
+	// an encoded secret.
+	MaxDecodeLayers int `json:"maxDecodeLayers"`
+}
+
+// scanConfig reports the configuration this run actually scanned with.
+func (a *Attestor) scanConfig() *ScanConfig {
+	c := &ScanConfig{
+		MaxFileSizeMB:   a.maxFileSizeMB,
+		MaxDecodeLayers: a.maxDecodeLayers,
+	}
+	if a.configPath != "" {
+		c.ConfigDigest = a.configDigest
+	} else if a.allowList != nil {
+		allow := *a.allowList
+		c.Allowlist = &allow
+	}
+	return c
 }
 
 // ProductDigestMismatch is one product whose bytes at scan time were not the

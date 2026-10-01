@@ -16,6 +16,8 @@ package secretscan
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -71,6 +73,9 @@ func (a *Attestor) loadCustomGitleaksConfig() (*detect.Detector, error) {
 		}
 		return nil, fmt.Errorf("error reading gitleaks config file %s: %w", a.configPath, err)
 	}
+
+	sum := sha256.Sum256(data)
+	a.configDigest = "sha256:" + hex.EncodeToString(sum[:])
 
 	viperConfig, err := decodeGitleaksConfig(a.configPath, data)
 	if err != nil {
