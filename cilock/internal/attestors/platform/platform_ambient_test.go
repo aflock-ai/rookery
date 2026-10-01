@@ -106,6 +106,37 @@ func TestAttest_AmbientWorkflowIdentity(t *testing.T) {
 		}
 	})
 
+	// Pipeline 21 job 79 on appliance build 3: in a GitLab job the skip said
+	// "in CI grant `id-token: write`", GitHub Actions syntax. The hint names
+	// the CI the run is in.
+	t.Run("no session in a GitLab job -> the hint is GitLab's id_tokens", func(t *testing.T) {
+		isolateCreds(t)
+		t.Setenv(PlatformURLEnv, "")
+		t.Setenv("GITHUB_ACTIONS", "")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+		t.Setenv("GITLAB_CI", "true")
+		t.Setenv("CI_SERVER_URL", "https://gitlab.example")
+		t.Setenv("CI_JOB_ID", "10")
+		err := New().Attest(nil)
+		if err == nil || !strings.Contains(err.Error(), "id_tokens") || strings.Contains(err.Error(), "id-token: write") {
+			t.Fatalf("a GitLab job's skip must name id_tokens and never GitHub's permission: %v", err)
+		}
+	})
+
+	t.Run("no session in GitHub Actions -> the hint is id-token: write", func(t *testing.T) {
+		isolateCreds(t)
+		t.Setenv(PlatformURLEnv, "")
+		t.Setenv("GITLAB_CI", "")
+		t.Setenv("GITHUB_ACTIONS", "true")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+		t.Setenv("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "")
+		err := New().Attest(nil)
+		if err == nil || !strings.Contains(err.Error(), "id-token: write") || strings.Contains(err.Error(), "id_tokens") {
+			t.Fatalf("a GitHub job's skip names id-token: write: %v", err)
+		}
+	})
+
 	t.Run("ambient present but run did not target the platform (CILOCK_PLATFORM_URL unset) -> soft skip", func(t *testing.T) {
 		isolateCreds(t)
 		t.Setenv(PlatformURLEnv, "")

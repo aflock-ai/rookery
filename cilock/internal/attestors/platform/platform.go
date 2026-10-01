@@ -102,5 +102,19 @@ func resolveSessionBinding() (pubplatform.Binding, error) {
 		return pubplatform.Binding{}, attestation.NewSoftError("untrusted CILOCK_PLATFORM_URL for ambient workflow binding — skipping platform binding (the binding is set by `cilock run` after a same-origin check, not by a raw environment variable)")
 	}
 
-	return pubplatform.Binding{}, attestation.NewSoftError("no platform session — skipping platform binding (run `cilock login`, or in CI grant `id-token: write` for ambient workflow identity)")
+	return pubplatform.Binding{}, attestation.NewSoftError("no platform session, skipping platform binding (" + noSessionHint() + ")")
+}
+
+// noSessionHint says how to give the run a platform identity, in the syntax
+// of the CI it runs in: GitHub Actions syntax in a GitLab job is worse than
+// no hint (seen in pipeline 21 job 79, appliance build 3).
+func noSessionHint() string {
+	switch auth.CIProviderFromEnv(os.Getenv) {
+	case auth.CIGitLab:
+		return "run `cilock login`, or declare the job's `id_tokens` for sigstore and <platform-url>/archivista for ambient workflow identity"
+	case auth.CIGitHub:
+		return "run `cilock login`, or grant the job `permissions: id-token: write` for ambient workflow identity"
+	default:
+		return "run `cilock login`"
+	}
 }

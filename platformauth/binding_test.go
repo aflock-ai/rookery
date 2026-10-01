@@ -143,6 +143,39 @@ func TestResolveBinding_Ambiguous(t *testing.T) {
 	}
 }
 
+// TestResolveBinding_NotTrustedIsTyped: a 401 or 403 means the platform does
+// not accept this identity (no `cilock trust` credential matches the CI job),
+// so a caller can name that fix. The message is unchanged: jctl and cilock
+// classify the refusal on it today.
+func TestResolveBinding_NotTrustedIsTyped(t *testing.T) {
+	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(code)
+			_, _ = io.WriteString(w, `{"error":"unauthenticated"}`)
+		}))
+		_, err := ResolveBinding(srv.URL, "tok", "")
+		srv.Close()
+		var nt *IdentityNotTrustedError
+		if !errors.As(err, &nt) || nt.Status != code {
+			t.Fatalf("%d: want *IdentityNotTrustedError, got %T %v", code, err, err)
+		}
+		if !strings.Contains(err.Error(), "resolve-binding: ") {
+			t.Fatalf("%d: message changed: %v", code, err)
+		}
+		if errors.Is(err, ErrBindingUnavailable) {
+			t.Fatalf("%d: an untrusted identity is not an unavailable endpoint", code)
+		}
+	}
+	// 400 stays a plain refusal: it is a malformed request, not an identity.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusBadRequest) }))
+	defer srv.Close()
+	_, err := ResolveBinding(srv.URL, "tok", "")
+	var nt *IdentityNotTrustedError
+	if err == nil || errors.As(err, &nt) {
+		t.Fatalf("400: want a plain error, got %T %v", err, err)
+	}
+}
+
 func TestResolveBinding_RejectsCleartextNonLoopback(t *testing.T) {
 	_, err := ResolveBinding("http://platform.example", "tok", "")
 	if err == nil || !strings.Contains(err.Error(), "https") {

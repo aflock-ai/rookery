@@ -1147,7 +1147,8 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		// fires only when there is no usable identity (e.g. a local-key run with no
 		// `cilock login`) or upload was explicitly disabled — don't prescribe a flag
 		// that may not be the fix.
-		fmt.Fprintln(os.Stderr, "warning: signed locally; not uploaded to the platform (run `cilock login` to store attestations there)")
+		fmt.Fprintln(os.Stderr, "warning: signed locally; not uploaded to the platform. To store attestations there, "+
+			notUploadedHint(os.Getenv, ro.PlatformURL))
 	}
 	if ro.OutputJSON() {
 		if err := summary.WriteJSON(os.Stdout); err != nil {
@@ -1456,15 +1457,24 @@ func shouldWarnNotUploaded(platformURL string, archivistaEnabled, runFailed, jso
 // produced it — so the recovery genuinely is to re-run `cilock run`. Say that
 // plainly rather than leaving the operator hunting for an upload command that
 // does not, and should not, exist.
+// notUploadedHint says how to get this run's evidence stored: in CI, trust
+// the job's own identity once (no secret in the job); elsewhere, log in.
+func notUploadedHint(getenv func(string) string, platformURL string) string {
+	if auth.CIProviderFromEnv(getenv) == auth.CINone {
+		return options.CILoginHint(getenv, platformURL)
+	}
+	return options.CITrustHint(getenv, platformURL)
+}
+
 func uploadError(platformURL string, err error) error {
 	var statusErr *archivista.StatusError
 	isAuth := errors.As(err, &statusErr) &&
 		(statusErr.StatusCode == http.StatusUnauthorized || statusErr.StatusCode == http.StatusForbidden)
 	if platformURL != "" && isAuth {
 		return fmt.Errorf("upload to %s rejected (%w)\n"+
-			"  this repo/identity is not trusted for upload yet — run `cilock trust` once,\n"+
+			"  %s\n"+
 			"  or sign without uploading via --enable-archivista=false",
-			platformURL, err)
+			platformURL, err, options.CITrustHint(os.Getenv, platformURL))
 	}
 	// Deliberately does not claim "after retrying": a terminal status (400, 404,
 	// 422) never entered the retry loop, and retry can be switched off. The

@@ -34,6 +34,8 @@ func storeStatus(code int, body string) error {
 // An auth rejection must still surface the one-time `cilock trust` fix rather
 // than a raw "Invalid API credential".
 func TestUploadError_AuthStatusSuggestsTrust(t *testing.T) {
+	t.Setenv("GITLAB_CI", "")
+	t.Setenv("GITHUB_ACTIONS", "true")
 	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
 		t.Run(http.StatusText(code), func(t *testing.T) {
 			err := uploadError(testPlatform, storeStatus(code, "Invalid API credential"))
@@ -41,6 +43,32 @@ func TestUploadError_AuthStatusSuggestsTrust(t *testing.T) {
 			require.ErrorContains(t, err, testPlatform)
 		})
 	}
+}
+
+func TestUploadError_LocalSessionSuggestsLogin(t *testing.T) {
+	for _, name := range []string{"GITHUB_ACTIONS", "ACTIONS_ID_TOKEN_REQUEST_URL", "GITLAB_CI"} {
+		t.Setenv(name, "")
+	}
+	for _, code := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		err := uploadError(testPlatform, storeStatus(code, "Invalid API credential"))
+		require.ErrorContains(t, err, "cilock login --platform-url "+testPlatform)
+		require.NotContains(t, err.Error(), "cilock trust")
+	}
+}
+
+// TestUploadError_GitLabJobGetsItsExactTrustCommand: in a GitLab job whose
+// identity the platform does not know yet, the rejection names the one
+// command a tenant admin runs, for this project and host, never "declare more
+// tokens" or "pass an upload header".
+func TestUploadError_GitLabJobGetsItsExactTrustCommand(t *testing.T) {
+	t.Setenv("GITHUB_ACTIONS", "")
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "")
+	t.Setenv("GITLAB_CI", "true")
+	t.Setenv("CI_PROJECT_PATH", "example-org/case-api")
+	t.Setenv("CI_SERVER_HOST", "gitlab.example-org.example")
+	err := uploadError(testPlatform, storeStatus(http.StatusUnauthorized, "Invalid API credential"))
+	require.ErrorContains(t, err, "cilock trust gitlab example-org/case-api --host gitlab.example-org.example")
+	require.NotContains(t, err.Error(), "archivista-headers")
 }
 
 // TestUploadError_ClassifiesOnStatusNotMessageText is the regression this
@@ -60,6 +88,8 @@ func TestUploadError_ClassifiesOnStatusNotMessageText(t *testing.T) {
 // The mirror image: a genuine 403 whose body quotes transient-sounding text
 // must still be reported as the auth problem it is.
 func TestUploadError_AuthStatusWithTransientLookingBody(t *testing.T) {
+	t.Setenv("GITLAB_CI", "")
+	t.Setenv("GITHUB_ACTIONS", "true")
 	err := uploadError(testPlatform, storeStatus(http.StatusForbidden,
 		"503 gateway timeout connection reset"))
 	require.ErrorContains(t, err, "cilock trust")

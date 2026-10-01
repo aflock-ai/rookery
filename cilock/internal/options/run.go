@@ -1090,13 +1090,21 @@ func classifyBindingGateError(platformURL string, err error) error {
 	}
 	var ambiguous *platformauth.AmbiguousProductError
 	if errors.As(err, &ambiguous) {
-		return errors.New(ambiguousProductMessage(ambiguous))
+		return errors.New(ambiguousProductMessage(platformURL, ambiguous))
 	}
 	// Soft-skip ONLY a genuinely-unavailable endpoint (server not deployed yet,
 	// transport failure, 5xx, non-JSON 200) so a client shipped ahead of the
 	// server's deploy never breaks the build. EVERY other error — invalid/absent
 	// product, 401, 403, malformed response — is a deterministic config/auth
 	// failure and MUST fail closed.
+	// 401/403: the platform does not accept this identity. For a CI job that
+	// means no `cilock trust` credential matches it yet; say that, still
+	// failing closed.
+	var notTrusted *platformauth.IdentityNotTrustedError
+	if errors.As(err, &notTrusted) {
+		return fmt.Errorf("platform binding failed: this identity is not trusted by %s (%w). To fix it, %s",
+			strings.TrimRight(auth.NormalizeURL(platformURL), "/"), err, CITrustHint(os.Getenv, platformURL))
+	}
 	var unavailable *platformauth.BindingUnavailableError
 	if errors.As(err, &unavailable) {
 		log.Warnf("platform binding endpoint unavailable (the server may not be deployed yet) — "+
@@ -1108,48 +1116,39 @@ func classifyBindingGateError(platformURL string, err error) error {
 }
 
 // repoNotMappedMessage builds the machine-actionable failure for the zero-product
-// case. It names the repository (+ github_repository_id), the tenant, and the
-// exact remediation, so an automated agent reading the log can self-correct.
+// case. It names the repository and its id the way the CI it runs in does
+// (project_id in GitLab, github_repository_id otherwise), the tenant, and the
+// exact remediation for that CI, so an automated agent reading the log can
+// self-correct.
 func repoNotMappedMessage(platformURL string, e *platformauth.RepositoryNotMappedError) string {
-	repo, repoID := repoIdentifiers(e.Repository, e.RepositoryID)
-	return fmt.Sprintf("platform binding failed: repository %s (github_repository_id=%s) is authenticated to "+
-		"tenant %q (%s) but is not connected to any product. Fix: connect the repo to a product at %s/settings, "+
-		"or pass an explicit product (`cilock login --product <uuid>`). To intentionally attest without a product "+
-		"binding, pass --no-product-binding.",
-		repo, repoID, e.TenantName, e.TenantID, strings.TrimRight(auth.NormalizeURL(platformURL), "/"))
+	return repoNotMappedMessageEnv(os.Getenv, platformURL, e)
+}
+
+func repoNotMappedMessageEnv(getenv func(string) string, platformURL string, e *platformauth.RepositoryNotMappedError) string {
+	repo, idLabel, repoID := ciRepoIdentifiers(getenv, e.Repository, e.RepositoryID)
+	return fmt.Sprintf("platform binding failed: repository %s (%s=%s) is authenticated to "+
+		"tenant %q (%s) but is not connected to any product. Fix: connect the repository to a product at %s/settings, "+
+		"or bind a product at login; %s\nTo intentionally attest without a product binding, pass --no-product-binding.",
+		repo, idLabel, repoID, e.TenantName, e.TenantID, strings.TrimRight(auth.NormalizeURL(platformURL), "/"),
+		CILoginHint(getenv, platformURL))
 }
 
 // ambiguousProductMessage builds the machine-actionable failure for the
 // multiple-product case, listing every candidate UUID + name so an agent can
 // choose exactly one.
-func ambiguousProductMessage(e *platformauth.AmbiguousProductError) string {
-	repo, _ := repoIdentifiers(e.Repository, e.RepositoryID)
+func ambiguousProductMessage(platformURL string, e *platformauth.AmbiguousProductError) string {
+	return ambiguousProductMessageEnv(os.Getenv, platformURL, e)
+}
+
+func ambiguousProductMessageEnv(getenv func(string) string, platformURL string, e *platformauth.AmbiguousProductError) string {
+	repo, _, _ := ciRepoIdentifiers(getenv, e.Repository, e.RepositoryID)
 	parts := make([]string, 0, len(e.Candidates))
 	for _, c := range e.Candidates {
 		parts = append(parts, fmt.Sprintf("%s %q", c.ProductID, c.ProductName))
 	}
 	return fmt.Sprintf("platform binding is ambiguous: repository %s maps to %d products in tenant %q: [%s]. "+
-		"Pass exactly one: `cilock login --product <uuid>`.",
-		repo, len(e.Candidates), e.TenantName, strings.Join(parts, ", "))
-}
-
-// repoIdentifiers prefers the endpoint-supplied repository + id, falling back to
-// the ambient GitHub Actions env (GITHUB_REPOSITORY / GITHUB_REPOSITORY_ID) so
-// the message names the repo even when the typed error omits it.
-func repoIdentifiers(repo, repoID string) (string, string) {
-	if repo == "" {
-		repo = os.Getenv("GITHUB_REPOSITORY")
-	}
-	if repoID == "" {
-		repoID = os.Getenv("GITHUB_REPOSITORY_ID")
-	}
-	if repo == "" {
-		repo = "(unknown repository)"
-	}
-	if repoID == "" {
-		repoID = "(unknown)"
-	}
-	return repo, repoID
+		"Pass exactly one product (its uuid) at login; %s",
+		repo, len(e.Candidates), e.TenantName, strings.Join(parts, ", "), CILoginHint(getenv, platformURL))
 }
 
 // applyPlatformCredential wires a stored login credential into the run: the

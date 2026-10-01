@@ -67,8 +67,13 @@ func newFakeGitLab(t *testing.T) *fakeGitLab {
 // CE 19.4.1, pipeline 6 job 10), signed by key.
 func (g *fakeGitLab) token(t *testing.T, key *rsa.PrivateKey, aud any, jobID string) string {
 	t.Helper()
+	return g.tokenWithIssuer(t, key, aud, jobID, g.srv.URL)
+}
+
+func (g *fakeGitLab) tokenWithIssuer(t *testing.T, key *rsa.PrivateKey, aud any, jobID, issuer string) string {
+	t.Helper()
 	enc := func(v any) string { b, _ := json.Marshal(v); return base64.RawURLEncoding.EncodeToString(b) }
-	claims := map[string]any{"iss": g.srv.URL, "aud": aud, "sub": "project_path:example-org/hello-api:ref_type:branch:ref:main",
+	claims := map[string]any{"iss": issuer, "aud": aud, "sub": "project_path:example-org/hello-api:ref_type:branch:ref:main",
 		"job_id": jobID, "pipeline_id": "6", "project_id": "1", "project_path": "example-org/hello-api",
 		"ref": "main", "ref_type": "branch", "ref_protected": "true", "iat": 1790659869, "exp": 1790663469}
 	signing := enc(map[string]string{"alg": "RS256", "typ": "JWT", "kid": "k1"}) + "." + enc(claims)
@@ -212,5 +217,17 @@ func TestAttestLegacyJobJWTWithAnotherIssuerIsNotRecorded(t *testing.T) {
 	}
 	if a.JWT != nil {
 		t.Fatalf("a token from another issuer must not be recorded, got %+v", a.JWT.Claims)
+	}
+}
+
+func TestAttestLegacyJobJWTWithBareHostIssuer(t *testing.T) {
+	g := newFakeGitLab(t)
+	g.job(t)
+	host := strings.TrimPrefix(g.srv.URL, "http://")
+	t.Setenv("CI_SERVER_HOST", host)
+	t.Setenv("CI_JOB_JWT", g.tokenWithIssuer(t, g.key, "sigstore", "10", host))
+	a := New()
+	if err := attest(t, a); err != nil || a.JWT == nil || a.JWT.Claims["job_id"] != "10" || a.JWT.Claims["iss"] != host {
+		t.Fatalf("this job's bare-host legacy token must be recorded, got %v %+v", err, a.JWT)
 	}
 }

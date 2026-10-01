@@ -269,9 +269,29 @@ func resolveBindingWithClient(client *http.Client, platformURL, bearerToken, sel
 			Reason: fmt.Sprintf("resolve-binding: %s returned %d (endpoint unavailable / not deployed)", endpoint, resp.StatusCode),
 		}
 	}
-	return Binding{}, fmt.Errorf("resolve-binding: %s returned %d: %s",
-		endpoint, resp.StatusCode, strings.TrimSpace(string(body)))
+	return Binding{}, refusedError(endpoint, resp.StatusCode, body)
 }
+
+// refusedError classifies a reached, unclassified 4xx: 401 and 403 are an identity the platform does
+// not trust, anything else a plain refusal.
+func refusedError(endpoint string, status int, body []byte) error {
+	msg := fmt.Sprintf("resolve-binding: %s returned %d: %s", endpoint, status, strings.TrimSpace(string(body)))
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return &IdentityNotTrustedError{Status: status, Msg: msg}
+	}
+	return errors.New(msg)
+}
+
+// IdentityNotTrustedError is a 401 or 403 from resolve-binding: the platform
+// does not accept the presented identity. For a CI job that means no `cilock
+// trust` credential matches it yet. It fails closed like every other reached
+// 4xx; the type lets a caller name that one-time fix.
+type IdentityNotTrustedError struct {
+	Status int
+	Msg    string
+}
+
+func (e *IdentityNotTrustedError) Error() string { return e.Msg }
 
 // parseBindingOK decodes and validates a 200 body. It rejects a malformed
 // tenant/product UUID so a compromised or buggy platform cannot inject a
