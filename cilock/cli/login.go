@@ -238,7 +238,7 @@ func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product stri
 		return auth.AmbientWorkflowLogin(url, config.Derive(url).OIDCLoginAudience, product)
 	default: // tierBrowser
 		// decideLoginTierCI already refused CI; this catches --no-browser.
-		if reason := browserBlockedReason(viperEnv, interactive || isTerminal(cmd.InOrStdin()), noBrowser); reason != "" {
+		if reason := browserBlockedReason(processEnv, interactive || isTerminal(cmd.InOrStdin()), noBrowser); reason != "" {
 			return nil, browserRefusal("cilock login", reason,
 				"Without a browser: pipe a JWT with `--token -` plus --tenant-id and --product-id, or use the\n"+
 					"ambient CI identity (--workflow-identity).")

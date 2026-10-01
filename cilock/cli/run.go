@@ -1127,7 +1127,7 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	summary.ComputeStandardsAssessment(runFailed)
 	// The ceiling and next steps: what this run's observed shape could support
 	// at most, and what would raise it. Still not a level; see standards.Compute.
-	slsaObs, alpsObs := runObservations(summary, results, runFailed, viperEnv)
+	slsaObs, alpsObs := runObservations(summary, results, runFailed, processEnv)
 	summary.Standards = standards.ComputeSplit(slsaObs, alpsObs, standards.ScopeRun, runAudience(summary, attestors))
 	summary.AssuranceLevel = ro.ResolvedAssuranceLevel()
 	// Carry the capture delta (already warned about above) into the structured

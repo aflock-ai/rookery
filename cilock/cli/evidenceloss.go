@@ -23,7 +23,6 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
-	"github.com/spf13/viper"
 )
 
 // EVIDENCE LOSS — a signed attestation that failed to store.
@@ -92,23 +91,12 @@ func storeEvidence(ctx context.Context, target storeTarget, env dsse.Envelope, r
 	return gitoid, nil
 }
 
-// gitHubActionsKey is the Viper key GITHUB_ACTIONS is bound to. The runner
-// sets the variable to the literal string "true" on every job; the binding is
-// explicit rather than AutomaticEnv so the one variable this file consults is
-// named in code, and read through the key rather than the raw environment.
-const gitHubActionsKey = "github_actions"
-
-func init() {
-	// BindEnv only errors on an empty key list, which this call cannot be.
-	_ = viper.BindEnv(gitHubActionsKey, "GITHUB_ACTIONS")
-}
-
 // inGitHubActions reports whether this process is running under the Actions
-// runner, read through the Viper binding above. Viper resolves a bound env var
-// at read time, so a test that sets the variable with t.Setenv is observed
-// without re-binding.
+// runner, which sets GITHUB_ACTIONS to the literal string "true" on every job.
+// The variable is read at call time, so a test that sets it with t.Setenv is
+// observed.
 func inGitHubActions() bool {
-	return viper.GetString(gitHubActionsKey) == envTrue
+	return os.Getenv("GITHUB_ACTIONS") == envTrue
 }
 
 // reportEvidenceLoss writes the annotation. Takes its writer so a test can read

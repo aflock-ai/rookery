@@ -28,7 +28,6 @@ import (
 	"github.com/aflock-ai/rookery/attestation/workflow"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
 	alpsevidence "github.com/aflock-ai/rookery/plugins/attestors/alps-evidence"
-	"github.com/spf13/viper"
 )
 
 // slsaProvenancePrefix is the predicate-type prefix of SLSA provenance.
@@ -156,22 +155,9 @@ func betterALPS(a, b standards.Observations) bool {
 	return standards.DeriveSLSA(a.SLSAEvidence()) > standards.DeriveSLSA(b.SLSAEvidence())
 }
 
-// ciEnvKeys are the environment variables the guidance reads, each bound to a
-// Viper key (the variable's lower-cased name) so they are read through Viper
-// and named in code, like GITHUB_ACTIONS in evidenceloss.go.
-var ciEnvKeys = []string{"GITHUB_ACTIONS", "RUNNER_ENVIRONMENT", "GITLAB_CI", "BUILDKITE", "CIRCLECI",
-	"KUBERNETES_SERVICE_HOST", "CI"}
-
-func init() {
-	for _, k := range ciEnvKeys {
-		// BindEnv only errors on an empty key list, which this call cannot be.
-		_ = viper.BindEnv(strings.ToLower(k), k)
-	}
-}
-
-// viperEnv reads one of ciEnvKeys through its Viper binding. Viper resolves a
-// bound variable at read time, so t.Setenv is observed.
-func viperEnv(k string) string { return viper.GetString(strings.ToLower(k)) }
+// processEnv reads one CI marker variable from the process environment at call
+// time, so t.Setenv is observed.
+func processEnv(k string) string { return os.Getenv(k) }
 
 // ciFromEnv names the CI platform from the variables each one sets on every
 // job. It only selects which steps apply; it never raises a ceiling.

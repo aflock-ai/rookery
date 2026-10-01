@@ -42,6 +42,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
@@ -50,7 +51,6 @@ import (
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation/policy"
-	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,8 +60,7 @@ const seededRulesModel = "../../formal/cilock-evaluators"
 
 func seededOracle(t *testing.T) string {
 	t.Helper()
-	_ = viper.BindEnv("cilock_evaluators_oracle", "CILOCK_EVALUATORS_ORACLE")
-	if p := viper.GetString("cilock_evaluators_oracle"); p != "" {
+	if p := os.Getenv("CILOCK_EVALUATORS_ORACLE"); p != "" {
 		return p
 	}
 	dir, err := filepath.Abs(seededRulesModel)
@@ -82,8 +81,7 @@ func seededOracle(t *testing.T) string {
 }
 
 func seededEnvInt(name string, def int) int {
-	_ = viper.BindEnv(strings.ToLower(name), name)
-	if v, err := strconv.Atoi(viper.GetString(strings.ToLower(name))); err == nil && v > 0 {
+	if v, err := strconv.Atoi(os.Getenv(name)); err == nil && v > 0 {
 		return v
 	}
 	return def

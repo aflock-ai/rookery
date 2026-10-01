@@ -58,7 +58,7 @@ func UseCmd() *cobra.Command {
 			// Otherwise re-drive the approve page, which resolves names to ids and
 			// auto-provisions a default tenant/product when the user has none. cilock
 			// has no GraphQL client of its own, so the page is the resolver.
-			if reason := browserBlockedReason(viperEnv, isTerminal(cmd.InOrStdin()), noBrowser); reason != "" {
+			if reason := browserBlockedReason(processEnv, isTerminal(cmd.InOrStdin()), noBrowser); reason != "" {
 				return browserRefusal("cilock use", reason,
 					"Without a browser: bind by id with --product-id (and --tenant-id).")
 			}

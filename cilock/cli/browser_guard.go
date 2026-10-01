@@ -18,9 +18,7 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
-	"github.com/spf13/viper"
 	"golang.org/x/term"
 )
 
@@ -28,9 +26,6 @@ const noBrowserFlag = "no-browser"
 
 // jenkinsURLKey is Jenkins' CI marker; ciFromEnv does not know Jenkins.
 const jenkinsURLKey = "JENKINS_URL"
-
-// Bound like ciEnvKeys, so it is read through Viper and named in code.
-func init() { _ = viper.BindEnv(strings.ToLower(jenkinsURLKey), jenkinsURLKey) }
 
 // browserBlockedReason says why a browser ceremony (login, use) cannot finish
 // here, or "" when it can. Two cases:
