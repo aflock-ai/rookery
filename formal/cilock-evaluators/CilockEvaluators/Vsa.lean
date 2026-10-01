@@ -1,5 +1,5 @@
--- cite: plugins/attestors/policyverify/policyverify.go:233-473 sha256:8c670a2a77a92d96c8752f6455d364e8f2e27c513c81cb7986bf715ce6a2da5b
--- cite: attestation/workflow/verify.go:326-352 sha256:a33f012b394cf59baaf640fb52e376b443f142dd03229b4e5b1e897f5fcd0244
+-- cite: plugins/attestors/policyverify/policyverify.go:233-503 sha256:6682f70e0eaa39d578e66230186227c6865b2183a0b83b6b48040a7d6211f9b6
+-- cite: attestation/workflow/verify.go:333-374 sha256:1b564f1b0bc171a10413ba640db8972cb1c30cb8b2bde719e8d6fb12cb2418ce
 -- cite: plugins/attestors/vsa/vsa.go:38 sha256:ea4b5f26d671802f212f2452002bcb25afa9797036154c0f16af56a2abc26f6f
 -- cite: plugins/attestors/vsa/vsa.go:111-123 sha256:7945715445a34d85a477d13ab7fd9f0380f93322dc1a8ca1a5c62feaf2bff81f
 /-
@@ -64,19 +64,41 @@ structure Run where
   rejected (externalInputAttestations, policyverify.go). -/
   passedExternals : List Digest := []
   rejectedExternals : List Digest := []
+  /-- `Verify`'s error is a required external that is missing or whose every
+  candidate was rejected (`isExternalVerdict`, policyverify.go, #8121): a
+  verdict the engine returns as an error only because it stops before the
+  steps. Read only when `outcome = .failed false`. -/
+  externalUnmet : Bool := false
   deriving DecidableEq, Repr
 
+/-- The verdict a run reached. A completed `accepted b` is `b`; an unmet
+required external is FAILED, as a required step with no passing collection
+is; a refusal (`.failed true`) or any other error reached none. -/
+def verdict (r : Run) : Option Bool :=
+  match r.outcome with
+  | .accepted b => some b
+  | .failed false => if r.externalUnmet then some false else none
+  | .failed true => none
+
+theorem verdict_true_iff (r : Run) : verdict r = some true ↔ r.outcome = .accepted true := by
+  unfold verdict
+  cases h : r.outcome with
+  | accepted b => cases b <;> simp
+  | failed b => cases b <;> cases r.externalUnmet <;> simp
+
 -- cite: plugins/attestors/policyverify/policyverify.go:234-246 sha256:abcc70a2863fac22524181ed79e94f76e7fff149c29fa316b2b55108f2911946
--- cite: plugins/attestors/policyverify/policyverify.go:315-324 sha256:51e171a7486ff2bfa78a83e524c12d68f823259bc1b6d971444a5aff3517ce79
--- cite: plugins/attestors/policyverify/policyverify.go:454-457 sha256:6eb71cb8138ef3a45489c5b202f940a7db63391745ee1f3272531c5fb557a2db
--- cite: plugins/attestors/policyverify/policyverify.go:449 sha256:02839719c4e110bd96207a38909ffa2888e7722a322a8371f623ce1e38378b65
--- cite: plugins/attestors/policyverify/policyverify.go:460-462 sha256:ed4ebc950ea16f6f8afc3e555966e8039c03baf1656fbfcfaf2d5d53af0faf55
--- cite: plugins/attestors/policyverify/policyverify.go:421-447 sha256:92a13498dd9b9d65b66f2f0af09ab4e837a490041d8ac95ef16a3c6fd9328f23
+-- cite: plugins/attestors/policyverify/policyverify.go:315-322 sha256:455bff5ba8567f5bc2e9ad9ece62692d00ea6b1192a457e241c451eba41f4b9c
+-- cite: plugins/attestors/policyverify/policyverify.go:484-487 sha256:6eb71cb8138ef3a45489c5b202f940a7db63391745ee1f3272531c5fb557a2db
+-- cite: plugins/attestors/policyverify/policyverify.go:479 sha256:02839719c4e110bd96207a38909ffa2888e7722a322a8371f623ce1e38378b65
+-- cite: plugins/attestors/policyverify/policyverify.go:490-492 sha256:ed4ebc950ea16f6f8afc3e555966e8039c03baf1656fbfcfaf2d5d53af0faf55
+-- cite: plugins/attestors/policyverify/policyverify.go:451-477 sha256:92a13498dd9b9d65b66f2f0af09ab4e837a490041d8ac95ef16a3c6fd9328f23
 -- cite: plugins/attestors/policyverify/policyverify.go:198-211 sha256:5f642ecb06bd65592bd29d065808ababc86bcc05b9f3d9ab6e50743ee805144c
 /-- `Attest` + `verificationSummaryFromResults`. `hash` is the digest function
 over exact bytes.
 * policy signature or decode failure: no VSA (policyverify.go);
-* `Verify` returned an error (including an AI refusal): no VSA (policyverify.go);
+* `Verify` returned a refusal, or any error other than an unmet required
+  external: no VSA (policyverify.go);
+* an unmet required external: a FAILED VSA (policyverify.go, #8121);
 * otherwise a VSA whose result is PASSED iff accepted (policyverify.go),
   whose policy digest is the digest of the exact payload (policyverify.go),
   whose verifier id is the constant "aflock" (policyverify.go),
@@ -86,9 +108,9 @@ over exact bytes.
   subject (policyverify.go). -/
 def emit (hash : String → Digest) (r : Run) : Option Vsa :=
   if !r.policySigOk || !r.decodeOk then none
-  else match r.outcome with
-    | .failed _ => none
-    | .accepted b => some
+  else match verdict r with
+    | none => none
+    | some b => some
       { subjects := r.seeds ++ [⟨hash r.policyPayload⟩]
         policyUri := r.policyUri
         policyDigest := hash r.policyPayload
@@ -98,11 +120,31 @@ def emit (hash : String → Digest) (r : Run) : Option Vsa :=
           r.passedExternals ++ (if b then [] else r.rejectedExternals)
         result := if b then .passed else .failed }
 
-theorem emit_refusal_none (hash : String → Digest) (r : Run) (b : Bool)
-    (h : r.outcome = .failed b) : emit hash r = none := by
+theorem emit_refusal_none (hash : String → Digest) (r : Run)
+    (h : r.outcome = .failed true) : emit hash r = none := by
+  have hv : verdict r = none := by unfold verdict; rw [h]
   unfold emit; split
   · rfl
-  · rw [h]
+  · rw [hv]
+
+/-- Any other error, unless it is an unmet required external, emits nothing. -/
+theorem emit_error_none (hash : String → Digest) (r : Run)
+    (h : r.outcome = .failed false) (hu : r.externalUnmet = false) : emit hash r = none := by
+  have hv : verdict r = none := by unfold verdict; rw [h]; simp [hu]
+  unfold emit; split
+  · rfl
+  · rw [hv]
+
+/-- #8121: an unmet required external under a verified policy emits a FAILED
+VSA. Before, it emitted nothing and the verdict left no evidence. -/
+theorem emit_external_unmet_failed (hash : String → Digest) (r : Run)
+    (hs : r.policySigOk = true) (hd : r.decodeOk = true)
+    (h : r.outcome = .failed false) (hu : r.externalUnmet = true) :
+    ∃ v, emit hash r = some v ∧ v.result = .failed := by
+  have hv : verdict r = some false := by unfold verdict; rw [h]; simp [hu]
+  unfold emit
+  simp only [hs, hd, Bool.not_true, Bool.or_self, Bool.false_eq_true, ↓reduceIte, hv]
+  exact ⟨_, rfl, rfl⟩
 
 /-- What an emitted VSA says about its run. -/
 theorem emit_sound (hash : String → Digest) (r : Run) (v : Vsa) (h : emit hash r = some v) :
@@ -110,7 +152,7 @@ theorem emit_sound (hash : String → Digest) (r : Run) (v : Vsa) (h : emit hash
       v.timeVerified = r.now ∧ v.verifierId = "aflock" ∧
       (∀ s ∈ r.seeds, s ∈ v.subjects) ∧
       (v.result = .passed ↔ r.outcome = .accepted true) ∧
-      (v.result = .failed ↔ r.outcome = .accepted false) := by
+      (v.result = .failed ↔ verdict r = some false) := by
   unfold emit at h
   split at h
   · simp at h
@@ -124,10 +166,11 @@ theorem emit_sound (hash : String → Digest) (r : Run) (v : Vsa) (h : emit hash
     · rename_i b hout
       simp only [Option.some.injEq] at h
       subst h
-      refine ⟨hs', hd', rfl, rfl, rfl, fun s hs => by simp [hs], ?_, ?_⟩ <;>
-        cases b <;> simp [hout]
+      refine ⟨hs', hd', rfl, rfl, rfl, fun s hs => by simp [hs], ?_, ?_⟩
+      · rw [← verdict_true_iff, hout]; cases b <;> simp
+      · rw [hout]; cases b <;> simp
 
--- cite: plugins/attestors/policyverify/policyverify.go:377-417 sha256:01607f0dd65467b21b554d11386ce9b873ba22c7da4af0eb899d1cf30fef7581
+-- cite: plugins/attestors/policyverify/policyverify.go:407-447 sha256:01607f0dd65467b21b554d11386ce9b873ba22c7da4af0eb899d1cf30fef7581
 /-- A VSA names the external evidence that decided it: every passed external
 envelope by its payload digest, and on a FAILED verdict every rejected one.
 A PASSED VSA names no rejected external, as for collections. -/
@@ -149,7 +192,7 @@ theorem emit_names_externals (hash : String → Digest) (r : Run) (v : Vsa) (h :
 
 /-! ## Consumption -/
 
--- cite: attestation/policy/policy.go:1819 sha256:a66860576a2118541df86481df475f9f83f3a31cc93666bfcc6fd6cba3e4cc33
+-- cite: attestation/policy/policy.go:1825 sha256:a66860576a2118541df86481df475f9f83f3a31cc93666bfcc6fd6cba3e4cc33
 /-- A candidate VSA envelope in a downstream verify. `sigOk`: its DSSE
 signature verified against the downstream policy's roots/keys, naming
 `signer` (source/verified.go; policy.go). -/
@@ -159,7 +202,7 @@ structure Candidate where
   sigOk : Bool
   deriving DecidableEq, Repr
 
--- cite: attestation/policy/policy.go:1819-1830 sha256:f100b55459c88dd720341e0520bbfce7ea9953388dbc3c2b1340ff49ff4c60f0
+-- cite: attestation/policy/policy.go:1825-1836 sha256:f100b55459c88dd720341e0520bbfce7ea9953388dbc3c2b1340ff49ff4c60f0
 /-- The consumer's view of a candidate as a `Gate.Envelope`: signature errors
 and subject-unbound both surface as envelope errors (policy.go);
 no commit binding and no declared `commitSubject`, so `commitUnbound` is

@@ -331,7 +331,15 @@ func Verify(ctx context.Context, policyEnvelope dsse.Envelope, policyVerifiers [
 	)
 
 	runResult, err := Run("policyverify", vo.runOptions...)
-	if err != nil {
+	return verifyResultFromRun(runResult, err)
+}
+
+// verifyResultFromRun reads the policyverify summary out of a run. A
+// DetectionError is a verdict the attestor recorded (a required external
+// missing or rejected, #8121): its FAILED summary is returned with the error
+// so the caller can still write the VSA. Any other error reached no verdict.
+func verifyResultFromRun(runResult RunResult, err error) (VerifyResult, error) {
+	if err != nil && !evidenceIsRecordable(err) {
 		return VerifyResult{}, err
 	}
 
@@ -352,6 +360,12 @@ func Verify(ctx context.Context, policyEnvelope dsse.Envelope, policyVerifiers [
 		}
 	}
 
+	if err != nil {
+		if vr.VerificationSummary.VerificationResult != slsa.FailedVerificationResult {
+			return VerifyResult{}, err
+		}
+		return vr, err
+	}
 	if vr.VerificationSummary.VerificationResult != slsa.PassedVerificationResult {
 		return vr, fmt.Errorf("policy verification failed")
 	}

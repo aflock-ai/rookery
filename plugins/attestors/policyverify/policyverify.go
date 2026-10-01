@@ -314,14 +314,11 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 
 	accepted, stepResults, externalResults, policyErr := pol.VerifyWithExternals(ctx.Context(), verifyOpts...)
 	if policyErr != nil {
-		for step, result := range stepResults {
-			log.Warnf("Step %s: passed=%v, accepted=%d, rejected=%d",
-				step, result.Analyze(), len(result.Passed), len(result.Rejected))
-			for _, reject := range result.Rejected {
-				log.Warnf("  rejected: %v", reject.Reason)
-			}
+		logStepResults(stepResults)
+		if !isExternalVerdict(policyErr) {
+			return fmt.Errorf("failed to verify policy: %w", policyErr)
 		}
-		return fmt.Errorf("failed to verify policy: %w", policyErr)
+		accepted = false
 	}
 
 	a.stepResults = stepResults
@@ -333,7 +330,40 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 	a.InputAttestations = append(a.InputAttestations,
 		externalInputAttestations(ctx, externalResults, accepted)...)
 
+	if policyErr != nil {
+		// The FAILED summary above is the evidence; the DetectionError keeps
+		// it in the collection and the run still fails (#8121).
+		return fmt.Errorf("failed to verify policy: %w (%w)", policyErr,
+			attestation.DetectionError{Reason: "the FAILED verification summary is recorded"})
+	}
 	return nil
+}
+
+func logStepResults(stepResults map[string]policy.StepResult) {
+	for step, result := range stepResults {
+		log.Warnf("Step %s: passed=%v, accepted=%d, rejected=%d",
+			step, result.Analyze(), len(result.Passed), len(result.Rejected))
+		for _, reject := range result.Rejected {
+			log.Warnf("  rejected: %v", reject.Reason)
+		}
+	}
+}
+
+// isExternalVerdict reports whether a Verify error is a policy verdict rather
+// than a failure to reach one (#8121). A required external that is missing, or
+// whose every candidate the policy rejected, is judged exactly as a required
+// step with no passing collection: FAILED. The engine returns it as an error
+// only because it stops before the steps. An evaluator refusal or unreadable
+// evidence nested inside it is still no verdict, and is never signed.
+func isExternalVerdict(err error) bool {
+	if policy.NoVerdict(err) {
+		return false
+	}
+	switch err.(type) {
+	case policy.ErrMissingExternalAttestation, policy.ErrExternalAttestationRejected:
+		return true
+	}
+	return false
 }
 
 // evidenceDigest resolves the digest of the exact signed payload bytes a

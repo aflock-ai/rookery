@@ -494,7 +494,15 @@ func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []crypto
 	// input to a downstream policy that must know the previous stage failed.
 	// A structural artifact-binding failure has no VSA verdict. The workflow's
 	// earlier PASSED summary must not escape as a successful artifact decision.
-	if vo.VSAOutFilePath != "" && artifactBindingErr == nil {
+	// Nor does a verify that never reached a verdict (unreadable evidence, a
+	// refused evaluator, a policy whose signature fails): its summary is empty,
+	// and signing it would publish a VSA that decides nothing (#8121).
+	verdictReached := verifiedEvidence.VerificationSummary.VerificationResult == slsa.PassedVerificationResult ||
+		verifiedEvidence.VerificationSummary.VerificationResult == slsa.FailedVerificationResult
+	if vo.VSAOutFilePath != "" && artifactBindingErr == nil && !verdictReached {
+		log.Warnf("no VSA written to %s: verification reached no verdict", vo.VSAOutFilePath)
+	}
+	if vo.VSAOutFilePath != "" && artifactBindingErr == nil && verdictReached {
 		verifiedEvidence.VerificationSummary.ResourceURI = resourceURI
 		if writeErr := writeVSAOutfile(vo.VSAOutFilePath, vsaSubjects, verifiedEvidence, signers, vo.VSATimestampServers); writeErr != nil {
 			// Prefer reporting the verification failure (the more important

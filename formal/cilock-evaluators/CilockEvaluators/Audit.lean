@@ -68,6 +68,8 @@ open CilockEvaluators
 #print axioms Ai.generative_other_model_refused
 -- E6 / E7
 #print axioms Vsa.emit_refusal_none
+#print axioms Vsa.emit_error_none
+#print axioms Vsa.emit_external_unmet_failed
 #print axioms Vsa.emit_sound
 #print axioms Vsa.accepts_iff
 #print axioms Vsa.policy_subject_matches_every_artifact
