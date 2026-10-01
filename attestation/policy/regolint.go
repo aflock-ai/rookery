@@ -369,7 +369,7 @@ func ProbeRegoEmptyPredicate(policies []RegoPolicy) (admits bool, err error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), regoProbeTimeout)
 	defer cancel()
-	err = evaluateRegoInput(ctx, map[string]interface{}{}, policies, "empty-predicate probe")
+	err = evaluateRegoInput(ctx, map[string]interface{}{}, policies, "empty-predicate probe", "")
 	if err == nil {
 		return true, nil
 	}

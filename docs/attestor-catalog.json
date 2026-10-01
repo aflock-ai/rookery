@@ -2014,7 +2014,7 @@
     },
     {
       "name": "slsa",
-      "predicate_type": "https://slsa.dev/provenance/v1.0",
+      "predicate_type": "https://slsa.dev/provenance/v1",
       "run_type": "postproduct",
       "registered": true,
       "has_contract": false

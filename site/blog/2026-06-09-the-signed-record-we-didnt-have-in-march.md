@@ -9,7 +9,7 @@ description: Two March attacks had the same shape — CI ran code it shouldn't h
 
 :::caution Correction 2026-09-29
 
-One statement below was wrong and is corrected inline. No build environment reaches SLSA Build Level 3 with CI/lock today, and SLSA Build L1 and L2 are planned: CI/lock's provenance carries predicateType `https://slsa.dev/provenance/v1.0`, which SLSA verifiers do not recognize, so SLSA Build L1 and L2 are planned until it carries `https://slsa.dev/provenance/v1`. See the [support matrix](https://cilock.dev/reference/support-matrix).
+One statement below was wrong and is corrected inline. No build environment reaches SLSA Build Level 3 with CI/lock today, and when this was written CI/lock's provenance carried predicateType `https://slsa.dev/provenance/v1.0`, which SLSA verifiers do not recognize. CI/lock now emits `https://slsa.dev/provenance/v1`. See the [support matrix](https://cilock.dev/reference/support-matrix).
 
 :::
 
@@ -55,7 +55,7 @@ It's Apache 2.0, and it speaks Witness in both directions, so it drops into what
 
 The tooling we built to secure the supply chain assumed a human doing the setup by hand, at human speed. An agent is already three commits deep before you've finished reading the docs. CI/lock is what Witness taught me, rebuilt for that: same lineage, with the bug fixes we found auditing the upstream code. What's new is who it's for. The first-class user is your agent.
 
-Point your agent at a goal like ~~"get this build to SLSA Level 3"~~ "sign and verify this build's evidence" (corrected 2026-09-29: no environment reaches L3 with CI/lock today, and SLSA Build L1 and L2 are planned) and it can take you there. CI/lock is the engine: it emits SLSA Provenance and in-toto evidence at every step, signs it, and verifies it against Rego policy you write. The evidence then flows into the [TestifySec platform](https://testifysec.com), which maps it onto the frameworks you answer to — FedRAMP, SOC 2, NIST 800-53. A compliance report stops being a project you dread and becomes a read of evidence you already have.
+Point your agent at a goal like ~~"get this build to SLSA Level 3"~~ "sign and verify this build's evidence" (corrected 2026-09-29: no environment reaches L3 with CI/lock today, and the provenance type then blocked SLSA Build L1 and L2) and it can take you there. CI/lock is the engine: it emits SLSA Provenance and in-toto evidence at every step, signs it, and verifies it against Rego policy you write. The evidence then flows into the [TestifySec platform](https://testifysec.com), which maps it onto the frameworks you answer to — FedRAMP, SOC 2, NIST 800-53. A compliance report stops being a project you dread and becomes a read of evidence you already have.
 
 And the part people dread most is already done: you don't stand up Fulcio, a timestamp authority, or any Sigstore plumbing. The platform hosts it. In GitHub Actions you don't even log in: signing uses the runner's ambient OIDC token, keyless, no secrets. On GitLab.com, Buildkite and CircleCI it fetches the job's OIDC token too (on GitLab.com the job declares it with `id_tokens`) (see [keyless signing per CI platform](/guides/choose-a-signer#keyless-signing-per-ci-platform)). `cilock login` only matters when you want attestations stored on the platform. No CA to operate, no keys to rotate.
 

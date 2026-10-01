@@ -21,6 +21,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/intoto"
 )
@@ -149,15 +150,20 @@ func matchSignedExternalSubjects(payload []byte, subjectDigests []string, opts P
 
 // MatchExternalSubjects re-runs the substitution guard on a candidate's SIGNED
 // payload for ONE external: predicateType is that external's declared type and
-// commitSubject its declared prefix ("" for none). It returns nil when the
-// candidate names a requested digest under that external's own rules, and an
-// error matching ErrExternalSubjectNotRequested otherwise.
+// commitSubject its declared prefix ("" for none). The prefix applies under the
+// type's legacy alternate spelling too, since the external's search returns
+// both (#9827). It returns nil when the candidate names a requested digest
+// under that external's own rules, and an error matching
+// ErrExternalSubjectNotRequested otherwise.
 //
 // Call it only on a payload whose signature verified.
 func MatchExternalSubjects(payload []byte, subjectDigests []string, predicateType, commitSubject string) error {
 	opts := PredicateSearchOptions{}
 	if commitSubject != "" {
 		opts.CommitSubjects = map[string][]string{predicateType: {commitSubject}}
+		if alt := attestation.LegacyAlternate(predicateType); alt != "" {
+			opts.CommitSubjects[alt] = []string{commitSubject}
+		}
 	}
 	return matchSignedExternalSubjects(payload, subjectDigests, opts)
 }

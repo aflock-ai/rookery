@@ -76,6 +76,40 @@ workflow's code matters for the claim that only it signed, so it must never run
 caller-supplied code. The `l3Accept` differential (`TestL3AcceptStubMatchesLeanModel`)
 is PENDING: it compares against a Go stub until the verifier exists.
 
+## builder.id against the signer's Build Signer URI (`BuilderIdentity.lean`)
+
+`checkSLSAProvenance` (attestation/policy/slsa_builder.go, #9827) is the
+verify-time half of `builder_id_without_extension`. It refuses the pre-#9827
+`v1.0` type by name (Cole, 2026-09-29: no deprecation window). For SLSA
+provenance v1, a builder.id that names a CI workflow identity must equal a
+satisfying signer's Fulcio Build Signer URI. `BuilderIdentity.refusal` is that
+decision, with the refusal named (legacy-type, malformed, ambiguous-key,
+unbacked). `BuilderIdentity.decode` reads the body by exact key, as Rego reads
+`input.runDetails.builder.id`, and refuses an object on that path that also
+spells the key in another case: encoding/json's struct decode matches keys
+case-insensitively and keeps the last, so without the refusal the check and
+the policy would judge different builder ids. The results are:
+
+- `non_provenance_passes`: every other predicate type passes.
+- `claim_is_backed`: an admitted workflow claim names a satisfying signer's URI.
+- `malformed_refused`: an undecodable builder is refused.
+- `ambiguous_refused`: a builder.id path key spelled in two cases is refused.
+- `legacy_refused`, `legacy_never_admitted`: provenance known by the pre-#9827
+  `v1.0` type is refused, by name, whatever its body and signers.
+- `no_signer_no_claim`: with no satisfying signer, no workflow claim is admitted.
+
+`TestFormalDifferentialSLSABuilderIdentity` (attestation/policy) runs 3,000
+generated cases through the Go and through `ciprov-eval` (`fn:
+builderIdentity`) and compares both the verdict and the named reason. There are
+0 mismatches, and every reason occurs. Making the Go claim match
+case-sensitive turns it red.
+Boundary: lower-casing is ASCII here, while Go's `strings.ToLower` also folds
+a few non-ASCII runes (the Kelvin sign to `k`). Such a builder.id is outside
+the generator. In that case Go checks more than the model, never less.
+A key repeated in its exact spelling is refused by the Go, but `Json.parse`
+keeps only one of the two, so exact repeats are outside the generator too and
+are pinned by `TestCheckSLSABuilderIdentityRefusesCollidingKeys` instead.
+
 ## Binding to the Go
 
 - **Citations are hashed.** Every citation of code in this tree is

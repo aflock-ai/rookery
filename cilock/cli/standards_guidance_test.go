@@ -262,7 +262,7 @@ func TestVerifyObservations(t *testing.T) {
 	// The same workflow identity under another root (public Sigstore).
 	publicCA, publicKey := testCA(t)
 	publicHosted := leafUnder(t, publicCA, publicKey, certificate.Extensions{Issuer: standards.GitHubActionsIssuer, RunnerEnvironment: "github-hosted"})
-	const prov = "https://slsa.dev/provenance/v1.0"
+	const prov = "https://slsa.dev/provenance/v1"
 
 	cases := []struct {
 		name       string

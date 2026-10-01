@@ -4,6 +4,7 @@ import CiProvenance.Subjects
 import CiProvenance.Verdict
 import CiProvenance.Actors
 import CiProvenance.SlsaL3Workflow
+import CiProvenance.BuilderIdentity
 
 /-! Axiom audit: every headline theorem must depend only on Lean's core
 axioms (propext, Quot.sound, Classical.choice). No `native_decide`. -/
@@ -74,3 +75,10 @@ open CiProvenance.L3 in #print axioms inline_l2_accepted_as_l3
 open CiProvenance.L3 in #print axioms builder_id_without_extension
 open CiProvenance.L3 in #print axioms self_hosted_runner_accepted
 open CiProvenance.L3 in #print axioms both_roots_need_both
+open CiProvenance.BuilderIdentity in #print axioms non_provenance_passes
+open CiProvenance.BuilderIdentity in #print axioms claim_is_backed
+open CiProvenance.BuilderIdentity in #print axioms malformed_refused
+open CiProvenance.BuilderIdentity in #print axioms ambiguous_refused
+open CiProvenance.BuilderIdentity in #print axioms legacy_refused
+open CiProvenance.BuilderIdentity in #print axioms legacy_never_admitted
+open CiProvenance.BuilderIdentity in #print axioms no_signer_no_claim

@@ -185,3 +185,11 @@ RejectEmptyConstraintEmptyField is on by default. #9866 then set those lists to
   so the engine's refusal of a path that only cleans to a covered one is not
   modelled. `{…}`, `[…]` and `\` in its globs are literal here.
 - The per-round gate memo (#9860): it replays verdicts and changes none.
+- The SLSA provenance check (#9827, `checkSLSAProvenance`): a further
+  refusal on a collection or external known by the pre-#9827
+  `provenance/v1.0` type (by name), or on SLSA v1 provenance whose builder.id
+  claims a workflow identity no satisfying signer's Build Signer URI carries. It can only reject. It is modelled on its own, and bound by a
+  differential, in `formal/ci-provenance` (`BuilderIdentity.lean`); it is not
+  composed into `verifyFixed` here.
+- `data.rookery.predicateType` (#9827): Rego is an opaque predicate here, so
+  the signed type the verifier hands it is part of that opaque input.

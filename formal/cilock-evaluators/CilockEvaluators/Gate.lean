@@ -1,5 +1,5 @@
--- cite: attestation/policy/step.go:913-1059 sha256:e4d08a4b43a4fc90595cff8e2f12d822928d5feb7b84e53278ef6481851a73d8
--- cite: attestation/policy/policy.go:1807-1949 sha256:d60b4764289538a29eaca28d4c231fa33cf18d1548ea14c46e6af4de5ccfc078
+-- cite: attestation/policy/step.go:913-1071 sha256:ee3a2d9b35e1259474f5bd848eed51af0e43c123e99a77dadbb2542278aa2f2e
+-- cite: attestation/policy/policy.go:1813-1963 sha256:253974a2ed336723aff34d27c8700e3bbbe22f2e0a343470f714efbe521718ae
 -- cite: attestation/policy/policy.go:1960-2001 sha256:48e5293f2cc102e1f9594652dfb2ae9ecdea6e7fdbe38e652c6aebe2cdc85bf9
 -- cite: attestation/policy/step.go:549-554 sha256:351b4b76ec382062d9d27820da19248c21615a0b0b689b0a5cca2805348efffc
 -- cite: attestation/policy/policy.go:667-791 sha256:6ccc053d2d2728df1af6732cf03ae543d5b447cae59fa992ebea02ddba01fbc9
@@ -24,7 +24,7 @@ namespace CilockEvaluators.Gate
 
 open CilockEvaluators
 
--- cite: attestation/policy/step.go:959-981 sha256:66913ac0d392989382e998f0ca3390faefb130f1601e42332f77822160e33316
+-- cite: attestation/policy/step.go:949-969 sha256:75546667101177b8abc744376d1e2c78e540f461fb5c496cd774f4eece73a3c2
 /-- One attestor inside a collection. `type` is its attestation type URI
 (the legacy-alias lookup of step.go is abstracted away: `type` is
 already the matched URI). -/
@@ -63,13 +63,13 @@ structure Evaluators where
   rego : Attestor → Expected → Verdict
   ai : Attestor → Expected → Verdict
 
--- cite: attestation/policy/step.go:953-965 sha256:82035c8327f1d340396c631341ff570b17f9286c99646996a9cc47ba625f1229
+-- cite: attestation/policy/step.go:943-955 sha256:fb1d7babc96bdd8eb8d41aa1558eee6564b39c0c3d85b63d34c019c06998c819
 /-- Every attestor of the expected type; ALL of them, not the last one
 (step.go, "G (#5747)"). -/
 def attestorsOf (c : Collection) (t : String) : List Attestor :=
   c.attestors.filter (fun a => a.type == t)
 
--- cite: attestation/policy/step.go:990-997 sha256:72f155f4a6c7cb2f3bc45a844f2e2ce37a2e98b79bb85bcc2c07d26d21f0fe3c
+-- cite: attestation/policy/step.go:991-998 sha256:6d049ad588889ac9fcd95df86aeda94ffff170ef09b8de8b678432965258f83e
 /-- Verdicts produced for one attestor. AI runs only when Rego passed: a
 deterministic rejection is not disclosed to a provider (step.go). -/
 def attestorVerdicts (ev : Evaluators) (a : Attestor) (e : Expected) : List Verdict :=
@@ -96,13 +96,13 @@ def anyRefused (ev : Evaluators) (c : Collection) (s : Step) : Bool :=
   s.expected.any (fun e => (attestorsOf c e.type).any
     (fun a => (attestorVerdicts ev a e).any (fun v => v == .refused)))
 
--- cite: attestation/policy/step.go:913-1059 sha256:e4d08a4b43a4fc90595cff8e2f12d822928d5feb7b84e53278ef6481851a73d8
+-- cite: attestation/policy/step.go:913-1071 sha256:ee3a2d9b35e1259474f5bd848eed51af0e43c123e99a77dadbb2542278aa2f2e
 -- cite: attestation/policy/regorefusal.go:32-44 sha256:93d80ba472d31d6108b51b5208b745b9172ce7a943358feca21eed76028dd87f
 -- cite: attestation/policy/step.go:919-922 sha256:2e634f1aa948679a297ead28197c9e38d1f45a71bc5784800b0b355fde847122
 -- cite: attestation/policy/step.go:936-944 sha256:89df68265d5e72f6745d75a94e8a3cf7832c739989594eb18f5ca7b84f31c08d
 -- cite: attestation/policy/step.go:946-951 sha256:324819cb96f168941ea7d83daabc3d4763e6ffef6233447119460c4a998a3b43
 -- cite: attestation/policy/step.go:974-982 sha256:5b1c9fe372bf6b19bdc15ca4eec5bb76c8b202999b85531065ff93a166476120
--- cite: attestation/policy/step.go:966-1033 sha256:6690ab89e22425a46a274f5773f623ea0956548765d746036ec917830bc138a1
+-- cite: attestation/policy/step.go:956-1035 sha256:f6123d4b0da234e8212b75bf65bee3fdf85331958dc1b67b551ae73c3f6f2ec7
 /-- `gateOneContext` (step.go):
 * exact step-name match, else skipped (step.go);
 * no required attestations: rejected (F9, step.go);
@@ -167,8 +167,8 @@ theorem gate_fail_closed (ev : Evaluators) (s : Step) (c : Collection)
   · exact hb hr
   · exact hb hai
 
--- cite: attestation/policy/step.go:953-965 sha256:82035c8327f1d340396c631341ff570b17f9286c99646996a9cc47ba625f1229
--- cite: attestation/policy/step.go:985-989 sha256:918c758b7eaa53c475ca2177541850489a24e0dc6b33a6f7e8f1d59380f1dcda
+-- cite: attestation/policy/step.go:943-955 sha256:fb1d7babc96bdd8eb8d41aa1558eee6564b39c0c3d85b63d34c019c06998c819
+-- cite: attestation/policy/step.go:986-990 sha256:98ba3c3fb667cd2f19c9e9fba2abf96b9437276a197712a15199be98a474cb10
 /-- No last-writer-wins: a passing duplicate cannot shadow a failing attestor
 of the same type (step.go). -/
 theorem no_shadowing (ev : Evaluators) (s : Step) (c : Collection) (e : Expected)
@@ -178,7 +178,7 @@ theorem no_shadowing (ev : Evaluators) (s : Step) (c : Collection) (e : Expected
     gate ev s c ≠ .passed :=
   gate_fail_closed ev s c e he bad hbad (Or.inl hb)
 
--- cite: attestation/policy/policy.go:1775-2013 sha256:e739186d2c3fddb063edc0980c8f9be5acd82ba200e2c14f2c98d8ace5aa743a
+-- cite: attestation/policy/policy.go:1772-2024 sha256:59499b38698ad9cdf93a34b51296d20fd48a29f2e42c7472ea2242ad9bd84bcc
 /-! ## External attestations (policy.go)
 
 The stock semantics. An external that sets childPolicyDigest or

@@ -28,6 +28,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/rego"
+	"github.com/open-policy-agent/opa/storage/inmem"
 )
 
 // regoEvalTimeout is the maximum duration allowed for a single Rego policy
@@ -60,6 +61,22 @@ func restrictedCapabilities() *ast.Capabilities {
 }
 
 func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, stepContext ...map[string]interface{}) error {
+	if attestor == nil {
+		if len(policies) == 0 {
+			return nil
+		}
+		return fmt.Errorf("attestor must not be nil")
+	}
+	return EvaluateRegoPolicyForPredicateType(attestor, attestor.Type(), policies, stepContext...)
+}
+
+// EvaluateRegoPolicyForPredicateType is EvaluateRegoPolicy with the
+// predicateType the evidence was signed under (the envelope's statement
+// predicateType, or the collection entry's recorded type). Rego reads it as
+// data.rookery.predicateType. It is passed separately because a legacy
+// spelling resolves to the same attestor factory, so the attestor's own
+// Type() cannot tell the two apart. The input document is unchanged.
+func EvaluateRegoPolicyForPredicateType(attestor attestation.Attestor, predicateType string, policies []RegoPolicy, stepContext ...map[string]interface{}) error {
 	if len(policies) == 0 {
 		return nil
 	}
@@ -101,7 +118,7 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 	ctx, cancel := context.WithTimeout(context.Background(), regoEvalTimeout)
 	defer cancel()
 
-	if err := evaluateRegoInput(ctx, input, policies, attestor.Type()); err != nil {
+	if err := evaluateRegoInput(ctx, input, policies, attestor.Type(), predicateType); err != nil {
 		return err
 	}
 	// An admit that rests on a deny body reading a missing field is not a
@@ -113,11 +130,12 @@ func EvaluateRegoPolicy(attestor attestation.Attestor, policies []RegoPolicy, st
 // returns ErrPolicyDenied when any module denies. attestorType only labels
 // errors. ProbeRegoEmptyPredicate shares it so the probe is the verifier's own
 // evaluator, not a copy of it.
-func evaluateRegoInput(ctx context.Context, input interface{}, policies []RegoPolicy, attestorType string) error { //nolint:gocognit,gocyclo,funlen
+func evaluateRegoInput(ctx context.Context, input interface{}, policies []RegoPolicy, attestorType, predicateType string) error { //nolint:gocognit,gocyclo,funlen
 	query := ""
 	denyPaths := map[string]struct{}{}
 	regoOpts := []func(*rego.Rego){
 		rego.Input(input),
+		rego.Store(inmem.NewFromObject(map[string]interface{}{"rookery": map[string]interface{}{"predicateType": predicateType}})),
 		rego.Capabilities(restrictedCapabilities()),
 		rego.StrictBuiltinErrors(true),
 	}

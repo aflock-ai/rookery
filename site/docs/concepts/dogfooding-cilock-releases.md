@@ -157,7 +157,7 @@ The CI/lock release uses all of these formats simultaneously:
 - **DSSE envelope** wrapping an **in-toto Statement** with a
   **`https://aflock.ai/attestation-collection/v0.1`** predicate
   (canonical evidence shape)
-- **`https://slsa.dev/provenance/v1.0`** predicate in the same envelope
+- **`https://slsa.dev/provenance/v1`** predicate in the same envelope
   (SLSA-format consumer compatibility)
 - **`https://aflock.ai/attestations/inclusion-proof/v0.1`** predicate
   embedding a per-file Merkle inclusion proof against the product tree

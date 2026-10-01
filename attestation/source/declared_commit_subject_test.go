@@ -265,6 +265,20 @@ func TestVsaBindingMatchExternalSubjectsIsPerExternal(t *testing.T) {
 	require.Error(t, err, "the declared subject applies only to the external's own signed predicate type")
 }
 
+// The pre-#9827 "v1.0" spelling has no alias any more (Cole, 2026-09-29), so a
+// commit subject declared under the spec type does not reach a candidate
+// signed under it, nor the other way round.
+func TestVsaBindingMatchExternalSubjectsDoesNotCoverTheLegacySpelling(t *testing.T) {
+	const legacy, spec = "https://slsa.dev/provenance/v1.0", "https://slsa.dev/provenance/v1"
+	for _, tc := range []struct{ signed, declared string }{{legacy, spec}, {spec, legacy}} {
+		stmt := vsaBindingStatement(tc.signed, vsaBindingSubject(vsaBindingPrefix+vsaBindingCommit, vsaBindingCommit))
+		payload, err := json.Marshal(stmt)
+		require.NoError(t, err)
+		require.Error(t, MatchExternalSubjects(payload, []string{vsaBindingCommit}, tc.declared, vsaBindingPrefix),
+			"signed %s, declared %s", tc.signed, tc.declared)
+	}
+}
+
 // The refusal names the subject, says it is SHA-1, and names the policy field
 // that would admit it, with the exact prefix to declare.
 func TestVsaBindingRefusalExplainsSha1AndCommitSubject(t *testing.T) {

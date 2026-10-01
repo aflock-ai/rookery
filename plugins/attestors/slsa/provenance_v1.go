@@ -42,10 +42,16 @@ const (
 // Compile-time interface assertions.
 var _ attestation.Attestor = (*ProvenanceV1)(nil)
 
+// init registers ProvenanceV1 by NAME only. The predicate type is owned by
+// the emitting "slsa" attestor (slsa.Type is the same spec string since
+// #9827), and the type registry keeps one entry per type, so registering it
+// here too would make FactoryByType depend on init order. Both attestors
+// decode and re-encode the same bare predicate, so lookups by type lose
+// nothing.
 func init() {
-	attestation.RegisterAttestation(
+	attestation.RegisterAttestationWithTypes(
 		SLSAProvenanceV1Name,
-		SLSAProvenanceV1PredicateType,
+		nil,
 		SLSAProvenanceV1RunType,
 		func() attestation.Attestor { return NewProvenanceV1() },
 	)

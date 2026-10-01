@@ -1669,7 +1669,7 @@
       "primaryCategory": null,
       "description": "The cilock slsa attestor assembles a SLSA Provenance v1.0 predicate from sibling attestors in the same collection and signs it into in-toto evidence under the slsa.dev predicate type.",
       "emitsFormats": [],
-      "predicateType": "https://slsa.dev/provenance/v1.0",
+      "predicateType": "https://slsa.dev/provenance/v1",
       "runType": "postproduct",
       "hasDoc": true
     },

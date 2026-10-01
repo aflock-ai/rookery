@@ -4,6 +4,7 @@ import CiProvenance.Slsa
 import CiProvenance.Subjects
 import CiProvenance.Verdict
 import CiProvenance.SlsaL3Workflow
+import CiProvenance.BuilderIdentity
 
 /-!
 # JSON evaluation of the model's decision functions
@@ -19,6 +20,8 @@ is re-implemented for the harness.
       -> {"subjects":[[name,[[alg,val],..]],..]}
   {"fn":"alps", <Evidence Booleans>}   -> {"level":"ALPS-n|unknown"}
   {"fn":"slsa", <ProvEvidence Booleans>} -> {"level":"L1|L2|L3|none"}
+  {"fn":"builderIdentity","types":[..],"body":<provenance JSON>,"signers":[..]}
+      -> {"ok":b,"reason":"legacy-type|malformed|unbacked|"}   (BuilderIdentity.refusal)
 -/
 
 namespace CiProvenance.Eval
@@ -118,6 +121,10 @@ def evalCase (j : Json) : Except String Json := do
     return Json.mkObj [("level", Json.str (deriveSlsa p).name)]
   | "l3Accept" =>
     return Json.mkObj [("accept", Json.bool (← l3Case j))]
+  | "builderIdentity" =>
+    let b := BuilderIdentity.decode (← field j "body")
+    let r := BuilderIdentity.refusal (← strs j "types") b (← strs j "signers")
+    return Json.mkObj [("ok", Json.bool r.isNone), ("reason", Json.str ((r.map (·.name)).getD ""))]
   | other => throw s!"unknown fn {other}"
 
 def evalLine (line : String) : String :=

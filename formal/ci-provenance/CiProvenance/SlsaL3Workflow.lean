@@ -21,18 +21,23 @@ subtrees/fulcio/pkg/identity/github/principal.go:197-223, BuildSignerURI =
 job_workflow_ref, BuildSignerDigest = job_workflow_sha, SourceRepositoryDigest
 = sha, RunInvocationURI = run_id and attempt, BuildTrigger = event_name).
 
-What exists in code today: the SLSA attestor emits a constant builder id, and
-the wrong predicate type (#9827). The id names a CI vendor only for a GitHub
-Actions or gitlab.com token verified against that platform's own key set, the
-issuers a Fulcio CA maps; every other CI, and any token verified against a key
-set the build chose, gets the default id (#9839):
--- cite: plugins/attestors/slsa/slsa.go:49-51 sha256:26f324cb42fd3b41502e639a01493ee6ee7adf65058745efc695077c1b0190f5
--- cite: plugins/attestors/slsa/slsa.go:69-98 sha256:b2fdb7d3571fca6c
+What exists in code today: the SLSA attestor emits the spec predicate type
+`https://slsa.dev/provenance/v1` (#9827; the old `v1.0` spelling is refused
+by name, `BuilderIdentity.legacy_refused`). It names a builder only for a GitHub Actions or
+gitlab.com token verified against that platform's own key set, the issuers a
+Fulcio CA maps: the vendor's inline id (`https://aflock.ai/cilock/inline/...`),
+or, for a GitHub job whose GitHub-stamped job_workflow_ref is a compiled-in
+trusted provenance workflow, that workflow's identity. Every other CI, and any
+token verified against a key set the build chose, gets the default id (#9839).
+At verify time a builder.id that names a workflow identity must equal a
+satisfying signer's Build Signer URI (`BuilderIdentity.lean`):
+-- cite: plugins/attestors/slsa/slsa.go:48-66 sha256:cafdcc34f00aea32c42a3d4f0c15c39198e08bc192e0cf9c8f75d74b30bc6494
+-- cite: plugins/attestors/slsa/slsa.go:117-157 sha256:bda6cb4c7344ca2c03ea6bd46aa957d973deed83af67c3e906295db26a4cbb5b
 Policy functionaries can already constrain Fulcio extensions; an empty field
 allows every value, and a field containing a glob metacharacter is matched as
 a glob:
 -- cite: attestation/policy/constraints.go:109-116 sha256:208a832ff24c03297e7d791ec31ee1f2efa73d9ea1d6f0c8ce23af7f9878beae
--- cite: attestation/policy/constraints.go:357-364 sha256:9dbd6b15aae6492a30ef0b4324fa51cfdfe95a344410a4b9634430422e4be58f
+-- cite: attestation/policy/constraints.go:346-353 sha256:9dbd6b15aae6492a30ef0b4324fa51cfdfe95a344410a4b9634430422e4be58f
 `cilock verify --slsa-level` does not exist, so `l3Accept` is the reference.
 -/
 

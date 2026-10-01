@@ -1,4 +1,4 @@
--- cite: attestation/policy/rego.go:62-237 sha256:268abef39797501f73bde824e07a58e41bcee50689be615520ddcd4cb4279237
+-- cite: attestation/policy/rego.go:63-255 sha256:76586675bac26f9f675a7427cf9971fdf95d83dffd0072c1a204d1b5375f936c
 -- cite: attestation/policy/rego.go:33-38 sha256:842103b4eef11ae89d6e0fb75474a4d1a430065ebfa01b7c1f5f105babbc4a01
 -- cite: attestation/policy/rego.go:101-101 sha256:8ba0d3e19b058269478748cefd49715d8105ef20fdab122a0c62ac2c673a451e
 -- cite: attestation/policy/rego.go:169-182 sha256:f2d1c2a9adf342f61c56856c27a0c0cae27c3249c2afa71d0151297c4852eebe
@@ -108,7 +108,7 @@ def DenyValue.nonEmpty : DenyValue → Bool
 -- cite: attestation/policy/rego.go:189-191 sha256:c3de20442e68a81e757aaae977cec966e4fa27d3c3924633da910b7d6aca8b65
 -- cite: attestation/policy/rego.go:226-227 sha256:fe7d27bcaff68433465a646333cfe7e5c3ef9c8138d4cfd31cad0646ebda2a1e
 -- cite: attestation/policy/rego.go:232-233 sha256:8652ff077745e11f2003b1666ef3c4c0c42d5ff4e3db04531c39cb35eae5ae44
--- cite: attestation/policy/rego.go:104-109 sha256:2297c5979ffa72f9f901314b3fc3fbfabe968cec316ba91cba31d678e1026f4a
+-- cite: attestation/policy/rego.go:121-126 sha256:57c560957a350c92e4d5c7fe8087f3e948e3a8f82f281e73a5ed8824740360b4
 -- cite: attestation/policy/regostrict.go:82-101 sha256:7f85cf00e3427d6486044bde567d70cd7fc82643742ef80f07b825712cbf5eeb
 /-- The evaluator. `rejectDup` is `Hardening().RejectDuplicateRegoPackage`
 (hardening.go, default false).
@@ -285,7 +285,7 @@ theorem nonempty_deny_rejects (rd : Bool) (mods : List Module) (run : OpaRun)
   · subst h; cases hm
   · rw [h m hm] at hn; cases hn
 
--- cite: attestation/policy/rego.go:104-109 sha256:2297c5979ffa72f9f901314b3fc3fbfabe968cec316ba91cba31d678e1026f4a
+-- cite: attestation/policy/rego.go:121-126 sha256:57c560957a350c92e4d5c7fe8087f3e948e3a8f82f281e73a5ed8824740360b4
 /-- An admit that the missing-field probe does not clear cannot pass: a
 missing read is an error and a probe deadline a refusal (regostrict.go,
 #9869). -/

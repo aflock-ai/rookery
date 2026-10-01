@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -41,21 +42,64 @@ import (
 )
 
 const (
-	Name             = "slsa"
-	Type             = "https://slsa.dev/provenance/v1.0"
-	RunType          = attestation.PostProductRunType
-	defaultExport    = false
-	BuildType        = "https://aflock.ai/slsa-build@v0.1"
+	Name = "slsa"
+	// Type is the predicateType the SLSA v1.0 spec defines
+	// (https://slsa.dev/spec/v1.0/provenance). Tools that match it exactly
+	// (slsa-verifier, gh attestation verify) ignore any other spelling.
+	Type          = "https://slsa.dev/provenance/v1"
+	RunType       = attestation.PostProductRunType
+	defaultExport = false
+	BuildType     = "https://aflock.ai/slsa-build@v0.1"
+
+	// DefaultBuilderId is the id cilock stamps when it cannot name a build
+	// platform: no CI attestor ran, or the CI's OIDC token was not verified
+	// against that platform's own key set (see builderIDFor). It claims
+	// nothing, and the SLSA gate and the policy templates refuse it.
 	DefaultBuilderId = "https://aflock.ai/attestation-default-builder@v0.1"
-	GHABuilderId     = "https://aflock.ai/attestation-github-action-builder@v0.1"
-	GLCBuilderId     = "https://aflock.ai/attestation-gitlab-component-builder@v0.1"
+
+	// builder.id is "the transitive closure of the trusted build platform"
+	// (SLSA v1.0). When cilock runs inline in the build job, that closure is
+	// the build job itself plus cilock, so the id names the inline mode and
+	// the CI vendor. A verifier can tell these ids apart from an isolated
+	// signer's (a reusable-workflow identity, see builderIDFor). Each is
+	// emitted only on the platform-verified path.
+	InlineGHABuilderId = "https://aflock.ai/cilock/inline/github-actions@v1"
+	InlineGLCBuilderId = "https://aflock.ai/cilock/inline/gitlab-ci@v1"
+
+	// Deprecated: no longer emitted. The per-vendor ids cilock stamped before
+	// #9827 whether cilock ran inline or not; stored provenance still carries
+	// them and they remain valid, opaque builder.id values on read.
+	GHABuilderId = "https://aflock.ai/attestation-github-action-builder@v0.1"
+	// Deprecated: see GHABuilderId.
+	GLCBuilderId = "https://aflock.ai/attestation-gitlab-component-builder@v0.1"
 	// Deprecated: no longer emitted. Jenkins has no Fulcio issuer mapping, so
 	// a Jenkins build never reaches the level a named builder implies (#9839).
 	JenkinsBuilderId = "https://aflock.ai/attestation-jenkins-component-builder@v0.1"
 	// Deprecated: no longer emitted. CodeBuild issues no workload OIDC token,
 	// so a CodeBuild build never reaches the level a named builder implies (#9839).
 	AWSCodeBuildBuilderId = "https://aflock.ai/attestation-aws-codebuild-builder@v0.1"
+
+	// githubActionsJWKSURL is GitHub's own OIDC key set. A claim is
+	// GitHub-stamped only when the token verified against it; the github
+	// attestor's JWKS URL can be redirected by an environment variable
+	// (WITNESS_GITHUB_JWKS_URL) a build step controls.
+	githubActionsJWKSURL = "https://token.actions.githubusercontent.com/.well-known/jwks"
 )
+
+// trustedProvenanceWorkflows lists the reusable workflows, as
+// "<owner>/<repo>/.github/workflows/<file>" without a ref, that run cilock as
+// an isolated provenance signer. When the job's GitHub-verified OIDC token
+// says the job IS one of these (job_workflow_ref), builder.id is that
+// workflow's identity, the same pattern slsa-github-generator uses.
+//
+// It is compiled in on purpose: no CLI flag, environment variable or config
+// file can extend it, so a tenant build step cannot promote its own run. The
+// claim is also cross-checked at verify time against the signing cert's
+// Fulcio Build Signer URI (policy.checkSLSAProvenance), which is what
+// actually stops a tenant who controls the cilock process from asserting it.
+var trustedProvenanceWorkflows = []string{
+	"aflock-ai/cilock-action/.github/workflows/provenance.yml",
+}
 
 // builderIssuers is the one OIDC issuer per CI attestor whose token a Fulcio
 // CA (public Sigstore and the TestifySec platform alike) maps to a build
@@ -71,8 +115,8 @@ var builderIssuers = map[string]struct {
 	jwks      string
 	builderID string
 }{
-	github.Name: {"https://token.actions.githubusercontent.com", "https://token.actions.githubusercontent.com/.well-known/jwks", GHABuilderId},
-	gitlab.Name: {"https://gitlab.com", "https://gitlab.com/oauth/discovery/keys", GLCBuilderId},
+	github.Name: {"https://token.actions.githubusercontent.com", githubActionsJWKSURL, InlineGHABuilderId},
+	gitlab.Name: {"https://gitlab.com", "https://gitlab.com/oauth/discovery/keys", InlineGLCBuilderId},
 }
 
 // builderIDFor returns the builder.id to stamp for a CI attestor whose
@@ -86,6 +130,10 @@ var builderIssuers = map[string]struct {
 // Jenkins, AWS CodeBuild and any token verified against another key set all
 // fall back to DefaultBuilderId, which claims nothing. The attestor's run
 // data (invocation ID, commit) is still recorded.
+//
+// On that verified path a GitHub job that IS a trusted provenance workflow
+// (its GitHub-stamped job_workflow_ref, pinned to a ref) is named by that
+// workflow's identity; every other verified job by its vendor's inline id.
 func builderIDFor(attestorName string, tok *jwt.Attestor) string {
 	want, ok := builderIssuers[attestorName]
 	if !ok || tok == nil || tok.VerifiedBy.JWKSUrl != want.jwks {
@@ -93,6 +141,13 @@ func builderIDFor(attestorName string, tok *jwt.Attestor) string {
 	}
 	if iss, _ := tok.Claims["iss"].(string); iss != want.issuer {
 		return DefaultBuilderId
+	}
+	if attestorName == github.Name {
+		ref, _ := tok.Claims["job_workflow_ref"].(string)
+		workflow, at, ok := strings.Cut(ref, "@")
+		if ok && at != "" && slices.Contains(trustedProvenanceWorkflows, workflow) {
+			return "https://github.com/" + ref
+		}
 	}
 	return want.builderID
 }
@@ -172,6 +227,9 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolin
 	p.PbProvenance.RunDetails.Builder.ID = DefaultBuilderId
 
 	internalParameters := make(map[string]interface{})
+	var sources sourceDependencies
+	var claims []sourceClaim
+	var observed string
 
 	for _, attestor := range ctx.CompletedAttestors() {
 		if attestor.Error != nil {
@@ -193,23 +251,17 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolin
 
 			internalParameters["env"] = pbEnvs
 
+		// The git attestor's remotes are deliberately NOT a source dependency:
+		// remotes are local, mutable config, so an unused remote naming the
+		// expected repository would vouch for any checkout. The source comes
+		// from the CI platform's signed claims below, and only the observed
+		// checkout's verified commit binds them (bindSources).
 		case git.Name:
-			gitAttestor, ok := attestor.Attestor.(git.GitAttestor)
+			g, ok := attestor.Attestor.(git.GitAttestor)
 			if !ok {
 				continue
 			}
-			digestSet := gitAttestor.Data().CommitDigest
-			remotes := gitAttestor.Data().Remotes
-			digests, _ := digestSet.ToNameMap()
-
-			for _, remote := range remotes {
-				p.PbProvenance.BuildDefinition.ResolvedDependencies = append(
-					p.PbProvenance.BuildDefinition.ResolvedDependencies,
-					&v1.ResourceDescriptor{
-						Name:   remote,
-						Digest: digests,
-					})
-			}
+			observed = observedCheckout(g.Data())
 
 		case github.Name: //nolint:dupl // github and gitlab cases are structurally similar but differ in types
 			gh, ok := attestor.Attestor.(github.GitHubAttestor)
@@ -224,16 +276,8 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolin
 			}
 			p.PbProvenance.RunDetails.Builder.ID = builderIDFor(github.Name, gh.Data().JWT)
 
-			if sha, ok := gh.Data().JWT.Claims["sha"].(string); ok && sha != "" {
-				digest := make(map[string]string)
-				digest["sha1"] = sha
-				p.PbProvenance.BuildDefinition.ResolvedDependencies = append(
-					p.PbProvenance.BuildDefinition.ResolvedDependencies,
-					&v1.ResourceDescriptor{
-						Digest: digest,
-					})
-			} else {
-				log.Warn("No SHA found in GitHub JWT or SHA is not a string")
+			if c, ok := githubSourceClaim(gh.Data()); ok {
+				claims = append(claims, c)
 			}
 
 		case gitlab.Name: //nolint:dupl // gitlab and github cases are structurally similar but differ in types
@@ -249,16 +293,8 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolin
 			}
 			p.PbProvenance.RunDetails.Builder.ID = builderIDFor(gitlab.Name, gl.Data().JWT)
 
-			if sha, ok := gl.Data().JWT.Claims["sha"].(string); ok && sha != "" {
-				digest := make(map[string]string)
-				digest["sha1"] = sha
-				p.PbProvenance.BuildDefinition.ResolvedDependencies = append(
-					p.PbProvenance.BuildDefinition.ResolvedDependencies,
-					&v1.ResourceDescriptor{
-						Digest: digest,
-					})
-			} else {
-				log.Warn("No SHA found in GitLab JWT")
+			if c, ok := gitlabSourceClaim(gl.Data()); ok {
+				claims = append(claims, c)
 			}
 
 		case jenkins.Name:
@@ -342,7 +378,9 @@ func (p *Provenance) Attest(ctx *attestation.AttestationContext) error { //nolin
 		log.Warn("SLSA provenance names the default builder: a named builder id is emitted only for GitHub Actions and GitLab.com jobs whose OIDC token the github or gitlab attestor verified")
 	}
 
+	bindSources(&sources, claims, observed, internalParameters)
 	p.PbProvenance.BuildDefinition.InternalParameters = internalParameters
+	p.PbProvenance.BuildDefinition.ResolvedDependencies = append(p.PbProvenance.BuildDefinition.ResolvedDependencies, sources.list()...)
 
 	return nil
 }

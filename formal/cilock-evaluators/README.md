@@ -168,4 +168,13 @@ against the code of #9869 to #9873.
 - **Numbers.** float64 is modelled as fixed point with ten decimals. Comparisons are exact; decimal-to-binary rounding is not modelled.
 - **OPA.** Not modelled. The model takes OPA's `deny` value per package, a fault flag and whether the fault is the deadline, whether a module's `allow` is unread (`regoallow.go`), and what the missing-field probe reported (`regostrict.go`). The Rego texts the differential emits are what tie those abstract values back to OPA.
 - **Jev.** Answer shape checks beyond kind, range and option membership (distribution sums, legends) collapse into "does not parse". Request grouping by model and state is not modelled.
+- **SLSA provenance (#9827).** `checkSLSAProvenance` adds one more refusal
+  per collection attestation and per external candidate (the pre-#9827
+  `provenance/v1.0` type, by name, and an unbacked builder identity), alongside
+  Rego and AI. It can only reject, and `Gate.gate_passed_iff` does not list it
+  as a conjunct. Under nested semantics (`Nested.externalLatest`) the refusal is recorded as that candidate's failed verdict, so a refused latest candidate still decides (`TestLatestExternalRefusedBySLSACheckStillDecides`). Its decision is modelled in `formal/ci-provenance`
+  (`BuilderIdentity.lean`, `TestFormalDifferentialSLSABuilderIdentity`).
+- **Signed predicateType.** Rego modules also read `data.rookery.predicateType`
+  (#9827). The model's per-package `deny` value is already whatever OPA
+  returned on that input, so nothing here changes.
 - **Envelope order.** When a candidate both fails its signature and names another subject, the model treats it as unbound. That order belongs to the verified source, which the trust model owns.

@@ -1795,19 +1795,25 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 	for _, name := range sortedNames(p.ExternalAttestations) {
 		ext := p.ExternalAttestations[name]
 		er := ExternalResult{Name: name}
-		declared := commitSubjects[ext.PredicateType]
 		// Nested semantics (external_latest.go): admitted candidates, latest decides.
 		var cands []latestCandidate
 		now := time.Now()
 
-		envelopes, ok := searched[ext.PredicateType]
+		// Search the legacy spelling too (e.g. SLSA provenance "v1.0" vs the
+		// spec "v1", #9827), the equivalence step attestation matching
+		// applies through LegacyAlternate. Key the shared search by the
+		// canonical type, so two externals naming the two spellings share
+		// one search instead of the second seeing an emptied candidate set.
+		searchKey := attestation.ResolveLegacyType(ext.PredicateType)
+		declared := commitSubjects[searchKey]
+		envelopes, ok := searched[searchKey]
 		if !ok {
 			var err error
-			envelopes, err = searchExternal(ctx, vo, ext.PredicateType, declared)
+			envelopes, err = searchExternal(ctx, vo, externalPredicateTypes(ext.PredicateType), declared)
 			if err != nil {
 				return results, fmt.Errorf("%w: failed to search external attestation %q: %w", ErrEvidenceUnavailable, name, err)
 			}
-			searched[ext.PredicateType] = envelopes
+			searched[searchKey] = envelopes
 		}
 
 		for _, env := range envelopes {
@@ -1906,7 +1912,15 @@ func (p Policy) verifyExternalAttestations(ctx context.Context, vo *verifyOption
 				continue
 			}
 
-			if err := EvaluateRegoPolicy(env.Attestor, ext.RegoPolicies, nil); err != nil {
+			if err := checkSLSAProvenance(env.Attestor, validFunctionaries, ext.PredicateType, env.Statement.PredicateType); err != nil {
+				er.Rejected = append(er.Rejected, RejectedExternal{Envelope: env, Reason: err})
+				// A refused latest candidate must still decide the external, or
+				// an older admitted one would stand in for it.
+				mark(false)
+				continue
+			}
+
+			if err := EvaluateRegoPolicyForPredicateType(env.Attestor, env.Statement.PredicateType, ext.RegoPolicies, nil); err != nil {
 				er.Rejected = append(er.Rejected, RejectedExternal{Envelope: env, Reason: err})
 				mark(false)
 				continue

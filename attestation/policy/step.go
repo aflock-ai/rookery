@@ -933,7 +933,7 @@ func (s Step) gateOneContext(ctx context.Context, collection source.CollectionVe
 	// lifted by buildRegoInput when the input is wrapped (#10528).
 	stepContext = withCurrentCollection(stepContext, collection)
 
-	found := make(map[string][]attestation.Attestor)
+	found := make(map[string][]attestation.CollectionAttestation)
 	// []error, not []string: calling .Error() here is what severed every typed
 	// cause from the consumer. See ErrCollectionValidationFailed.
 	reasons := make([]error, 0)
@@ -958,16 +958,27 @@ func (s Step) gateOneContext(ctx context.Context, collection source.CollectionVe
 		}
 	}
 
+	// #9827: provenance under the pre-#9827 type is refused by name, and a
+	// builder.id claiming a CI workflow identity must be the authorized
+	// signer's Fulcio Build Signer URI, or the tenant who wrote the provenance
+	// body could claim an isolated builder it never ran on.
+	for _, att := range collection.Collection.Attestations {
+		if err := checkSLSAProvenance(att.Attestation, collection.ValidFunctionaries, att.Type); err != nil {
+			passed = false
+			reasons = append(reasons, err)
+		}
+	}
+
 	// G (#5747): collect ALL attestors per type, not just the last one. A
 	// last-writer-wins map let a passing attestor shadow a failing attestor
 	// of the same type, so a malicious duplicate could bypass the policy.
 	for _, att := range collection.Collection.Attestations {
-		found[att.Type] = append(found[att.Type], att.Attestation)
+		found[att.Type] = append(found[att.Type], att)
 		// Also register under the alternate URI so that policies
 		// written with witness.dev URIs match aflock.ai attestations and
 		// vice versa.
 		if alt := attestation.LegacyAlternate(att.Type); alt != "" {
-			found[alt] = append(found[alt], att.Attestation)
+			found[alt] = append(found[alt], att)
 		}
 	}
 
@@ -994,8 +1005,9 @@ func (s Step) gateOneContext(ctx context.Context, collection source.CollectionVe
 		// G (#5747): evaluate EVERY attestor of this type. If ANY fails, the
 		// collection fails — a passing duplicate must not shadow a failing
 		// one (no last-writer-wins bypass).
-		for _, attestor := range attestors {
-			if err := EvaluateRegoPolicy(attestor, expected.RegoPolicies, stepContext); err != nil {
+		for _, entry := range attestors {
+			attestor := entry.Attestation
+			if err := EvaluateRegoPolicyForPredicateType(attestor, entry.Type, expected.RegoPolicies, stepContext); err != nil {
 				passed = false
 				reasons = append(reasons, err)
 				// A deterministic rejection cannot be repaired by inference;

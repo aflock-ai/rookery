@@ -103,10 +103,10 @@ func TestAttestEmitsANamedBuilderOnlyForAMappedIssuer(t *testing.T) {
 		wantID     string
 		wantInvoke string
 	}{
-		{"github.com actions", gh("https://token.actions.githubusercontent.com"), GHABuilderId, "https://github.com/acme/widget/actions/runs/1"},
+		{"github.com actions", gh("https://token.actions.githubusercontent.com"), InlineGHABuilderId, "https://github.com/acme/widget/actions/runs/1"},
 		{"github without a token", gh(""), DefaultBuilderId, "https://github.com/acme/widget/actions/runs/1"},
 		{"github enterprise server", gh("https://ghes.acme.example/_services/token"), DefaultBuilderId, "https://github.com/acme/widget/actions/runs/1"},
-		{"gitlab.com", gl("https://gitlab.com"), GLCBuilderId, "https://gitlab.example/acme/widget/-/pipelines/1"},
+		{"gitlab.com", gl("https://gitlab.com"), InlineGLCBuilderId, "https://gitlab.example/acme/widget/-/pipelines/1"},
 		{"gitlab without a token", gl(""), DefaultBuilderId, "https://gitlab.example/acme/widget/-/pipelines/1"},
 		{"self-managed gitlab", gl("https://gitlab.acme.example"), DefaultBuilderId, "https://gitlab.example/acme/widget/-/pipelines/1"},
 		{"jenkins", &stubJenkins{jk}, DefaultBuilderId, "https://jenkins.example/job/widget/1"},

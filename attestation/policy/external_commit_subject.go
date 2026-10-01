@@ -27,8 +27,10 @@ import (
 	"github.com/aflock-ai/rookery/attestation/source"
 )
 
-// externalCommitSubjects collects, per predicate type, every commitSubject a
-// policy declares, sorted and de-duplicated.
+// externalCommitSubjects collects, per canonical predicate type, every
+// commitSubject a policy declares, sorted and de-duplicated. Keying by the
+// canonical type (attestation.ResolveLegacyType) matches the shared search,
+// which covers both spellings of a type (#9827).
 func externalCommitSubjects(externals map[string]ExternalAttestation) map[string][]string {
 	out := map[string][]string{}
 	for _, name := range sortedNames(externals) {
@@ -36,28 +38,44 @@ func externalCommitSubjects(externals map[string]ExternalAttestation) map[string
 		if ext.CommitSubject == "" {
 			continue
 		}
-		prefixes := out[ext.PredicateType]
+		key := attestation.ResolveLegacyType(ext.PredicateType)
+		prefixes := out[key]
 		if !slices.Contains(prefixes, ext.CommitSubject) {
 			prefixes = append(prefixes, ext.CommitSubject)
 			sort.Strings(prefixes)
 		}
-		out[ext.PredicateType] = prefixes
+		out[key] = prefixes
 	}
 	return out
 }
 
-// searchExternal searches one predicate type. With no declared commit subject
-// it is the historical SearchByPredicateType call, unchanged. With some, it
-// uses the options search when the verified source offers one; a source that
-// does not keeps the strict guard, so it can only admit less.
-func searchExternal(ctx context.Context, vo *verifyOptions, predicateType string, declared []string) ([]source.StatementEnvelope, error) {
+// externalPredicateTypes is the type an external declares plus its legacy
+// alternate spelling, if any (e.g. SLSA provenance "v1.0" and "v1", #9827).
+func externalPredicateTypes(predicateType string) []string {
+	types := []string{predicateType}
+	if alt := attestation.LegacyAlternate(predicateType); alt != "" {
+		types = append(types, alt)
+	}
+	return types
+}
+
+// searchExternal searches one predicate type in every spelling. With no
+// declared commit subject it is the historical SearchByPredicateType call.
+// With some, it uses the options search when the verified source offers one,
+// declaring the prefixes under every spelling it searches; a source that does
+// not keeps the strict guard, so it can only admit less.
+func searchExternal(ctx context.Context, vo *verifyOptions, predicateTypes, declared []string) ([]source.StatementEnvelope, error) {
 	if len(declared) > 0 {
 		if withOpts, ok := vo.verifiedSource.(source.PredicateSearcherWithOptions); ok {
-			return withOpts.SearchByPredicateTypeWithOptions(ctx, []string{predicateType}, vo.subjectDigests,
-				source.PredicateSearchOptions{CommitSubjects: map[string][]string{predicateType: declared}})
+			commitSubjects := make(map[string][]string, len(predicateTypes))
+			for _, t := range predicateTypes {
+				commitSubjects[t] = declared
+			}
+			return withOpts.SearchByPredicateTypeWithOptions(ctx, predicateTypes, vo.subjectDigests,
+				source.PredicateSearchOptions{CommitSubjects: commitSubjects})
 		}
 	}
-	return vo.verifiedSource.SearchByPredicateType(ctx, []string{predicateType}, vo.subjectDigests)
+	return vo.verifiedSource.SearchByPredicateType(ctx, predicateTypes, vo.subjectDigests)
 }
 
 // ExternalCandidateDiagnostic describes one external candidate that was

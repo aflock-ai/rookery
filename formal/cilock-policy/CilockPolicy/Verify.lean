@@ -100,7 +100,7 @@ def normSeed (seed : String) : String :=
     source normalizes every seed and keys every subject the same way
     (`verified.go`), so a value recorded under one algorithm never matches a
     seed computed under another.
-    -- cite: plugins/attestors/policyverify/policyverify.go:121-138 sha256:237f48662d314cab35a32b69eb277b293aa328896b84e717a3ce9548e4f5790b
+    -- cite: plugins/attestors/policyverify/policyverify.go:117-134 sha256:237f48662d314cab35a32b69eb277b293aa328896b84e717a3ce9548e4f5790b
     -/
 def anchorHits (seeds : List String) (c : Collection) : List String :=
   (c.subjects.filter fun s => matchable c.hardenedGit s && (seeds.map normSeed).contains (subjectKey s)).map
@@ -125,7 +125,7 @@ def commitOk (o : Options) (c : Collection) : Bool :=
   | some k => !(gitHashes c).isEmpty && (gitHashes c).all fun h => lower h == lower k
 
 /-! ## Rego context and the gate (`step.go`)
-  -- cite: attestation/policy/step.go:645-1059 sha256:1e24723a70cd5447f3c80a0a0ebcd0d6995655dd22e04f1e8db63068fbac3642
+  -- cite: attestation/policy/step.go:645-1071 sha256:737e47aee5e7fd8f4251f588f6777d40f52912f8bd7cb1604e6b8e8363647700
 -/
 
 /-- What Rego sees besides the attestor: input.steps (dependency name ->
@@ -143,7 +143,7 @@ abbrev RegoExt := Nat → Collection → Bool
 /-- gateOneContext + gateBound: exact name, commit binding, a non-empty
     requirement list, every required type present, and EVERY attestor of that
     type passing its gate (no last-writer-wins, `step.go`).
-    -- cite: attestation/policy/step.go:953-1033 sha256:83406a52a45e22adeaaa6ce60fd75309d0e86922ec48c0cc22f105da13f86d32
+    -- cite: attestation/policy/step.go:943-1035 sha256:8520bea44bb8e0453489db239dde30984bb2f15b724f86002916bbdb298b2ee1
     -/
 def gate (rego : Rego) (o : Options) (s : Step) (ctx : Ctx) (c : Collection) : Bool :=
   c.name == s.name && commitOk o c && !s.atts.isEmpty &&
@@ -454,7 +454,7 @@ def pruneLoop (p : Policy) (o : Options) : Nat → State → State
 def prune (p : Policy) (o : Options) (st : State) : State := pruneLoop p o (size st + 1) st
 
 /-! ## Externals (`policy.go`)
-  -- cite: attestation/policy/policy.go:1775-2013 sha256:e739186d2c3fddb063edc0980c8f9be5acd82ba200e2c14f2c98d8ace5aa743a
+  -- cite: attestation/policy/policy.go:1772-2024 sha256:59499b38698ad9cdf93a34b51296d20fd48a29f2e42c7472ea2242ad9bd84bcc
 -/
 
 /-- An external candidate is bound when DSSE passes... the substitution guard

@@ -36,12 +36,12 @@ func TestBuilderIDClaimsOnlyWhatTheIssuerMappingSupports(t *testing.T) {
 		claims   map[string]interface{}
 		want     string
 	}{
-		{"github.com actions", "github", map[string]interface{}{"iss": "https://token.actions.githubusercontent.com"}, GHABuilderId},
+		{"github.com actions", "github", map[string]interface{}{"iss": "https://token.actions.githubusercontent.com"}, InlineGHABuilderId},
 		{"github enterprise server", "github", map[string]interface{}{"iss": "https://ghes.acme.example/_services/token"}, DefaultBuilderId},
 		{"github enterprise slug issuer", "github", map[string]interface{}{"iss": "https://token.actions.githubusercontent.com/acme"}, DefaultBuilderId},
 		{"github without a verified token", "github", nil, DefaultBuilderId},
 		{"github issuer not a string", "github", map[string]interface{}{"iss": 7}, DefaultBuilderId},
-		{"gitlab.com", "gitlab", map[string]interface{}{"iss": "https://gitlab.com"}, GLCBuilderId},
+		{"gitlab.com", "gitlab", map[string]interface{}{"iss": "https://gitlab.com"}, InlineGLCBuilderId},
 		{"self-managed gitlab", "gitlab", map[string]interface{}{"iss": "https://gitlab.acme.example"}, DefaultBuilderId},
 		{"gitlab.com lookalike", "gitlab", map[string]interface{}{"iss": "https://gitlab.com.evil.example"}, DefaultBuilderId},
 		{"gitlab without a verified token", "gitlab", nil, DefaultBuilderId},
