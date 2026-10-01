@@ -59,7 +59,7 @@ func TestAttestorsList_TableFormatStillRenders(t *testing.T) {
 		var buf bytes.Buffer
 		require.NoError(t, runList(&buf, format))
 		assert.Contains(t, buf.String(), "NAME",
-			"table output must render a header (tablewriter upper-cases it)")
+			"table output must render a header (the table upper-cases it)")
 	}
 }
 
@@ -95,4 +95,34 @@ func TestIsDefaultAttestor(t *testing.T) {
 	}
 	assert.False(t, isDefaultAttestor("sbom"))
 	assert.False(t, isDefaultAttestor(""))
+}
+
+// TestAttestorsTable_ByteIdenticalToLegacyLayout pins the exact bytes the list
+// command printed when it used olekukonko/tablewriter (captured from that
+// implementation before it was dropped). compat_test.sh and the pushgate edge
+// suite parse this output, so the layout is an interface.
+func TestAttestorsTable_ByteIdenticalToLegacyLayout(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, writeAttestorsTable(&buf, []attestorListEntry{
+		{Name: "git", PredicateType: "https://aflock.ai/attestations/git/v0.1", RunType: "prematerial", Default: true},
+		{Name: attestorCommandRun, PredicateType: "t", RunType: "execute", AlwaysRun: true, Default: true},
+		{Name: "a-much-longer-attestor-name-here", PredicateType: "x", RunType: "post"},
+		{Name: "", PredicateType: "", RunType: ""},
+	}))
+	assert.Equal(t, `┌────────────────────────────────────┬─────────────────────────────────────────┬─────────────┐
+│                NAME                │                  TYPE                   │  RUN TYPE   │
+├────────────────────────────────────┼─────────────────────────────────────────┼─────────────┤
+│ git (default)                      │ https://aflock.ai/attestations/git/v0.1 │ prematerial │
+│ command-run (always run) (default) │ t                                       │ execute     │
+│ a-much-longer-attestor-name-here   │ x                                       │ post        │
+│                                    │                                         │             │
+└────────────────────────────────────┴─────────────────────────────────────────┴─────────────┘
+`, buf.String())
+
+	buf.Reset()
+	require.NoError(t, writeAttestorsTable(&buf, nil))
+	assert.Equal(t, `┌──────┬──────┬──────────┐
+│ NAME │ TYPE │ RUN TYPE │
+└──────┴──────┴──────────┘
+`, buf.String(), "no rows: no header separator, as before")
 }

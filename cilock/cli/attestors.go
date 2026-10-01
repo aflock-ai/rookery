@@ -21,10 +21,10 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
-	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 )
 
@@ -162,16 +162,62 @@ func writeAttestorsTable(w io.Writer, entries []attestorListEntry) error {
 		items = append(items, []string{name, e.PredicateType, e.RunType})
 	}
 
-	table := tablewriter.NewWriter(w)
-	table.Header([]string{"Name", "Type", "RunType"})
-	if err := table.Bulk(items); err != nil {
-		return fmt.Errorf("error adding items to table: %w", err)
+	return writeBoxTable(w, []string{"NAME", "TYPE", "RUN TYPE"}, items)
+}
+
+// writeBoxTable draws a box-drawing table: centered header, left-aligned cells,
+// one space of padding. It reproduces the layout the list command always had,
+// byte for byte, because scripts parse it (cilock/test/compat_test.sh splits on
+// the vertical bars). Widths count runes, which is exact for the ASCII attestor
+// names and URLs this prints.
+func writeBoxTable(w io.Writer, header []string, rows [][]string) error {
+	widths := make([]int, len(header))
+	for i, h := range header {
+		widths[i] = utf8.RuneCountInString(h)
+	}
+	for _, r := range rows {
+		for i, c := range r {
+			widths[i] = max(widths[i], utf8.RuneCountInString(c))
+		}
 	}
 
-	if err := table.Render(); err != nil {
+	var b strings.Builder
+	rule := func(l, m, r string) {
+		b.WriteString(l)
+		for i, n := range widths {
+			if i > 0 {
+				b.WriteString(m)
+			}
+			b.WriteString(strings.Repeat("\u2500", n+2))
+		}
+		b.WriteString(r + "\n")
+	}
+	line := func(cells []string, center bool) {
+		b.WriteString("\u2502")
+		for i, n := range widths {
+			pad := n - utf8.RuneCountInString(cells[i])
+			left := 0
+			if center {
+				left = pad / 2
+			}
+			b.WriteString(" " + strings.Repeat(" ", left) + cells[i] + strings.Repeat(" ", pad-left) + " \u2502")
+		}
+		b.WriteString("\n")
+	}
+
+	rule("\u250c", "\u252c", "\u2510")
+	line(header, true)
+	if len(rows) > 0 {
+		rule("\u251c", "\u253c", "\u2524")
+	}
+	for _, r := range rows {
+		line(r, false)
+	}
+	rule("\u2514", "\u2534", "\u2518")
+
+	if _, err := io.WriteString(w, b.String()); err != nil {
 		return fmt.Errorf("error rendering table: %w", err)
 	}
-
 	return nil
 }
 
