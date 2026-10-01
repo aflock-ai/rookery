@@ -17,6 +17,7 @@ package oci
 import (
 	"archive/tar"
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"crypto"
 	"crypto/sha256"
@@ -125,6 +126,128 @@ var maxDecompressedImageSize int64 = 24 << 30 // 24 GiB
 // work. The byte ceilings bound CPU, which is why they are held to the measured
 // evidence instead.
 const maxLayerCount = 512
+
+// maxManifestEntries bounds how many images one manifest.json may describe.
+// `docker save` writes one entry per saved image, and only the first is ever
+// read. The bound exists because manifest.json is read whole (up to
+// maxTarEntrySize) and every entry decodes into a struct many times the size
+// of its `{},` (#8082).
+const maxManifestEntries = 1024
+
+// maxRepoTags bounds the tags one manifest entry may carry, for the same
+// reason maxLayerCount bounds its layers: each `"",` decodes into a string
+// header five times its size.
+const maxRepoTags = 1024
+
+// decodeManifestList decodes manifest.json with its limits enforced while
+// decoding, so a hostile file can never make the decoder materialise more than
+// the limits allow (#8082). It accepts exactly what json.Unmarshal into
+// []Manifest accepts within those limits: field names match case-insensitively,
+// unknown fields are skipped, null leaves a field at its zero value, and
+// trailing data is refused.
+func decodeManifestList(raw []byte) ([]Manifest, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, fmt.Errorf("manifest.json: %w", err)
+	}
+	var manifests []Manifest
+	switch tok {
+	case nil:
+	case json.Delim('['):
+		for dec.More() {
+			if len(manifests) == maxManifestEntries {
+				return nil, fmt.Errorf("manifest.json describes more than %d images", maxManifestEntries)
+			}
+			m, err := decodeManifest(dec)
+			if err != nil {
+				return nil, fmt.Errorf("manifest.json entry %d: %w", len(manifests), err)
+			}
+			manifests = append(manifests, m)
+		}
+		if _, err := dec.Token(); err != nil {
+			return nil, fmt.Errorf("manifest.json: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("manifest.json: want an array, got %v", tok)
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		return nil, errors.New("manifest.json: unexpected data after the top-level value")
+	}
+	return manifests, nil
+}
+
+func decodeManifest(dec *json.Decoder) (Manifest, error) {
+	var m Manifest
+	tok, err := dec.Token()
+	if err != nil {
+		return m, err
+	}
+	if tok == nil {
+		return m, nil
+	}
+	if tok != json.Delim('{') {
+		return m, fmt.Errorf("want an object, got %v", tok)
+	}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return m, err
+		}
+		key, _ := tok.(string)
+		switch {
+		case strings.EqualFold(key, "Config"):
+			err = dec.Decode(&m.Config)
+		case strings.EqualFold(key, "RepoTags"):
+			m.RepoTags, err = decodeBoundedStrings(dec, maxRepoTags, "repo tags")
+		case strings.EqualFold(key, "Layers"):
+			m.Layers, err = decodeBoundedStrings(dec, maxLayerCount, "layers")
+		default:
+			var skip json.RawMessage
+			err = dec.Decode(&skip)
+		}
+		if err != nil {
+			return m, fmt.Errorf("%s: %w", key, err)
+		}
+	}
+	_, err = dec.Token()
+	return m, err
+}
+
+// decodeBoundedStrings decodes a JSON array of strings (or null), refusing it
+// once it holds more than limit elements.
+func decodeBoundedStrings(dec *json.Decoder, limit int, what string) ([]string, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	if tok == nil {
+		return nil, nil
+	}
+	if tok != json.Delim('[') {
+		return nil, fmt.Errorf("want an array, got %v", tok)
+	}
+	out := []string{}
+	for dec.More() {
+		if len(out) == limit {
+			return nil, fmt.Errorf("more than %d %s", limit, what)
+		}
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		switch v := tok.(type) {
+		case string:
+			out = append(out, v)
+		case nil:
+			out = append(out, "")
+		default:
+			return nil, fmt.Errorf("want a string, got %v", tok)
+		}
+	}
+	_, err = dec.Token()
+	return out, err
+}
 
 // This is a hacky way to create a compile time error in case the attestor
 // doesn't implement the expected interfaces.
@@ -417,8 +540,8 @@ func (a *Attestor) parseMaifest(ctx *attestation.AttestationContext) error {
 	if len(a.ManifestRaw) == 0 {
 		return errors.New("manifest.json is missing or empty")
 	}
-	var manifests []Manifest
-	if err := json.Unmarshal(a.ManifestRaw, &manifests); err != nil {
+	manifests, err := decodeManifestList(a.ManifestRaw)
+	if err != nil {
 		return err
 	}
 	digest, err := finishArchiveDigest(stream, hasher, a.tarSHA256)
