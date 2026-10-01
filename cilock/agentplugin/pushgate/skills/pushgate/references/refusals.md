@@ -12,7 +12,18 @@ everything after `pushgate-challenge: ` on that line and parse it as JSON.
 | `commit`, `commits` | The commit(s) you must produce evidence **for**. Attesting a different commit is the most common way an honest retry still fails. |
 | `missing_evidence[]` | One entry per failed check. `command` is the exact cilock line that produces what is missing. A release entry can carry `commands[]`, one per failed step. `command: null` is not a pass. Read `type`. |
 | `retry_without_changes` | `true` for a stale nonce or a platform outage. `false` means pushing the identical bytes again returns the identical answer. |
+| `refused_command`, `refused_commands[]` | The exact argv a rule refused, shell-quoted, beside a denied step's re-run form. Diff it against what you ran. Never re-run it unchanged. `null` means the rule refused the result (for example an exit code), not the argv. |
 | `policies[]` | The policies this push was judged against. `readable_by` says who can open each `url`: `anyone`, or `signed-in human` for a signed release. Do not spend a push credential trying to open a human-only page. |
+
+## Denied versus missing evidence
+
+- `release-step-missing`: no evidence for the step on this commit. Run its
+  `command` and push again.
+- `release-step-failed`: evidence exists and a rule refused it. `command`
+  starts with "fix the cause named in detail". The commit stays the same unless
+  its own contents cause the failure: a failing test in the code needs a new
+  commit, but a missing tool, a network the step cannot reach, or a wrong
+  command is fixed by recording the step again and pushing the same commit.
 
 ## Types that need a human
 

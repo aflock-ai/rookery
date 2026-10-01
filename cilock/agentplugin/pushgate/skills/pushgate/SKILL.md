@@ -60,12 +60,23 @@ cilock is older than this skill. Tell the human; do not improvise a substitute.
    produce evidence for that commit with `cilock run --step <step> -- <command>`
    (or `cilock attest --step <step> ...` for an at-rest snapshot). Then push.
    Do not re-run the gate from a Git `pre-push` hook.
+   - Check cilock's own exit code. `cilock run ... | tee log` reports tee's
+     exit, not cilock's, so a failed step looks like success; use
+     `set -o pipefail` or no pipe. A step whose command fails is still signed
+     and uploaded, and the gate refuses it.
+   - `command exit: 127` (or 126) means the shell could not run the command:
+     the tool or the project's dependencies are not installed. Fix that
+     before recording the step again.
 4. **Read a refusal.** A refused push prints a line containing
    `pushgate-challenge: {...}`. Parse that JSON, not the prose above it.
    - `evaluated: false`: the platform never judged you. **Push the same commit
      again.** Do not re-run cilock and do not amend.
    - `evaluated: true`: run each `missing_evidence[].command` for the named
      `commit`, then push. A `command` of `null` is not a pass. Check `type`.
+   - `release-step-failed`: the step's evidence exists but a rule refused it.
+     Fix the cause, record the step again, and push **the same commit**.
+     Make a new commit only if the commit's own contents cause the failure;
+     an environment or command problem is fixed by re-recording the step.
    - `retry_without_changes: false`: pushing unchanged returns the same answer.
    - The same refusal again after you followed its remedy: stop and show your
      human the full message.
@@ -94,7 +105,10 @@ cilock is older than this skill. Tell the human; do not improvise a substitute.
    handoff block below. The human imports it on Pushgate, validates it, signs
    it on the platform with their passkey, and assigns it to the repository
    (Warn or Block). You may open links and poll read-only status. A closed
-   browser or a timeout is not success, so read the status back.
+   browser or a timeout is not success, so read the status back. No agent API
+   or cilock command reports the assignment: ask the human for the release
+   and mode the Pushgate page shows. Do not guess Pushgate API URLs. A refused
+   push also names the assigned release that refused it in `policies[]`.
 7. **Push with evidence.** Once the policy is assigned, run each step through
    cilock for the commit and push. `cilock pushgate status --wait` reports
    delivery to the real remote.
