@@ -60,7 +60,7 @@ open CiProvenance
 #print axioms positive_verdict_needs_complete_walk
 #print axioms detected_iff
 #print axioms verdict_never_unavailable
--- SLSA L3 provenance workflow (designed, not implemented)
+-- SLSA L3 provenance workflow (attestation/slsa/l3)
 open CiProvenance.L3 in #print axioms l3_sound
 open CiProvenance.L3 in #print axioms l3_signer_not_controlled
 open CiProvenance.L3 in #print axioms l3_sound_platform
@@ -82,3 +82,4 @@ open CiProvenance.BuilderIdentity in #print axioms ambiguous_refused
 open CiProvenance.BuilderIdentity in #print axioms legacy_refused
 open CiProvenance.BuilderIdentity in #print axioms legacy_never_admitted
 open CiProvenance.BuilderIdentity in #print axioms no_signer_no_claim
+open CiProvenance.L3 in #print axioms other_repo_reaches_l3

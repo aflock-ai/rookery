@@ -99,7 +99,7 @@ func TestVSAInputAttestations_DigestTheVerifiedEvidence(t *testing.T) {
 	}
 
 	policyEnv := dsse.Envelope{Payload: []byte(`{"fake":"policy"}`), PayloadType: "application/vnd.in-toto+json"}
-	summary, err := verificationSummaryFromResults(actx, policyEnv, stepResults, true)
+	summary, err := verificationSummaryFromResults(actx, policyEnv, stepResults, true, nil)
 	require.NoError(t, err)
 
 	want, err := cryptoutil.CalculateDigestSetFromBytes(payload, actx.Hashes())
@@ -134,7 +134,7 @@ func TestVSAInputAttestations_PayloadStillPresentBackCompat(t *testing.T) {
 	}
 
 	policyEnv := dsse.Envelope{Payload: []byte(`{"fake":"policy"}`), PayloadType: "application/vnd.in-toto+json"}
-	summary, err := verificationSummaryFromResults(actx, policyEnv, stepResults, true)
+	summary, err := verificationSummaryFromResults(actx, policyEnv, stepResults, true, nil)
 	require.NoError(t, err)
 
 	want, err := cryptoutil.CalculateDigestSetFromBytes(payload, actx.Hashes())

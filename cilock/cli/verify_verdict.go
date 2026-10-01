@@ -29,6 +29,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/policy"
+	"github.com/aflock-ai/rookery/attestation/slsa/l3"
 	"github.com/aflock-ai/rookery/attestation/standards"
 )
 
@@ -116,6 +117,12 @@ type VerifyVerdict struct {
 	// ObservedSubjectName is the in-toto subject name in the passing
 	// collection that the supplied digest bound to.
 	ObservedSubjectName string `json:"observedSubjectName,omitempty"`
+	// SLSALevel is the SLSA Build level --slsa-level observed: 3, or 0 when
+	// L3 was not verified (0 is "not observed", not "L0"). Only set in
+	// --slsa-level mode.
+	SLSALevel int `json:"slsaLevel,omitempty"`
+	// SLSAFailures lists each L3 requirement the evidence did not meet.
+	SLSAFailures []l3.Failure `json:"slsaFailures,omitempty"`
 	// Standards is the observed SLSA Build and ALPS ceiling of the evidence
 	// this verify accepted, with next steps. Never a verified level. Absent on
 	// a failed verify: nothing was accepted to reason about.

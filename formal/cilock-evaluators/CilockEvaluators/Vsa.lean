@@ -1,5 +1,5 @@
--- cite: plugins/attestors/policyverify/policyverify.go:233-471 sha256:f0dec122b2755cb9c36b9dfc9573916a60a0fd80232c7354109655174bd152a4
--- cite: attestation/workflow/verify.go:333-359 sha256:a33f012b394cf59baaf640fb52e376b443f142dd03229b4e5b1e897f5fcd0244
+-- cite: plugins/attestors/policyverify/policyverify.go:233-473 sha256:8c670a2a77a92d96c8752f6455d364e8f2e27c513c81cb7986bf715ce6a2da5b
+-- cite: attestation/workflow/verify.go:326-352 sha256:a33f012b394cf59baaf640fb52e376b443f142dd03229b4e5b1e897f5fcd0244
 -- cite: plugins/attestors/vsa/vsa.go:38 sha256:ea4b5f26d671802f212f2452002bcb25afa9797036154c0f16af56a2abc26f6f
 -- cite: plugins/attestors/vsa/vsa.go:111-123 sha256:7945715445a34d85a477d13ab7fd9f0380f93322dc1a8ca1a5c62feaf2bff81f
 /-
@@ -70,7 +70,7 @@ structure Run where
 -- cite: plugins/attestors/policyverify/policyverify.go:315-324 sha256:51e171a7486ff2bfa78a83e524c12d68f823259bc1b6d971444a5aff3517ce79
 -- cite: plugins/attestors/policyverify/policyverify.go:454-457 sha256:6eb71cb8138ef3a45489c5b202f940a7db63391745ee1f3272531c5fb557a2db
 -- cite: plugins/attestors/policyverify/policyverify.go:449 sha256:02839719c4e110bd96207a38909ffa2888e7722a322a8371f623ce1e38378b65
--- cite: plugins/attestors/policyverify/policyverify.go:460-462 sha256:f5d8b93d8f8bf66baf5b25836316dcd560aad5eb3ec940f8d4eb1f7802492c8b
+-- cite: plugins/attestors/policyverify/policyverify.go:460-462 sha256:ed4ebc950ea16f6f8afc3e555966e8039c03baf1656fbfcfaf2d5d53af0faf55
 -- cite: plugins/attestors/policyverify/policyverify.go:421-447 sha256:92a13498dd9b9d65b66f2f0af09ab4e837a490041d8ac95ef16a3c6fd9328f23
 -- cite: plugins/attestors/policyverify/policyverify.go:198-211 sha256:5f642ecb06bd65592bd29d065808ababc86bcc05b9f3d9ab6e50743ee805144c
 /-- `Attest` + `verificationSummaryFromResults`. `hash` is the digest function

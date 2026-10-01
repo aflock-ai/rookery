@@ -194,6 +194,29 @@ func TestWriteVSAOutfile(t *testing.T) {
 	})
 }
 
+// testVSAArtifact is the artifact a fake verification ran against.
+var testVSAArtifact = map[string]cryptoutil.DigestSet{"out.bin": {
+	cryptoutil.DigestValue{Hash: crypto.SHA256, GitOID: false}: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+}}
+
+// #9836: the VSA's statement subject is the ARTIFACT that was verified (a
+// consumer matches the VSA to the artifact by digest), never the input
+// attestations, which stay in inputAttestations.
+func TestWriteVSAOutfile_SubjectIsTheArtifact(t *testing.T) {
+	outPath := filepath.Join(t.TempDir(), "vsa.json")
+	require.NoError(t, writeVSAOutfile(outPath, testVSAArtifact, buildFakeVerifyResult(slsa.PassedVerificationResult), nil, nil))
+	data, err := os.ReadFile(outPath) //nolint:gosec // test file
+	require.NoError(t, err)
+	var stmt intoto.Statement
+	require.NoError(t, json.Unmarshal(data, &stmt))
+	require.Len(t, stmt.Subject, 1)
+	assert.Equal(t, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", stmt.Subject[0].Digest["sha256"])
+	assert.NotEqual(t, "cafebabe", stmt.Subject[0].Digest["sha256"], "the input attestation is not the VSA subject")
+
+	require.Error(t, writeVSAOutfile(filepath.Join(t.TempDir(), "none.json"), nil, buildFakeVerifyResult(slsa.PassedVerificationResult), nil, nil),
+		"a VSA about no artifact is refused rather than written with the attestations as its subject")
+}
+
 // TestWriteVSAOutfile_FlagAbsentCreatesNoFile verifies the contract that
 // runVerify only touches the filesystem when --vsa-outfile is explicitly
 // set. We test this at the runVerify level via the flag value rather than

@@ -24,9 +24,29 @@ const (
 	VerificationSummaryPredicate                    = "https://slsa.dev/verification_summary/v1"
 	PassedVerificationResult     VerificationResult = "PASSED"
 	FailedVerificationResult     VerificationResult = "FAILED"
+
+	// PolicyVerifierID is verifier.id for a policy verification by cilock.
+	// SLSA VSA v1 requires a URI.
+	PolicyVerifierID = "https://aflock.ai/cilock/verify/policy@v1"
+
+	// BuildLevelUnevaluated is verifiedLevels for a verification that
+	// assessed no SLSA Build level; LevelFailed is verifiedLevels "if policy
+	// verification failed" (SLSA VSA v1).
+	BuildLevelUnevaluated = "SLSA_BUILD_LEVEL_UNEVALUATED"
+	LevelFailed           = "FAILED"
 )
 
 type VerificationResult string
+
+// VerifiedLevelsFor is verifiedLevels for a policy verification, which
+// assesses no SLSA Build level: UNEVALUATED on a pass, FAILED on a failure.
+// A level verifier (attestation/slsa/l3) states the level it verified instead.
+func VerifiedLevelsFor(result VerificationResult) []string {
+	if result == PassedVerificationResult {
+		return []string{BuildLevelUnevaluated}
+	}
+	return []string{LevelFailed}
+}
 
 type Verifier struct {
 	ID string `json:"id"`
@@ -37,14 +57,18 @@ type ResourceDescriptor struct {
 	Digest cryptoutil.DigestSet `json:"digest"`
 }
 
+// VerificationSummary is the SLSA VSA v1 predicate
+// (https://slsa.dev/spec/v1.2/verification_summary).
 type VerificationSummary struct {
+	Verifier     Verifier  `json:"verifier"`
+	TimeVerified time.Time `json:"timeVerified"`
+	// ResourceURI names the artifact verified (REQUIRED).
 	ResourceURI        string               `json:"resourceUri"`
-	VerifiedLevels     []string             `json:"verifiedLevels"`
-	Verifier           Verifier             `json:"verifier"`
-	TimeVerified       time.Time            `json:"timeVerified"`
 	Policy             ResourceDescriptor   `json:"policy"`
 	InputAttestations  []ResourceDescriptor `json:"inputAttestations"`
 	VerificationResult VerificationResult   `json:"verificationResult"`
+	// VerifiedLevels is the highest level verified per track (REQUIRED).
+	VerifiedLevels []string `json:"verifiedLevels"`
 }
 
 // VerificationRejection is one rejected collection in the stepResults extension: which signed

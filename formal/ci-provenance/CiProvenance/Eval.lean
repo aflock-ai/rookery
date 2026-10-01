@@ -85,7 +85,7 @@ def cert (j : Json) : Except String L3.Cert := do
 def l3Case (j : Json) : Except String Bool := do
   let p ← field j "policy"
   let roots ← (← (← field p "roots").getArr?).toList.mapM fun r => do root (← r.getStr?)
-  let pol : L3.Policy := ⟨roots, ← str p "path", ← str p "sha"⟩
+  let pol : L3.Policy := ⟨roots, ← str p "path", ← str p "sha", ← str p "repo"⟩
   let e ← field j "evidence"
   let s ← field e "stmt"
   let bid ← pair (← field s "builderId")

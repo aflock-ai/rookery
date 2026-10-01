@@ -1,7 +1,8 @@
 /-!
 # SLSA Build L3 through an isolated provenance workflow
 
-The design (approved; designed, not implemented):
+The design (approved; the verifier is implemented in attestation/slsa/l3, the
+workflow in cilock-action's .github/workflows/provenance.yml):
 
 * the build job runs CI/lock inline (SLSA L2, ALPS 1 content) and signs a
   collection whose subjects are the product digests;
@@ -31,6 +32,7 @@ trusted provenance workflow, that workflow's identity. Every other CI, and any
 token verified against a key set the build chose, gets the default id (#9839).
 At verify time a builder.id that names a workflow identity must equal a
 satisfying signer's Build Signer URI (`BuilderIdentity.lean`):
+`l3Accept` trusts neither: it reads the builder from the certificate.
 -- cite: plugins/attestors/slsa/slsa.go:48-66 sha256:cafdcc34f00aea32c42a3d4f0c15c39198e08bc192e0cf9c8f75d74b30bc6494
 -- cite: plugins/attestors/slsa/slsa.go:117-157 sha256:bda6cb4c7344ca2c03ea6bd46aa957d973deed83af67c3e906295db26a4cbb5b
 Policy functionaries can already constrain Fulcio extensions; an empty field
@@ -38,7 +40,17 @@ allows every value, and a field containing a glob metacharacter is matched as
 a glob:
 -- cite: attestation/policy/constraints.go:109-116 sha256:208a832ff24c03297e7d791ec31ee1f2efa73d9ea1d6f0c8ce23af7f9878beae
 -- cite: attestation/policy/constraints.go:346-353 sha256:9dbd6b15aae6492a30ef0b4324fa51cfdfe95a344410a4b9634430422e4be58f
-`cilock verify --slsa-level` does not exist, so `l3Accept` is the reference.
+`cilock verify --slsa-level 3` bypasses that matcher. Its decision function is
+`Accept` (and `linked`), which compares every field with exact string
+equality; `TriggerAllowed` is `Event.allowed`. `TestL3AcceptMatchesLeanModel`
+(attestation/slsa/l3) diffs `Accept` against `l3Accept` below:
+-- cite: attestation/slsa/l3/l3.go:222-259 sha256:d1c895189e7a865f83751c11adb78c06ceee39cde5d735c3dcfb88e28d95ff8e
+-- cite: attestation/slsa/l3/l3.go:212-214 sha256:efcc9fcc6d124f5e90e5b071007059c5dd23fa954c501c4a99a190e3e8840b5b
+Pin format (checked against GitHub's OIDC docs and the Fulcio principal): a
+caller that pins `provenance.yml@<40-hex sha>` gets `job_workflow_ref` ending
+`@<sha>`, so Build Signer URI's ref is the commit and `signerRef == pol.sha`
+holds for honest SHA-pinned runs; a tag pin gives `@refs/tags/<tag>` and is
+refused.
 -/
 
 namespace CiProvenance.L3
@@ -139,6 +151,9 @@ structure Policy where
   path  : String
   /-- The pinned commit of that workflow. -/
   sha   : String
+  /-- The source repository the verifier expects (SLSA "verifying artifacts",
+  step 2: the canonical source repo). -/
+  repo  : String
   deriving DecidableEq, Repr
 
 /-! ## The verifier -/
@@ -161,6 +176,7 @@ def linked (pol : Policy) (e : Evidence) (s : String) : Bool :=
 the signer's certificate, never taken from the statement alone. -/
 def l3Accept (pol : Policy) (e : Evidence) : Bool :=
   pol.roots.contains e.signer.root && signerOk pol e.signer.ext &&
+    e.signer.ext.sourceRepo == pol.repo &&
     e.stmt.builderId == (e.signer.ext.signerPath, e.signer.ext.signerRef) &&
     e.stmt.repo == e.signer.ext.sourceRepo && e.stmt.commit == e.signer.ext.sourceDigest &&
     e.stmt.runId == e.signer.ext.runInvocation &&
@@ -207,35 +223,37 @@ theorem issued_of_trusted (w : World) (pol : Policy) (c : Cert) (hr : RootsHones
 
 /-- **L3 soundness.** If `--slsa-level 3` accepts, then (with the trusted roots
 honest and GitHub's event semantics) the signer is a job of the pinned
-workflow commit on a hosted runner, triggered by a writer; builder.id,
-repository, commit and run are that job's platform-attested claims; and every
-subject is carried by a build collection signed by a job of the SAME run of the
-same repository and commit. -/
+workflow commit on a hosted runner, triggered by a writer, for the expected
+source repository; builder.id, repository, commit and run are that job's
+platform-attested claims; and every subject is carried by a build collection
+signed by a job of the SAME run of the same repository and commit. -/
 theorem l3_sound (w : World) (pol : Policy) (e : Evidence)
     (hr : RootsHonest w pol) (hg : GithubEvents w) (hp : Producible w e)
     (ha : l3Accept pol e = true) :
     ∃ j ∈ w.jobs, e.signer.ext = deriveExt j.claims ∧ controlled pol j = false ∧
-      j.outsiderTriggered = false ∧
+      j.outsiderTriggered = false ∧ j.claims.repository = pol.repo ∧
       e.stmt.builderId = (pol.path, pol.sha) ∧ e.stmt.repo = j.claims.repository ∧
       e.stmt.commit = j.claims.sha ∧ e.stmt.runId = j.claims.runId ∧
       ∀ s ∈ e.stmt.subjects, ∃ b ∈ e.builds, s ∈ b.subjects ∧
         ∃ jb ∈ w.jobs, b.cert.ext = deriveExt jb.claims ∧ jb.claims.runId = j.claims.runId ∧
           jb.claims.repository = j.claims.repository ∧ jb.claims.sha = j.claims.sha := by
   simp only [l3Accept, signerOk, Bool.and_eq_true] at ha
-  obtain ⟨⟨⟨⟨⟨⟨⟨hroot, ⟨⟨⟨⟨hpath, hdig⟩, href⟩, hhost⟩, htrig⟩⟩, hbid⟩, hrepo⟩, hcommit⟩, hrun⟩, _⟩, hsubs⟩ := ha
+  obtain ⟨⟨⟨⟨⟨⟨⟨⟨hroot, ⟨⟨⟨⟨hpath, hdig⟩, href⟩, hhost⟩, htrig⟩⟩, hexp⟩, hbid⟩, hrepo⟩, hcommit⟩, hrun⟩, _⟩, hsubs⟩ := ha
   replace hpath := beq_iff_eq.mp hpath
   replace hdig := beq_iff_eq.mp hdig
   replace href := beq_iff_eq.mp href
+  replace hexp := beq_iff_eq.mp hexp
   replace hbid := beq_iff_eq.mp hbid
   replace hrepo := beq_iff_eq.mp hrepo
   replace hcommit := beq_iff_eq.mp hcommit
   replace hrun := beq_iff_eq.mp hrun
   obtain ⟨j, hj, hext⟩ := issued_of_trusted w pol e.signer hr hroot hp.1
-  refine ⟨j, hj, hext, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨j, hj, hext, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp [controlled, hext, deriveExt] at hpath hdig hhost ⊢
     exact ⟨⟨hpath, hdig⟩, hhost⟩
   · apply hg j hj
     simpa [hext, deriveExt] using htrig
+  · simpa [hext, deriveExt] using hexp
   · rw [hbid, hpath, href]
   · rw [hrepo, hext]; rfl
   · rw [hcommit, hext]; rfl
@@ -271,25 +289,25 @@ theorem l3_signer_not_controlled (w : World) (pol : Policy) (e : Evidence)
 /-- Platform Fulcio, the default. Assumptions: the platform CA issues only for
 real jobs, maps claims with Fulcio's GitHub principal (`deriveExt`), and
 GitHub's event semantics hold. -/
-theorem l3_sound_platform (w : World) (path sha : String) (e : Evidence)
+theorem l3_sound_platform (w : World) (path sha repo : String) (e : Evidence)
     (hca : w.compromised .platform = false) (hg : GithubEvents w) (hp : Producible w e)
-    (ha : l3Accept ⟨[.platform], path, sha⟩ e = true) :
-    ∃ j ∈ w.jobs, e.signer.ext = deriveExt j.claims ∧ controlled ⟨[.platform], path, sha⟩ j = false ∧
+    (ha : l3Accept ⟨[.platform], path, sha, repo⟩ e = true) :
+    ∃ j ∈ w.jobs, e.signer.ext = deriveExt j.claims ∧ controlled ⟨[.platform], path, sha, repo⟩ j = false ∧
       e.stmt.builderId = (path, sha) ∧ e.stmt.commit = j.claims.sha := by
-  have hr : RootsHonest w ⟨[.platform], path, sha⟩ := by
+  have hr : RootsHonest w ⟨[.platform], path, sha, repo⟩ := by
     intro r hr; simp at hr; subst hr; exact hca
-  obtain ⟨j, hj, hx, hc, _, hb, _, hcm, _⟩ := l3_sound w _ e hr hg hp ha
+  obtain ⟨j, hj, hx, hc, _, _, hb, _, hcm, _⟩ := l3_sound w _ e hr hg hp ha
   exact ⟨j, hj, hx, hc, hb, hcm⟩
 
 /-- Public Sigstore, the option. Same shape, public CA assumed honest instead. -/
-theorem l3_sound_public (w : World) (path sha : String) (e : Evidence)
+theorem l3_sound_public (w : World) (path sha repo : String) (e : Evidence)
     (hca : w.compromised .publicSigstore = false) (hg : GithubEvents w) (hp : Producible w e)
-    (ha : l3Accept ⟨[.publicSigstore], path, sha⟩ e = true) :
-    ∃ j ∈ w.jobs, e.signer.ext = deriveExt j.claims ∧ controlled ⟨[.publicSigstore], path, sha⟩ j = false ∧
+    (ha : l3Accept ⟨[.publicSigstore], path, sha, repo⟩ e = true) :
+    ∃ j ∈ w.jobs, e.signer.ext = deriveExt j.claims ∧ controlled ⟨[.publicSigstore], path, sha, repo⟩ j = false ∧
       e.stmt.builderId = (path, sha) ∧ e.stmt.commit = j.claims.sha := by
-  have hr : RootsHonest w ⟨[.publicSigstore], path, sha⟩ := by
+  have hr : RootsHonest w ⟨[.publicSigstore], path, sha, repo⟩ := by
     intro r hr; simp at hr; subst hr; exact hca
-  obtain ⟨j, hj, hx, hc, _, hb, _, hcm, _⟩ := l3_sound w _ e hr hg hp ha
+  obtain ⟨j, hj, hx, hc, _, _, hb, _, hcm, _⟩ := l3_sound w _ e hr hg hp ha
   exact ⟨j, hj, hx, hc, hb, hcm⟩
 
 /-! ## Counterexamples: weaker designs, each refuted
@@ -298,7 +316,7 @@ A shared scene. Repository `acme/app`, commit `c1`, run 1. The pinned builder
 commit is `good`. -/
 
 def P : String := "aflock-ai/cilock-action/.github/workflows/provenance.yml"
-def pol : Policy := ⟨[.platform], P, "good"⟩
+def pol : Policy := ⟨[.platform], P, "good", "acme/app"⟩
 
 /-- The caller's build job: attacker-controlled steps. -/
 def buildJob : Job :=
@@ -428,7 +446,7 @@ theorem self_hosted_runner_accepted :
 
 /-- 8. Trusting both roots needs both honest: with the public root trusted and
 its CA compromised, a certificate for no job at all is accepted. -/
-def bothRoots : Policy := ⟨[.platform, .publicSigstore], P, "good"⟩
+def bothRoots : Policy := ⟨[.platform, .publicSigstore], P, "good", "acme/app"⟩
 def phantom : Cert := ⟨.publicSigstore, deriveExt provJob.claims⟩
 def phantomEvidence : Evidence :=
   ⟨phantom, ⟨(P, "good"), "acme/app", "c1", 1, ["sha256:x"]⟩, [⟨⟨.publicSigstore, deriveExt buildJob.claims⟩, ["sha256:x"]⟩]⟩
@@ -441,6 +459,28 @@ theorem both_roots_need_both :
   simp [phantomEvidence] at hb
   subst hb
   exact Or.inl rfl
+
+/-- 9. No expected repository: any repository may call the pinned workflow
+from a hosted runner on push, so without `pol.repo` a fork or a stranger's
+repository reaches L3 for its own artifacts under a verifier that meant
+`acme/app`. -/
+def l3AcceptAnyRepo (pol : Policy) (e : Evidence) : Bool :=
+  pol.roots.contains e.signer.root && signerOk pol e.signer.ext &&
+    e.stmt.builderId == (e.signer.ext.signerPath, e.signer.ext.signerRef) &&
+    e.stmt.repo == e.signer.ext.sourceRepo && e.stmt.commit == e.signer.ext.sourceDigest &&
+    e.stmt.runId == e.signer.ext.runInvocation &&
+    !e.stmt.subjects.isEmpty && e.stmt.subjects.all (linked pol e)
+
+def forkBuild : Job :=
+  ⟨⟨"mallory/app/.github/workflows/release.yml", "refs/heads/main", "m1", "mallory/app", "m1", 5, .push, true⟩, false⟩
+def forkProv : Job := ⟨⟨P, "good", "good", "mallory/app", "m1", 5, .push, true⟩, false⟩
+def forkEvidence : Evidence :=
+  ⟨certOf forkProv, ⟨(P, "good"), "mallory/app", "m1", 5, ["sha256:fork"]⟩, [⟨certOf forkBuild, ["sha256:fork"]⟩]⟩
+
+theorem other_repo_reaches_l3 :
+    l3AcceptAnyRepo pol forkEvidence = true ∧ controlled pol forkProv = false ∧
+      l3Accept pol forkEvidence = false := by
+  decide
 
 /-- The honest scene is producible: the theorems above are not vacuous. -/
 theorem honest_world_producible : Producible (honestWorld []) honestEvidence := by

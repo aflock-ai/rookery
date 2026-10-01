@@ -1,0 +1,23 @@
+[
+  {
+    "id": "https://github.com/aflock-ai/cilock-action/.github/workflows/provenance.yml",
+    "maxLevel": 3,
+    "mode": "isolated-provenance-workflow",
+    "requires": "cilock verify --slsa-level 3 (attestation/slsa/l3): the signer's Fulcio Build Signer URI and Digest name this workflow at the pinned commit, github-hosted runner, push/release/workflow_dispatch trigger, expected source repository, and every subject in a build collection of the same run",
+    "proof": "formal/ci-provenance CiProvenance/SlsaL3Workflow.lean l3_sound"
+  },
+  {
+    "id": "https://aflock.ai/cilock/inline/github-actions",
+    "maxLevel": 2,
+    "mode": "inline",
+    "requires": "signed with a Fulcio certificate for the job's own GitHub Actions workflow identity on a github-hosted runner; the job's steps can still forge it, so never L3",
+    "proof": "formal/ci-provenance CiProvenance/Slsa.lean cilockInJob_is_l2, naive_l3_accepts_step_forgery"
+  },
+  {
+    "id": "https://aflock.ai/cilock/inline/unknown-platform",
+    "maxLevel": 1,
+    "mode": "inline",
+    "requires": "provenance exists and its subject matches the artifact",
+    "proof": "formal/ci-provenance CiProvenance/Slsa.lean slsa_l1, localRun_is_l1"
+  }
+]

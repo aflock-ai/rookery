@@ -326,7 +326,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 
 	a.stepResults = stepResults
 
-	a.VerificationSummary, err = verificationSummaryFromResults(ctx, a.policyEnvelope, stepResults, accepted)
+	a.VerificationSummary, err = verificationSummaryFromResults(ctx, a.policyEnvelope, stepResults, accepted, a.subjectDigestSets)
 	if err != nil {
 		return fmt.Errorf("failed to generate verification summary: %w", err)
 	}
@@ -416,7 +416,7 @@ func externalInputAttestations(ctx *attestation.AttestationContext, externals ma
 	return out
 }
 
-func verificationSummaryFromResults(ctx *attestation.AttestationContext, policyEnvelope dsse.Envelope, stepResults map[string]policy.StepResult, accepted bool) (slsa.VerificationSummary, error) {
+func verificationSummaryFromResults(ctx *attestation.AttestationContext, policyEnvelope dsse.Envelope, stepResults map[string]policy.StepResult, accepted bool, subjects []cryptoutil.DigestSet) (slsa.VerificationSummary, error) {
 	inputAttestations := make([]slsa.ResourceDescriptor, 0, len(stepResults))
 	for _, step := range stepResults {
 		for _, collection := range step.Passed {
@@ -458,14 +458,38 @@ func verificationSummaryFromResults(ctx *attestation.AttestationContext, policyE
 
 	return slsa.VerificationSummary{
 		Verifier: slsa.Verifier{
-			ID: "aflock",
+			ID: slsa.PolicyVerifierID,
 		},
 		TimeVerified: time.Now(),
+		ResourceURI:  vsaResourceURI(subjects),
 		Policy: slsa.ResourceDescriptor{
 			URI:    vsaPolicyURI(policyEnvelope.PayloadType),
 			Digest: policyDigest,
 		},
 		InputAttestations:  inputAttestations,
 		VerificationResult: verificationResult,
+		VerifiedLevels:     slsa.VerifiedLevelsFor(verificationResult),
 	}, nil
+}
+
+// vsaResourceURI names the verified artifact for the VSA's resourceUri: the
+// first subject's sha256 as "sha256:<hex>", else its first digest by name.
+// Empty when verification ran with no artifact subject.
+func vsaResourceURI(subjects []cryptoutil.DigestSet) string {
+	for _, set := range subjects {
+		names, err := set.ToNameMap()
+		if err != nil || len(names) == 0 {
+			continue
+		}
+		if h := names["sha256"]; h != "" {
+			return "sha256:" + h
+		}
+		keys := make([]string, 0, len(names))
+		for k := range names {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		return keys[0] + ":" + names[keys[0]]
+	}
+	return ""
 }

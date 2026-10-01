@@ -8,6 +8,7 @@ require (
 	github.com/digitorus/pkcs7 v0.0.0-20250730155240-ffadbf3f398c
 	github.com/digitorus/timestamp v0.0.0-20250524132541-c45532741eea
 	github.com/gobwas/glob v0.2.3
+	github.com/in-toto/attestation v1.2.0
 	github.com/invopop/jsonschema v0.13.0
 	github.com/open-policy-agent/opa v1.13.1
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
@@ -19,6 +20,7 @@ require (
 	go.step.sm/crypto v0.81.0
 	golang.org/x/mod v0.38.0
 	golang.org/x/sys v0.47.0
+	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/apimachinery v0.35.0
 )
@@ -90,7 +92,6 @@ require (
 	golang.org/x/sync v0.22.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 	google.golang.org/grpc v1.83.2 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/inf.v0 v0.9.1 // indirect
 	gopkg.in/ini.v1 v1.67.1 // indirect
 	k8s.io/klog/v2 v2.130.1 // indirect

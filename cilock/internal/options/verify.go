@@ -96,6 +96,25 @@ type VerifyOptions struct {
 	// other command, so `verify -o out.json` read a path as a format).
 	OutputFormat string
 
+	// SLSALevel selects the built-in SLSA Build level verifier instead of a
+	// policy (--slsa-level). Only 3 is supported: provenance signed by the
+	// isolated provenance workflow, checked against its Fulcio certificate.
+	SLSALevel int
+	// SLSABuilderDigest is the commit of the provenance workflow the L3
+	// policy pins (--slsa-builder-digest).
+	SLSABuilderDigest string
+	// SLSASourceRepo is the source repository the L3 policy expects,
+	// "<owner>/<name>" (--slsa-source-repo).
+	SLSASourceRepo string
+	// SLSARoots are the CA roots the L3 policy trusts: "platform" (default)
+	// and/or "public-sigstore".
+	SLSARoots []string
+	// SLSAPublicSigstoreCARootPaths and SLSAPublicSigstoreTimestampServers
+	// are the public Sigstore Fulcio chain and TSA certificates, required
+	// when SLSARoots names public-sigstore.
+	SLSAPublicSigstoreCARootPaths      []string
+	SLSAPublicSigstoreTimestampServers []string
+
 	// Offline is a clear alias for --platform-url "": fully offline verify
 	// (no Archivista lookup, no discovery, no platform-derived TSA). Mirrors
 	// RunOptions.Offline so the run and verify sides share one opt-out idiom.
@@ -461,6 +480,22 @@ func (vo *VerifyOptions) AddFlags(cmd *cobra.Command) {
 		"Build config (workflow) URI of the policy signer (glob-matched), e.g. https://github.com/testifysec/judge/.github/workflows/release.yml@* — pins WHICH workflow may sign a trusted policy without pinning the changing ref.")
 	cmd.Flags().StringVar(&vo.PolicyFulcioCertExtensions.RunnerEnvironment, "policy-fulcio-runner-environment", "",
 		"Runner environment of the policy signer (glob-matched), e.g. github-hosted or self-hosted.")
+
+	cmd.Flags().IntVar(&vo.SLSALevel, "slsa-level", 0,
+		"Verify SLSA Build level 3 with the built-in policy instead of -p: the artifact's SLSA v1 provenance must be signed by "+
+			"aflock-ai/cilock-action's provenance.yml pinned at --slsa-builder-digest, on a GitHub-hosted runner, for a push, release "+
+			"or workflow_dispatch run, and every subject must be in a build collection (-a) of the same run. Only 3 is supported.")
+	cmd.Flags().StringVar(&vo.SLSABuilderDigest, "slsa-builder-digest", "",
+		"With --slsa-level: the full commit SHA of provenance.yml your workflow pins (uses: ...provenance.yml@<sha>). A tag is refused.")
+	cmd.Flags().StringVar(&vo.SLSASourceRepo, "slsa-source-repo", "",
+		"With --slsa-level: the GitHub repository the artifact must be built from, <owner>/<name>. Provenance from any other repository, a fork included, is refused.")
+	cmd.Flags().StringSliceVar(&vo.SLSARoots, "slsa-roots", []string{"platform"},
+		"With --slsa-level: the Fulcio roots to trust, 'platform' (the platform CA from --policy-ca-roots or this build's embedded trust) "+
+			"and/or 'public-sigstore' (needs --slsa-public-sigstore-ca-roots and --slsa-public-sigstore-timestamp-servers)")
+	cmd.Flags().StringSliceVar(&vo.SLSAPublicSigstoreCARootPaths, "slsa-public-sigstore-ca-roots", []string{},
+		"With --slsa-roots public-sigstore: PEM files holding the public Sigstore Fulcio root and intermediates")
+	cmd.Flags().StringSliceVar(&vo.SLSAPublicSigstoreTimestampServers, "slsa-public-sigstore-timestamp-servers", []string{},
+		"With --slsa-roots public-sigstore: PEM files holding the timestamp authority certificates for public Sigstore signatures")
 
 	cmd.Flags().StringVarP(&vo.OutputFormat, "format", "o", "text",
 		"How to report the verdict. 'text' (default) prints human-readable evidence + the matched-subject "+

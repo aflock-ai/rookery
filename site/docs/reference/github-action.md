@@ -184,6 +184,42 @@ runs:
 
 The `shim/index.js` Node entry point downloads the variant binary from `https://github.com/aflock-ai/cilock-action/releases/{latest/download | download/<tag>}` and invokes it with the constructed args.
 
+## SLSA Build L3: the provenance workflow
+
+When cilock runs inside your build job, the provenance it signs can reach SLSA Build L2 at most. The job's own steps could forge it. For L3, add a second job. It calls the reusable `provenance.yml` workflow, runs none of your code, and signs SLSA v1 provenance with its own Fulcio identity:
+
+```yaml
+  provenance:
+    needs: build
+    permissions: { id-token: write }
+    uses: aflock-ai/cilock-action/.github/workflows/provenance.yml@<40-hex commit>
+    with: { subjects: "${{ needs.build.outputs.subjects }}" }
+```
+
+- **Pin by commit, never by tag.** The verifier requires the certificate's Build Signer URI to name the pinned commit, so a tag pin is refused.
+- **`subjects`** is one `<name>=sha256:<hex>` per line. Your build job outputs it, for example with `echo "subjects=app=sha256:$(sha256sum dist/app | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"`. The build job must also run cilock in the same workflow run: a subject is accepted only if that run's build collection carries it.
+- **Triggers:** the workflow signs only for `push`, `release` and `workflow_dispatch`. Any other event, fork pull requests and `pull_request_target` included, fails the job.
+- **Signer:** the platform's Fulcio and timestamp authority by default (`platform-url`). Set `public-sigstore: true` to use public Sigstore instead.
+
+Verify with the built-in L3 policy. There is no `-p`:
+
+```bash
+cilock verify ./dist/app --slsa-level 3 \
+  --slsa-builder-digest <the same commit> --slsa-source-repo <owner>/<repo> \
+  -a provenance.json -a build.json --vsa-outfile vsa.json
+```
+
+`--slsa-level 3` exits 0 only if all of these hold:
+
+- the provenance's signing certificate names `provenance.yml` at that commit, a GitHub-hosted runner, a writer-only trigger, and your repository;
+- builder.id, repository, commit and run in the statement equal that certificate's extensions;
+- `buildType` and `externalParameters` are what `provenance.yml` writes;
+- the artifact is among the subjects, and a build collection from the same run, repository and commit carries it.
+
+`--format json` lists each requirement that failed. The VSA states `SLSA_BUILD_LEVEL_3` only on a pass. Add `--slsa-roots public-sigstore` with `--slsa-public-sigstore-ca-roots` and `--slsa-public-sigstore-timestamp-servers` to accept public Sigstore signatures.
+
+Status: this needs a cilock-action commit that contains `provenance.yml` and a cilock release that has `--slsa-level`. Neither is published yet.
+
 ## Worked examples
 
 The action ships example workflows in [`examples/github/`](https://github.com/aflock-ai/cilock-action/tree/main/examples/github):

@@ -115,21 +115,15 @@ func VerifyCmd() *cobra.Command {
 				return verifyEnvelopeMode(cmd, vo, args)
 			}
 
-			// Positional artifact path is shorthand for --artifactfile (file)
-			// or --directory-path (directory). Explicit flags win; a positional
-			// arg alongside a conflicting flag is a usage error.
-			if len(args) == 1 {
-				if err := adoptPositionalArtifact(&vo, args[0]); err != nil {
-					return err
-				}
+			if err := prepareVerifyOptions(cmd, &vo, args); err != nil {
+				return err
 			}
 
-			// Resolve platform-derived defaults the same way `cilock run`
-			// does so verify-side endpoint defaults match the run-side
-			// of the workflow. `--platform-url ""` opts out for fully
-			// offline verify.
-			if err := vo.ResolvePlatformDefaults(cmd); err != nil {
-				return err
+			// SLSA LEVEL MODE: the built-in L3 policy replaces -p, so it is
+			// decided before platform mode (which would claim a flagless-policy
+			// verify) and never falls through to the policy verifier.
+			if cmd.Flags().Changed("slsa-level") {
+				return runSLSALevelVerify(cmd, vo)
 			}
 
 			// PLATFORM MODE (verify-on-demand): a flagless-policy verify with
@@ -169,6 +163,24 @@ func VerifyCmd() *cobra.Command {
 	}
 	vo.AddFlags(cmd)
 	return cmd
+}
+
+// prepareVerifyOptions adopts the positional artifact and resolves the
+// platform-derived defaults, before any verify mode is chosen.
+func prepareVerifyOptions(cmd *cobra.Command, vo *options.VerifyOptions, args []string) error {
+	// Positional artifact path is shorthand for --artifactfile (file)
+	// or --directory-path (directory). Explicit flags win; a positional
+	// arg alongside a conflicting flag is a usage error.
+	if len(args) == 1 {
+		if err := adoptPositionalArtifact(vo, args[0]); err != nil {
+			return err
+		}
+	}
+	// Resolve platform-derived defaults the same way `cilock run`
+	// does so verify-side endpoint defaults match the run-side
+	// of the workflow. `--platform-url ""` opts out for fully
+	// offline verify.
+	return vo.ResolvePlatformDefaults(cmd)
 }
 
 func runVerify(ctx context.Context, vo options.VerifyOptions, verifiers []cryptoutil.Verifier, signers []cryptoutil.Signer, signerPinnedByFlags bool) error { //nolint:gocognit,gocyclo,funlen
@@ -667,19 +679,29 @@ func certFingerprint(c *x509.Certificate) string {
 // A failed VSA is legitimately useful — policies may want to inspect that a
 // previous verification FAILED — so this function writes regardless of
 // verification outcome.
+//
+// The statement's subjects are the artifacts verified (#9836): a VSA consumer
+// matches it to an artifact by digest. The input attestations stay in the
+// predicate's inputAttestations.
 func writeVSAOutfile(path string, subjects map[string]cryptoutil.DigestSet, evidence workflow.VerifyResult, signers []cryptoutil.Signer, timestampServers []string) error {
-	evidence.VerificationSummary.Verifier.ID = "https://aflock.ai/cilock/verify@v1"
-	// Generic policy verification does not evaluate a SLSA build level.
-	evidence.VerificationSummary.VerifiedLevels = []string{"SLSA_BUILD_LEVEL_UNEVALUATED"}
-	if evidence.VerificationSummary.VerificationResult == slsa.FailedVerificationResult {
-		evidence.VerificationSummary.VerifiedLevels = []string{"FAILED"}
+	if len(subjects) == 0 {
+		return fmt.Errorf("the VSA names no artifact: verify an artifact or pass --subjects to write --vsa-outfile")
 	}
+	evidence.VerificationSummary.Verifier.ID = slsa.PolicyVerifierID
+	// Generic policy verification does not evaluate a SLSA build level.
+	evidence.VerificationSummary.VerifiedLevels = slsa.VerifiedLevelsFor(evidence.VerificationSummary.VerificationResult)
 
 	predicateBytes, err := marshalVSAPredicate(evidence)
 	if err != nil {
 		return fmt.Errorf("failed to marshal VSA predicate: %w", err)
 	}
+	return writeVSAStatement(path, predicateBytes, subjects, signers, timestampServers)
+}
 
+// writeVSAStatement wraps a VSA predicate in an in-toto statement over
+// subjects and writes it to path: a signed DSSE envelope with signers, or the
+// unsigned statement (with a warning) without.
+func writeVSAStatement(path string, predicateBytes []byte, subjects map[string]cryptoutil.DigestSet, signers []cryptoutil.Signer, timestampServers []string) error {
 	if len(signers) == 0 {
 		log.Warn("VSA written without a signer — downstream policies that require a functionary-signed VSA will reject this file. Pass --signer-* flags to produce a signed DSSE envelope.")
 		stmt, sErr := intoto.NewStatementV1(slsa.VerificationSummaryPredicate, predicateBytes, subjects)
