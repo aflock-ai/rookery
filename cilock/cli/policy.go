@@ -26,6 +26,8 @@ func PolicyCmd() *cobra.Command {
 		DisableAutoGenTag: true,
 	}
 
+	cmd.AddCommand(PolicyGuideCmd())
+	cmd.AddCommand(PolicyTemplateCmd())
 	cmd.AddCommand(PolicyInputCmd())
 	cmd.AddCommand(PolicyValidateCmd())
 	cmd.AddCommand(PolicyDraftCmd())

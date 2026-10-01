@@ -282,10 +282,31 @@ func runPolicyFromBundles(stdout, stderr io.Writer, bundlePaths, pubKeyPaths []s
 	}
 
 	if outputPath == "-" {
-		_, err := stdout.Write(append(encoded, '\n'))
+		if _, err := stdout.Write(append(encoded, '\n')); err != nil {
+			return err
+		}
+	} else if err := os.WriteFile(outputPath, append(encoded, '\n'), 0o600); err != nil {
 		return err
 	}
-	return os.WriteFile(outputPath, append(encoded, '\n'), 0o600)
+	printFromBundlesNextStep(stderr, outputPath)
+	return nil
+}
+
+// printFromBundlesNextStep points at the commands that run the rest of the
+// local loop. This starter policy trusts the keys that signed the bundles; a
+// Pushgate draft names the enrolled agent and the platform trust instead,
+// which template writes and validate checks.
+func printFromBundlesNextStep(stderr io.Writer, outputPath string) {
+	if stderr == nil {
+		return
+	}
+	draft := outputPath
+	if draft == "-" {
+		draft = "<draft.json>"
+	}
+	_, _ = fmt.Fprintf(stderr, "next: this starter policy trusts the bundles' signing keys. For a Pushgate draft, scaffold "+
+		"`cilock policy template --goal <id>` (see `cilock policy guide`), carry your rules into it, then run "+
+		"`cilock policy validate -p %s` and record each step with the `cilock run` line the guide prints.\n", draft)
 }
 
 // loadPolicyPubKeys reads every -k file, derives its keyid using

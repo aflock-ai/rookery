@@ -15,6 +15,7 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -26,6 +27,7 @@ import (
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	attpolicy "github.com/aflock-ai/rookery/attestation/policy"
+	"github.com/aflock-ai/rookery/cilock/internal/canonicaljson"
 	"github.com/open-policy-agent/opa/ast"
 )
 
@@ -156,6 +158,7 @@ func ValidatePolicy(ctx context.Context, envelope dsse.Envelope, verifier crypto
 		return result
 	}
 
+	validateFillSlots(envelope.Payload, result)
 	validatePolicyContent(&policy, result)
 	validateStepAbout(&policy, envelope.PayloadType, true, result)
 	validateV02Decodes(envelope, result)
@@ -189,6 +192,7 @@ func ValidateRawPolicy(ctx context.Context, policyJSON []byte) *ValidationResult
 		return result
 	}
 
+	validateFillSlots(policyJSON, result)
 	validatePolicyContent(&policy, result)
 	validateStepAbout(&policy, "", false, result)
 
@@ -199,6 +203,60 @@ func ValidateRawPolicy(ctx context.Context, policyJSON []byte) *ValidationResult
 // author still has to fill. A slot is only this string prefix: a hand-written
 // draft that uses it is treated the same way.
 const FillSlotMarker = "__FILL__"
+
+// validateFillSlots reports every string in the policy that is still an
+// unfilled template slot, by JSON path, with the slot's own instruction. A
+// slot in a rego module field is also invalid base64; naming it as a slot is
+// the actionable form of that error.
+func validateFillSlots(policyJSON []byte, result *ValidationResult) {
+	// A repeated key resolves differently here and in the typed decode (which
+	// merges a second "steps" into the first), so a slot could hide from both
+	// this scan and the Rego check that skips slotted modules.
+	if err := canonicaljson.RejectDuplicateKeys(policyJSON); err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("could not read the policy to look for unfilled template slots: %v", err))
+		result.Valid = false
+		return
+	}
+	// UseNumber: a number is never a slot, but decoding one into a float64
+	// fails on a literal the typed decode ignored (an unknown "x":1e1000), and
+	// a draft whose slots could not be read is not a draft with no slots.
+	dec := json.NewDecoder(bytes.NewReader(policyJSON))
+	dec.UseNumber()
+	var doc interface{}
+	if err := dec.Decode(&doc); err != nil {
+		result.Errors = append(result.Errors, fmt.Sprintf("could not read the policy to look for unfilled template slots: %v", err))
+		result.Valid = false
+		return
+	}
+	var walk func(path string, v interface{})
+	walk = func(path string, v interface{}) {
+		switch x := v.(type) {
+		case map[string]interface{}:
+			keys := make([]string, 0, len(x))
+			for k := range x {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				next := k
+				if path != "" {
+					next = path + "." + k
+				}
+				walk(next, x[k])
+			}
+		case []interface{}:
+			for i, e := range x {
+				walk(fmt.Sprintf("%s[%d]", path, i), e)
+			}
+		case string:
+			if strings.HasPrefix(x, FillSlotMarker) {
+				result.Errors = append(result.Errors, fmt.Sprintf("%s: unfilled template slot: %s", path, x))
+				result.Valid = false
+			}
+		}
+	}
+	walk("", doc)
+}
 
 func validatePolicyContent(policy *policyDocument, result *ValidationResult) {
 	validatePolicySchema(policy, result)
@@ -635,6 +693,11 @@ func validateRegoPolicies(policy *policyDocument, result *ValidationResult) { //
 				if regoPol.Module == "" {
 					result.Errors = append(result.Errors, fmt.Sprintf("Step '%s', attestation %d, rego policy %d: missing module", stepName, attIdx, regoIdx))
 					result.Valid = false
+					continue
+				}
+
+				if strings.HasPrefix(regoPol.Module, FillSlotMarker) {
+					// Named once, by path, in validateFillSlots.
 					continue
 				}
 

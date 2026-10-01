@@ -2124,9 +2124,26 @@ func attestorOutcomes(attestors []attestation.Attestor, runErr error) []options.
 // "sbom: skipped (no products to attest; record an SBOM tool's output —
 // cilock does NOT run it — e.g. one of: apko, bom, cdxgen, melange, syft)".
 func enrichSkippedDetail(name, detail string) string {
+	hinted := withGeneratorHint(name, detail)
+	if hinted == detail && detail != "" {
+		// The attestor's own message already named what to run.
+		return detail
+	}
+	// Point at the policy guide for this attestor's goal, which says what the
+	// wrapped command must write, unless the message already does.
+	if next := guideNextStep(name); next != "" && !strings.Contains(hinted, "cilock policy guide") {
+		if hinted == "" {
+			return next
+		}
+		return hinted + "; " + next
+	}
+	return hinted
+}
+
+func withGeneratorHint(name, detail string) string {
 	gens := attestorExternalGenerators(name)
 	if len(gens) == 0 {
-		// Self-contained attestor (git, environment) — no external generator,
+		// Self-contained attestor (git, environment): no external generator,
 		// so there's nothing actionable to add beyond its own message.
 		return detail
 	}
@@ -2136,11 +2153,28 @@ func enrichSkippedDetail(name, detail string) string {
 			return detail
 		}
 	}
-	hint := fmt.Sprintf("record an external tool's output — cilock does NOT run it — e.g. one of: %s", strings.Join(gens, ", "))
+	hint := fmt.Sprintf("record an external tool's output (cilock does NOT run it), e.g. one of: %s", strings.Join(gens, ", "))
 	if detail == "" {
 		return hint
 	}
 	return detail + "; " + hint
+}
+
+// guideNextStep names what the wrapped command must write for an attestor
+// the authoring catalog describes, and the guide page that explains it.
+func guideNextStep(name string) string {
+	a, ok := attestorByName(name)
+	if !ok || a.Produce == "" || a.Always {
+		return ""
+	}
+	for _, g := range catalogGoals {
+		for _, t := range g.Attestors {
+			if t == a.Type {
+				return fmt.Sprintf("next: the wrapped command must write %s (cilock policy guide --goal %s)", a.Produce, g.ID)
+			}
+		}
+	}
+	return fmt.Sprintf("next: the wrapped command must write %s (cilock policy guide --topic attestors)", a.Produce)
 }
 
 // legDetail strips the "attestor <name> failed: " wrapper the workflow layer

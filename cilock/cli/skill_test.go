@@ -107,9 +107,7 @@ func TestSkillCommandsSendNoTelemetry(t *testing.T) {
 // only shrinks. The test fails once a pending command exists, so the entry is
 // removed in the change that lands it.
 var pendingSkillCommands = map[string]bool{
-	"policy guide":    true,
-	"policy template": true,
-	"policy prove":    true,
+	"policy prove": true,
 }
 
 // Every `cilock ...` the skill tells an agent to run resolves to a real

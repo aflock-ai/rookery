@@ -30,8 +30,7 @@ namespace CilockEvaluators.Seeded
 def ruleIds : List String :=
   ["command-succeeded", "command-pin", "product-recorded", "tests-pass", "sarif-no-errors",
    "secretscan-no-findings", "govulncheck-no-reachable", "govulncheck-vex-covered", "sarif-vex-covered",
-   "trivy-no-blocked-severity", "slsa-provenance", "sbom-inventory", "review-approved", "products-from",
-   "trace-present", "trace-network", "trace-exec", "trace-writes", "trace-credential-reads"]
+   "trivy-no-blocked-severity", "slsa-provenance", "sbom-inventory", "review-approved", "products-from"]
 
 theorem commandSucceeded_empty : commandSucceeded (.obj []) = false := rfl
 theorem commandPin_empty (e : J) : commandPin e (.obj []) = false := rfl
@@ -44,11 +43,6 @@ theorem trivySeverity_empty (b : List String) : trivySeverity b (.obj []) = fals
 theorem slsaProvenance_empty : slsaProvenance (.obj []) = false := rfl
 theorem sbomInventory_empty : sbomInventory (.obj []) = false := rfl
 theorem reviewApproved_empty : reviewApproved (.obj []) = false := rfl
-theorem tracePresent_empty : tracePresent (.obj []) = false := rfl
-theorem traceNetwork_empty (a : List String) : traceNetwork a (.obj []) = false := rfl
-theorem traceExec_empty (a : List String) : traceExec a (.obj []) = false := rfl
-theorem traceWrites_empty (a : List String) : traceWrites a (.obj []) = false := rfl
-theorem traceCredentialReads_empty : traceCredentialReads (.obj []) = false := rfl
 
 theorem govulnScan_empty : govulnScan (.obj []) = none := rfl
 theorem sarifScan_empty : sarifScan (.obj []) = none := rfl
@@ -276,25 +270,40 @@ theorem settled_iff (s : J) :
 
 theorem govulnScan_sound (p : J) (fs : List (J × List J)) (h : govulnScan p = some fs) :
     scanned (vulnSummary p) = true ∧ ∃ raw, vulnFindings (vulnSummary p) = some raw ∧
-      ∃ r u, field (vulnSummary p) "reachableCount" .null = .num r ∧
-        field (vulnSummary p) "unreachableCount" .null = .num u ∧ (raw.length : Int) = r + u := by
+      (∀ f ∈ raw, validId (field f "osvId" .null) = true) ∧
+      ∃ r u t, field (vulnSummary p) "reachableCount" .null = .num r ∧
+        field (vulnSummary p) "unreachableCount" .null = .num u ∧
+        field (vulnSummary p) "totalFindings" .null = .num t ∧
+        (raw.length : Int) = r + u ∧ ((raw.filter reachableFlagged).length : Int) = r ∧
+        (raw.length : Int) ≤ t := by
   unfold govulnScan at h
   dsimp only at h
   cases hf : vulnFindings (vulnSummary p) with
   | none => simp [hf] at h
   | some raw =>
-    rw [hf] at h
-    cases hr : field p "report" (.arr []) <;> rw [hr] at h <;> try (simp at h; done)
-    cases hrc : field (vulnSummary p) "reachableCount" .null <;>
-      cases huc : field (vulnSummary p) "unreachableCount" .null <;>
-      simp [hrc, huc] at h
-    rename_i r u
-    refine ⟨?_, raw, rfl, r, u, rfl, rfl, ?_⟩ <;> simp_all
+    cases hr : field p "report" (.arr []) <;> simp only [hf, hr] at h <;> try (simp at h; done)
+    by_cases hc : (raw.all (fun f => validId (field f "osvId" .null)) && countsAgree (vulnSummary p) raw &&
+        scanned (vulnSummary p)) = true
+    · simp only [Bool.and_eq_true, List.all_eq_true] at hc
+      obtain ⟨⟨hid, hca⟩, hs⟩ := hc
+      refine ⟨hs, raw, rfl, hid, ?_⟩
+      unfold countsAgree at hca
+      split at hca
+      · rename_i r u t h1 h2 h3
+        refine ⟨r, u, t, h1, h2, h3, ?_⟩
+        simp only [Bool.or_eq_true, Bool.and_eq_true, decide_eq_true_eq, List.isEmpty_iff] at hca
+        rcases hca with ⟨⟨⟨_, h4⟩, h5⟩, h6⟩ | ⟨⟨⟨he, h4⟩, h5⟩, h6⟩
+        · exact ⟨h4, h5, h6⟩
+        · subst he
+          simp only [List.length_nil, List.filter_nil, Int.natCast_zero]
+          omega
+      · simp at hca
+    · simp [hc] at h
 
 theorem trivySeverity_sound (b : List String) (p : J) (h : trivySeverity b p = true) :
     ∃ kvs, field (field p "summary" (.obj [])) "bySeverity" .null = .obj kvs ∧
       ∀ s ∈ b, ∃ e, field (.obj kvs) s (.obj []) = .obj e ∧
-        ∃ n, field (.obj e) "fail" (.num 0) = .num n ∧ n ≤ 0 := by
+        ∃ n, field (.obj e) "fail" (.num 0) = .num n ∧ n = 0 := by
   unfold trivySeverity at h
   split at h
   · rename_i kvs hk
@@ -324,9 +333,15 @@ theorem slsaProvenance_iff (p : J) :
     intro deps hd
     exact absurd hd (hne deps)
 
+theorem hexAtLeast_length (n : Nat) (s : String) (h : hexAtLeast n s = true) : n ≤ s.length := by
+  simp only [hexAtLeast, Bool.and_eq_true, decide_eq_true_eq] at h
+  exact h.1
+
+/-- Every digest value of an admitted build input is at least 32 lowercase
+    hex digits, so an empty map, an empty value or a non-hex value refuses. -/
 theorem hasDigest_sound (d : J) (h : hasDigest d = true) :
     ∃ k v kvs, field d "digest" .null = .obj ((k, v) :: kvs) ∧
-      ∀ x ∈ (k, v) :: kvs, ∃ s, x.2 = .str s ∧ s ≠ "" := by
+      ∀ x ∈ (k, v) :: kvs, ∃ s, x.2 = .str s ∧ hexAtLeast 32 s = true := by
   unfold hasDigest at h
   split at h
   · rename_i kvs hk
@@ -337,7 +352,7 @@ theorem hasDigest_sound (d : J) (h : hasDigest d = true) :
       simp only [Bool.and_eq_true, List.all_eq_true] at h
       have := h.2 x hx
       split at this
-      · rename_i s hs; exact ⟨s, hs, by simpa using this⟩
+      · rename_i s hs; exact ⟨s, hs, this⟩
       · simp at this
   · simp at h
 
@@ -397,93 +412,19 @@ theorem productsFrom_sound (up : String) (i : J) (h : productsFrom up i = true) 
       · simp at this
   · simp at h
 
-theorem digestOf_nonempty (l : J) (d : String) (h : digestOf l = some d) : d ≠ "" := by
+/-- A digest products-from compares is a sha256: 64 lowercase hex digits. -/
+theorem digestOf_sha256 (l : J) (d : String) (h : digestOf l = some d) : hexExactly 64 d = true := by
   unfold digestOf at h
   split at h
   · split at h
-    · rename_i hne; cases h; simpa using hne
+    · rename_i hx; cases h; exact hx
     · simp at h
   · simp at h
 
-theorem traced_iff (p : J) :
-    traced p = true ↔ ∃ ps ph, field p "processes" .null = .arr ps ∧ field p "paths" (.arr []) = .arr ph ∧
-      ps ≠ [] ∧ ∀ x ∈ ps, x.isObj = true := by
-  unfold traced
-  split
-  · rename_i ps ph h1 h2
-    simp [h1, h2, List.isEmpty_iff]
-  · rename_i hne
-    simp only [Bool.false_eq_true, false_iff, not_exists, not_and]
-    intro ps ph h1 h2
-    exact absurd h2 (hne ps ph h1)
-
-theorem tracePresent_iff (p : J) : tracePresent p = true ↔ traced p = true := Iff.rfl
-
-theorem traceNetwork_sound (a : List String) (p : J) (h : traceNetwork a p = true) :
-    traced p = true ∧ ∀ q ∈ procs p,
-      (∀ c ∈ (field (field q "network" (.obj [])) "connections" (.arr [])).elems,
-        (field c "family" (.str "")).isStrEq "AF_UNIX" = true ∨
-        memStr (field c "hostname" (.str "")) a = true ∨ memStr (field c "address" (.str "")) a = true) ∧
-      (∀ d ∈ (field (field q "network" (.obj [])) "dnsLookups" (.arr [])).elems,
-        memStr (field d "serverAddress" (.str "")) a = true) := by
-  unfold traceNetwork at h
-  simp only [Bool.and_eq_true, List.all_eq_true, Bool.or_eq_true] at h
-  refine ⟨h.1, fun q hq => ⟨fun c hc => ?_, fun d hd => (h.2 q hq).2 d hd⟩⟩
-  have := (h.2 q hq).1 c hc
-  rcases this with (h1 | h2) | h3
-  · exact Or.inl h1
-  · exact Or.inr (Or.inl h2)
-  · exact Or.inr (Or.inr h3)
-
-theorem traceExec_sound (a : List String) (p : J) (h : traceExec a p = true) :
-    traced p = true ∧ ∀ q ∈ procs p,
-      (exePath p q).any (memStr · a) = true ∨
-      (digestSha p (field q "exeDigestId" (.num (-1)))).any (memStr · a) = true ∨
-      (digestSha p (field q "programDigestId" (.num (-1)))).any (memStr · a) = true := by
-  unfold traceExec at h
-  simp only [Bool.and_eq_true, List.all_eq_true, Bool.or_eq_true] at h
-  refine ⟨h.1, fun q hq => ?_⟩
-  rcases h.2 q hq with (h1 | h2) | h3
-  · exact Or.inl h1
-  · exact Or.inr (Or.inl h2)
-  · exact Or.inr (Or.inr h3)
-
-/-- trace-writes: every touched path is a string, under an allowed prefix,
-    with no `.`/`..` segment or `//`, and not inside `.git`. -/
-theorem traceWrites_sound (a : List String) (p : J) (h : traceWrites a p = true) :
-    traced p = true ∧ ∃ xs, touched p = some xs ∧ ∀ x ∈ xs, ∃ s, x = .str s ∧
-      a.any (strStarts s ·) = true ∧ unnormalized s = false ∧ inGit s = false := by
-  unfold traceWrites at h
-  simp only [Bool.and_eq_true] at h
-  refine ⟨h.1, ?_⟩
-  have h2 := h.2
-  split at h2
-  · rename_i xs hx
-    refine ⟨xs, hx, fun x hxm => ?_⟩
-    simp only [List.all_eq_true] at h2
-    have := h2 x hxm
-    unfold writeOk at this
-    split at this
-    · rename_i s
-      simp only [Bool.and_eq_true, Bool.not_eq_true'] at this
-      exact ⟨s, rfl, this.1.1, this.1.2, this.2⟩
-    · simp at this
-  · simp at h2
-
-theorem traceCredentialReads_sound (p : J) (h : traceCredentialReads p = true) :
-    traced p = true ∧ ∃ xs, opened p = some xs ∧ ∀ x ∈ xs, ∃ s, x = .str s ∧ sensitive s = false := by
-  unfold traceCredentialReads at h
-  simp only [Bool.and_eq_true] at h
-  refine ⟨h.1, ?_⟩
-  have h2 := h.2
-  split at h2
-  · rename_i xs hx
-    refine ⟨xs, hx, fun x hxm => ?_⟩
-    simp only [List.all_eq_true] at h2
-    have := h2 x hxm
-    split at this
-    · rename_i s; exact ⟨s, rfl, by simpa using this⟩
-    · simp at this
-  · simp at h2
+theorem digestOf_nonempty (l : J) (d : String) (h : digestOf l = some d) : d ≠ "" := by
+  have hx := digestOf_sha256 l d h
+  intro he
+  subst he
+  simp [hexExactly] at hx
 
 end CilockEvaluators.Seeded

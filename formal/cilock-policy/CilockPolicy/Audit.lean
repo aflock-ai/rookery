@@ -11,6 +11,7 @@ import CilockPolicy.Order
 import CilockPolicy.Holdout
 import CilockPolicy.BoundProof
 import CilockPolicy.NonVacuity
+import CilockPolicy.Draft
 
 namespace CilockPolicy
 
@@ -100,5 +101,9 @@ namespace CilockPolicy
 #print axioms Holdout.release_prediction
 #print axioms Holdout.release_prediction_after_9866
 #print axioms Holdout.shm_prediction
+-- Draft (the authoring validator, not verify)
+#print axioms Draft.slot_member_reported
+#print axioms Draft.slot_element_reported
+#print axioms Draft.slot_string_iff
 
 end CilockPolicy

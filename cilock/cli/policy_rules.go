@@ -17,6 +17,7 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -48,6 +49,13 @@ const (
 	ruleSARIFNoErrors        = "sarif-no-errors"
 	ruleSecretscanClean      = "secretscan-no-findings"
 	ruleGovulncheckReachable = "govulncheck-no-reachable"
+	ruleGovulncheckVEX       = "govulncheck-vex-covered"
+	ruleSARIFVEX             = "sarif-vex-covered"
+	ruleTrivySeverity        = "trivy-no-blocked-severity"
+	ruleSLSAProvenance       = "slsa-provenance"
+	ruleSBOMInventory        = "sbom-inventory"
+	ruleReviewApproved       = "review-approved"
+	ruleProductsFrom         = "products-from"
 )
 
 // Predicate types the seeded rules attach to: each is the type its attestor
@@ -115,6 +123,35 @@ var ruleTemplates = map[string]ruleTemplate{
 	ruleGovulncheckReachable: {ID: ruleGovulncheckReachable, Type: typeGovulncheck,
 		Summary: "no vulnerability reachable from this code (symbol-level scan; unreachable findings are advisory)",
 		build:   fixedModule(govulncheckReachableModule)},
+	ruleGovulncheckVEX: {ID: ruleGovulncheckVEX, Type: typeGovulncheck,
+		Summary: "every govulncheck finding (by GO id or any CVE/GHSA alias) is covered by a VEX statement from the named vex step, for one of the named products, with status fixed, or not_affected with a justification",
+		Param:   `JSON object {"vexStep": "<step whose vex attestation this reads>", "products": ["<purl, @id or sha256 the VEX statements must name>"] ([] accepts any product)}`,
+		Example: `{"vexStep":"vex","products":["pkg:golang/example.com/app"]}`,
+		build:   buildVEXCovered(vexScanGovulncheck)},
+	ruleSARIFVEX: {ID: ruleSARIFVEX, Type: typeSARIF,
+		Summary: "every SARIF result from a vulnerability scanner (osv-scanner, grype, trivy SARIF) is covered, by ruleId, by a VEX statement with status fixed, or not_affected with a justification",
+		Param:   `JSON object {"vexStep": "<step whose vex attestation this reads>", "products": ["<purl, @id or sha256>"]}`,
+		Example: `{"vexStep":"vex","products":["pkg:oci/app@sha256:<digest>"]}`,
+		build:   buildVEXCovered(vexScanSARIF)},
+	ruleTrivySeverity: {ID: ruleTrivySeverity, Type: typeTrivy,
+		Summary: "no failed Trivy finding at a blocked severity",
+		Param:   "JSON array of blocked severities, lowercase",
+		Example: `["critical","high"]`,
+		build:   buildTrivySeverity},
+	ruleSLSAProvenance: {ID: ruleSLSAProvenance, Type: typeSLSA,
+		Summary: "provenance names at least one build input, and every input carries a digest",
+		build:   fixedModule(slsaProvenanceModule)},
+	ruleSBOMInventory: {ID: ruleSBOMInventory, Type: typeCycloneDX,
+		Summary: "the SBOM is CycloneDX with components[] or SPDX with packages[], and lists at least one",
+		build:   fixedModule(sbomInventoryModule)},
+	ruleReviewApproved: {ID: ruleReviewApproved, Type: typeGitHubReview,
+		Summary: "a pull request of this commit has an APPROVED review on this exact commit",
+		build:   fixedModule(reviewApprovedModule)},
+	ruleProductsFrom: {ID: ruleProductsFrom, Type: typeProduct,
+		Summary: "every product this step ships is, by digest, a product of the named upstream step (read through attestationsFrom)",
+		Param:   "JSON string: the upstream step name (template fills it from --attestations-from)",
+		Example: `"build"`,
+		build:   buildProductsFrom},
 }
 
 func fixedModule(src string) func(json.RawMessage) (string, error) {
@@ -184,6 +221,103 @@ func buildCommandPin(param json.RawMessage) (string, error) {
 		return "", err
 	}
 	return strings.Replace(commandPinModule, "__ARGV__", lit, 1), nil
+}
+
+// trivySeverityUnknown is trivy's severity for a finding it could not rate.
+const trivySeverityUnknown = "unknown"
+
+// regoPackageSafe turns a step name into the tail of a Rego package name.
+var regoPackageUnsafe = regexp.MustCompile(`[^a-z0-9_]`)
+
+func regoPackageSafe(s string) string {
+	return regoPackageUnsafe.ReplaceAllString(strings.ToLower(s), "_")
+}
+
+func buildTrivySeverity(param json.RawMessage) (string, error) {
+	sev, err := decodeStringList(param, false)
+	if err != nil {
+		return "", err
+	}
+	known := map[string]bool{"critical": true, "high": true, "medium": true, "low": true, trivySeverityUnknown: true}
+	for _, s := range sev {
+		if !known[s] {
+			return "", fmt.Errorf("unknown severity %q (Trivy's summary keys are critical, high, medium, low, unknown)", s)
+		}
+	}
+	lit, err := regoLiteral(sev)
+	if err != nil {
+		return "", err
+	}
+	return strings.Replace(trivySeverityModule, "__SEVERITIES__", lit, 1), nil
+}
+
+func buildProductsFrom(param json.RawMessage) (string, error) {
+	var upstream string
+	if err := json.Unmarshal(param, &upstream); err != nil || strings.TrimSpace(upstream) == "" {
+		return "", fmt.Errorf("want the upstream step name as a JSON string")
+	}
+	lit, err := regoLiteral(upstream)
+	if err != nil {
+		return "", err
+	}
+	src := strings.Replace(productsFromModule, "__UPSTREAM__", lit, 1)
+	return strings.Replace(src, "__PKG__", regoPackageSafe(upstream), 1), nil
+}
+
+type vexScanKind int
+
+const (
+	vexScanGovulncheck vexScanKind = iota
+	vexScanSARIF
+)
+
+type vexParam struct {
+	VEXStep  string   `json:"vexStep"`
+	Products []string `json:"products"`
+}
+
+func buildVEXCovered(kind vexScanKind) func(json.RawMessage) (string, error) {
+	return func(param json.RawMessage) (string, error) {
+		var p vexParam
+		dec := json.NewDecoder(strings.NewReader(string(param)))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&p); err != nil {
+			return "", fmt.Errorf("not the expected JSON object: %v", err)
+		}
+		if strings.TrimSpace(p.VEXStep) == "" {
+			return "", fmt.Errorf("vexStep is empty")
+		}
+		if p.Products == nil {
+			return "", fmt.Errorf("products is missing: list the products the VEX statements must name, or [] to accept a statement for any product")
+		}
+		products, err := decodeStringList(mustMarshal(p.Products), true)
+		if err != nil {
+			return "", fmt.Errorf("products: %w", err)
+		}
+		stepLit, err := regoLiteral(p.VEXStep)
+		if err != nil {
+			return "", err
+		}
+		prodLit, err := regoLiteral(products)
+		if err != nil {
+			return "", err
+		}
+		scan := govulncheckVEXFindings
+		if kind == vexScanSARIF {
+			scan = sarifVEXFindings
+		}
+		src := strings.Replace(vexCoveredModule, "__SCAN__", scan, 1)
+		src = strings.Replace(src, "__VEXSTEP__", stepLit, 1)
+		return strings.Replace(src, "__PRODUCTS__", prodLit, 1), nil
+	}
+}
+
+func mustMarshal(v any) json.RawMessage {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return b
 }
 
 // predRead is the shape-agnostic read every module opens with, plus field,
@@ -332,6 +466,13 @@ unreadable_run {
 	o := field(inv, "ruleConfigurationOverrides", [])
 	o != []
 }
+
+# SARIF 2.1.0 §3.20.14: an invocation says whether the tool finished. A run
+# whose invocation did not, or does not say, has no complete result list, so
+# its empty results are not "no errors".
+unreadable_run { r := runs[_]; inv := field(r, "invocations", [])[_]; not is_object(inv) }
+
+unreadable_run { r := runs[_]; inv := field(r, "invocations", [])[_]; field(inv, "executionSuccessful", null) != true }
 
 unreadable_run {
 	r := runs[_]
@@ -536,5 +677,375 @@ deny[msg] {
 	readable
 	count(findings) != summary.reachableCount + summary.unreachableCount
 	msg := "inconsistent evidence: govulncheck counts disagree with its findings list"
+}
+`
+
+const vexCoveredModule = `package vex_covered
+
+` + predRead + `
+vex_step := __VEXSTEP__
+products := {p | p := __PRODUCTS__[_]}
+
+__SCAN__
+vex_docs[d] {
+	c := input.steps[vex_step].collections[_]
+	d := field(field(c, "attestations", {}), "https://openvex.dev/ns", {})["vexDocument"]
+}
+
+vex_readable {
+	count(vex_docs) > 0
+	not unreadable_vex
+}
+
+unreadable_vex { d := vex_docs[_]; not is_array(field(d, "statements", null)) }
+
+statement_names(s) = names {
+	v := field(s, "vulnerability", {})
+	names := {n | n := field(v, "name", ""); n != ""} | {n | n := field(v, "@id", ""); n != ""} | {a | a := field(v, "aliases", [])[_]; a != ""}
+}
+
+statement_products(s) = ids {
+	ids := {i | p := field(s, "products", [])[_]; i := field(p, "@id", "")} |
+		{i | p := field(s, "products", [])[_]; i := field(field(p, "identifiers", {}), "purl", "")} |
+		{i | p := field(s, "products", [])[_]; i := field(field(p, "hashes", {}), "sha-256", "")}
+}
+
+# An empty products list accepts a statement for any product.
+product_matches(s) { count(products) == 0 }
+
+product_matches(s) { count(products & statement_products(s)) > 0 }
+
+settled(s) { field(s, "status", "") == "fixed" }
+
+settled(s) {
+	field(s, "status", "") == "not_affected"
+	j := field(s, "justification", "")
+	is_string(j)
+	j != ""
+}
+
+covered(id) {
+	d := vex_docs[_]
+	s := d.statements[_]
+	count(finding_ids[id] & statement_names(s)) > 0
+	product_matches(s)
+	settled(s)
+}
+
+deny[msg] {
+	not scan_readable
+	msg := "unreadable evidence: the scan report this rule reads is missing or malformed"
+}
+
+# No findings needs no VEX; a finding with no readable VEX fails closed.
+deny[msg] {
+	scan_readable
+	count(finding_ids) > 0
+	not vex_readable
+	msg := sprintf("unreadable evidence: no readable OpenVEX document from step %v (add it to attestationsFrom and record it with -a vex)", [vex_step])
+}
+
+deny[msg] {
+	scan_readable
+	vex_readable
+	finding_ids[id]
+	not covered(id)
+	msg := sprintf("vex: %v is not covered by a VEX statement for %v with status fixed, or not_affected with a justification", [id, concat(", ", sort([p | products[p]]))])
+}
+`
+
+const govulncheckVEXFindings = `summary := field(pred, "summary", {})
+
+scan_findings = [] { summary.findings == null }
+
+scan_findings = fs {
+	is_array(field(summary, "findings", null))
+	fs := summary.findings
+}
+
+# A scan with no roots scanned nothing (govulncheck.go ScanRoots); its empty
+# findings list is not a clean result.
+scanned {
+	roots := field(summary, "scanRoots", null)
+	is_array(roots)
+	count(roots) > 0
+}
+
+scan_readable {
+	is_array(scan_findings)
+	is_array(field(pred, "report", []))
+	not unnamed_finding
+	counts_agree
+	scanned
+}
+
+# The attestor writes one finding per OSV id and counts each as reachable or
+# not, and totalFindings counts every trace tier, so it is at least that and
+# zero only when there are none. A list that disagrees with its own counts
+# (findings null while reachableCount says 3) is not a clean scan.
+count_fields_numeric {
+	is_number(field(summary, "reachableCount", null))
+	is_number(field(summary, "unreachableCount", null))
+	is_number(field(summary, "totalFindings", null))
+}
+
+counts_agree {
+	count_fields_numeric
+	n := count(scan_findings)
+	n == summary.reachableCount + summary.unreachableCount
+	count([f | f := scan_findings[_]; field(f, "reachable", false) == true]) == summary.reachableCount
+	summary.totalFindings >= n
+	n > 0
+}
+
+counts_agree {
+	count_fields_numeric
+	count(scan_findings) == 0
+	summary.reachableCount == 0
+	summary.unreachableCount == 0
+	summary.totalFindings == 0
+}
+
+valid_id(id) { is_string(id); id != "" }
+
+unnamed_finding { f := scan_findings[_]; not valid_id(field(f, "osvId", null)) }
+
+finding_ids[id] = names {
+	f := scan_findings[_]
+	id := f.osvId
+	names := {id} | {a | m := field(pred, "report", [])[_]; o := field(m, "osv", {}); field(o, "id", "") == id; a := field(o, "aliases", [])[_]; is_string(a); a != ""}
+}
+`
+
+const sarifVEXFindings = `runs := field(field(pred, "report", {}), "runs", null)
+
+unreadable_run { r := runs[_]; not is_array(field(r, "results", null)) }
+
+# SARIF 2.1.0 §3.20.14: a run whose invocation did not finish, or does not
+# say, has no complete result list, so its empty results need no VEX only
+# in appearance.
+unreadable_run { r := runs[_]; not is_array(field(r, "invocations", [])) }
+
+unreadable_run { r := runs[_]; inv := field(r, "invocations", [])[_]; not is_object(inv) }
+
+unreadable_run { r := runs[_]; inv := field(r, "invocations", [])[_]; field(inv, "executionSuccessful", null) != true }
+
+valid_id(id) { is_string(id); id != "" }
+
+unnamed_result { r := runs[_].results[_]; not valid_id(field(r, "ruleId", null)) }
+
+scan_readable {
+	is_array(runs)
+	count(runs) > 0
+	not unreadable_run
+	not unnamed_result
+}
+
+finding_ids[id] = names {
+	r := runs[_].results[_]
+	id := r.ruleId
+	names := {id}
+}
+`
+
+const trivySeverityModule = `package trivy_blocked_severity
+
+` + predRead + `
+blocked := __SEVERITIES__
+
+by := object.get(object.get(pred, "summary", {}), "bySeverity", null)
+
+readable { is_object(by) }
+
+deny[msg] {
+	not readable
+	msg := "unreadable evidence: trivy needs summary.bySeverity"
+}
+
+deny[msg] {
+	readable
+	s := blocked[_]
+	n := object.get(object.get(by, s, {}), "fail", 0)
+	not is_number(n)
+	msg := sprintf("unreadable evidence: trivy bySeverity.%v.fail is not a number", [s])
+}
+
+deny[msg] {
+	readable
+	s := blocked[_]
+	n := object.get(object.get(by, s, {}), "fail", 0)
+	is_number(n)
+	n < 0
+	msg := sprintf("unreadable evidence: trivy bySeverity.%v.fail is %v, not a count", [s, n])
+}
+
+deny[msg] {
+	readable
+	s := blocked[_]
+	n := object.get(object.get(by, s, {}), "fail", 0)
+	is_number(n)
+	n > 0
+	msg := sprintf("trivy: %v failed %v finding(s)", [n, s])
+}
+`
+
+const slsaProvenanceModule = `package slsa_provenance
+
+` + predRead + `
+deps := object.get(object.get(pred, "buildDefinition", {}), "resolvedDependencies", null)
+
+readable { is_array(deps) }
+
+deny[msg] {
+	not readable
+	msg := "unreadable evidence: slsa needs buildDefinition.resolvedDependencies"
+}
+
+deny[msg] {
+	readable
+	count(deps) < 1
+	msg := "slsa: the provenance names no build inputs"
+}
+
+hex_digest(v) {
+	is_string(v)
+	regex.match("^[0-9a-f]{32,}$", v)
+}
+
+bad_digest_entry(dg) { v := dg[_]; not hex_digest(v) }
+
+digest_ok(dg) {
+	is_object(dg)
+	count(dg) > 0
+	not bad_digest_entry(dg)
+}
+
+deny[msg] {
+	readable
+	d := deps[_]
+	not digest_ok(object.get(d, "digest", null))
+	msg := sprintf("slsa: build input %v has no digest (want at least one algorithm with a lowercase hex value, every value valid)", [object.get(d, "uri", object.get(d, "name", "unnamed"))])
+}
+`
+
+const sbomInventoryModule = `package sbom_inventory
+
+` + predRead + `
+sbom_format := object.get(pred, "_sbomFormat", "")
+
+items = object.get(pred, "components", null) { sbom_format == "cyclonedx" }
+
+items = object.get(pred, "packages", null) { sbom_format == "spdx" }
+
+readable { is_array(items) }
+
+deny[msg] {
+	not readable
+	msg := "unreadable evidence: sbom needs _sbomFormat cyclonedx with components[] or spdx with packages[]"
+}
+
+deny[msg] {
+	readable
+	count(items) < 1
+	msg := "sbom: the SBOM lists no components"
+}
+`
+
+const reviewApprovedModule = `package review_approved
+
+` + predRead + `
+prs := object.get(pred, "prs", null)
+
+commit := object.get(pred, "commit_sha", null)
+
+readable {
+	is_array(prs)
+	is_string(commit)
+	commit != ""
+}
+
+approved {
+	pr := prs[_]
+	rv := field(pr, "reviews", [])[_]
+	field(rv, "state", "") == "APPROVED"
+	id := field(rv, "commit_id", null)
+	is_string(id)
+	id == commit
+}
+
+deny[msg] {
+	not readable
+	msg := "unreadable evidence: github-review needs prs[] and commit_sha"
+}
+
+deny[msg] {
+	readable
+	not approved
+	msg := sprintf("github-review: no APPROVED review on commit %v", [commit])
+}
+`
+
+// productsFromModule reads the upstream step's product predicate through
+// attestationsFrom: input.steps.<step>.collections[].attestations[<type>]
+// (attestation/policy/step.go buildStepContext).
+const productsFromModule = `package products_from___PKG__
+
+` + predRead + `
+upstream := __UPSTREAM__
+
+product_type := "https://aflock.ai/attestations/product/v0.3"
+
+mine := object.get(pred, "leaves", null)
+
+upstream_products[c] {
+	col := input.steps[upstream].collections[_]
+	c := field(field(col, "attestations", {}), product_type, null)
+}
+
+unreadable_upstream { c := upstream_products[_]; not is_array(field(c, "leaves", null)) }
+
+valid_digest(d) {
+	is_string(d)
+	regex.match("^[0-9a-f]{64}$", d)
+}
+
+upstream_digests[d] {
+	c := upstream_products[_]
+	l := c.leaves[_]
+	d := field(l, "fileDigest", null)
+	valid_digest(d)
+}
+
+readable {
+	is_array(mine)
+	count(upstream_products) > 0
+	not unreadable_upstream
+}
+
+deny[msg] {
+	not readable
+	msg := sprintf("unreadable evidence: products-from needs this step's inline product leaves and step %v's, through attestationsFrom", [upstream])
+}
+
+deny[msg] {
+	readable
+	count(mine) < 1
+	msg := "products-from: this step shipped no products"
+}
+
+deny[msg] {
+	readable
+	l := mine[_]
+	not valid_digest(field(l, "fileDigest", null))
+	msg := sprintf("products-from: %v has no sha256 fileDigest, so nothing ties it to step %v", [field(l, "path", "an unnamed product"), upstream])
+}
+
+deny[msg] {
+	readable
+	l := mine[_]
+	d := field(l, "fileDigest", null)
+	valid_digest(d)
+	not upstream_digests[d]
+	msg := sprintf("products-from: %v is not, by digest, a product of step %v", [field(l, "path", "an unnamed product"), upstream])
 }
 `

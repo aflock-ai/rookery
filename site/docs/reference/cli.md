@@ -853,6 +853,68 @@ Validates a Witness/cilock policy document for schema correctness. An unsigned p
 | `--require-signed` | (none) | `false` | Fail unless the policy is a DSSE envelope with at least one signature (presence only; add `-k` to verify it). |
 | `--format <fmt>` | (none) | `text` | `text` or `json`. `--output`/`-o` are deprecated aliases that print a notice. |
 
+## `cilock policy guide`
+
+Explains how to evidence each Pushgate goal with cilock, for the model that writes the policy. For each goal it prints the attestation types, what the wrapped command must leave behind, the exact `cilock run` line, the predicate fields a rule reads, the seeded fail-closed Rego, and the tools the detection catalog knows for it (suggestions, never decisions).
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--goal <id>` | (none) | (all, summarized) | Goal to explain in full (repeat): `tests`, `quality`, `app-build`, `secrets`, `provenance`, `sbom`, `config`, `config-security`, `kubernetes`, `dockerfile`, `docs`, `migrations`, `image-vulns`, `vulns`. |
+| `--topic <name>` | (none) | (none) | Topic to explain (repeat): `attestors`, `chain`, `flow`, `rego`, `rules`, `trace`, `vex`. |
+| `--dir <path>` | `-d` | `.` | Repository to look at for tool suggestions. |
+| `--format <fmt>` | (none) | `text` | `text` or `json`. |
+
+```bash
+cilock policy guide --goal tests --goal quality
+cilock policy guide --topic chain --topic trace
+```
+
+## `cilock skill`
+
+> The Pushgate agent skill ships inside cilock, so the copy you install matches the binary's commands.
+
+### `cilock skill install`
+
+Writes the Pushgate skill where the chosen agent discovers skills (`claude`: `~/.claude/skills/pushgate` or `.claude/skills/pushgate`; `codex`: `~/.agents/skills/pushgate` or `.agents/skills/pushgate`; `opencode` reads both). Re-running is safe. cilock records a SHA-256 digest of each file it writes and replaces only files that still match it; it refuses a file it did not write, or one edited since, unless `--force`. It writes only inside the skill directory and never through a symbolic link.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--agent <name>` | `auto` | `claude`, `codex`, `opencode`, or `auto` (detect from the environment). |
+| `--scope <scope>` | `user` | `user` (every project on this machine) or `project` (this repository only). |
+| `--dir <path>` | (none) | Install into `<dir>/pushgate` instead of the agent's skills directory. |
+| `--force` | `false` | Replace files cilock did not write, or that were edited since. |
+
+```bash
+cilock skill install
+cilock skill install --agent codex --scope project
+```
+
+### `cilock skill path`
+
+Prints the directory `cilock skill install` would write for the same flags on its first line, then whether the skill is installed there and the discovery rule that makes the agent find it. Writes nothing. Takes the same `--agent`, `--scope` and `--dir` flags as `install`.
+
+### `cilock skill show [file]`
+
+Prints the skill embedded in this cilock to stdout: `SKILL.md` by default, or a named file such as `references/refusals.md`.
+
+## `cilock policy template`
+
+Writes a Pushgate policy draft skeleton: the enrolled agent functionary, the empty platform trust placeholders, an expiry one year out, one step per goal with its attestation types and seeded fail-closed Rego. Every place only you can judge for this repository is a `__FILL__` string. It never overwrites a file without `--force`, never touches a step it did not add, and never replaces a rule that is not an unfilled slot.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--goal <id>` | (none) | Goal to create a step for (repeat). |
+| `--policy <path>` / `-p` | (none) | Existing draft to add a step to or fill. |
+| `--add-step <name>` | (none) | Append a step with this name to the draft named by `-p`. |
+| `--attestor <name>` | (none) | With `--add-step`: an attestor name or predicate type the step requires (repeat). |
+| `--artifacts-from <step>` | (none) | With `--add-step`: a step whose products this step's materials must match (repeat). |
+| `--attestations-from <step>` | (none) | With `--add-step`: a step whose predicates this step's rules read as `input.steps.<step>` (repeat). |
+| `--fill <step>.<rule>=<json>` | (none) | Fill a rule slot (repeat). |
+| `--force` | `false` | Overwrite an existing file when creating a draft. |
+
+```bash
+cilock policy template --goal tests --goal secrets --goal quality
+cilock policy template -p .pushgate/policy.json --add-step docs-build --attestor command-run
 ## `cilock policy input <envelope.json>`
 
 Decodes a signed step envelope (the `-o`/`--outfile` of `cilock run` or `cilock attest`) and shows what a Rego rule for that step reads as `input`. Without `--attestor` it lists the step, its subject count, and each attestation with its top-level fields. With `--attestor` it prints exactly that attestation's JSON, the object a rule on that attestor evaluates. A rule reads it as `input.attestation` when the verifier adds cross-step (`attestationsFrom`) or timestamp context, which a platform-signed step always has, and as bare `input` otherwise; read it as the seeded rules do, `pred := object.get(input, "attestation", input)`. An attestor the envelope does not carry is an error that names the ones it does.

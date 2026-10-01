@@ -132,8 +132,101 @@ func seededBase(id string) (param any, pred map[string]any) {
 				map[string]any{"osvId": "GO-1", "reachable": false},
 				map[string]any{"osvId": "GO-2", "reachable": false},
 			}}}
+	case ruleGovulncheckVEX:
+		return seededVEXParam(), map[string]any{
+			"summary": map[string]any{
+				"reachableCount": 1, "unreachableCount": 1, "totalFindings": 3, "scanRoots": []any{"example.com/app"},
+				"findings": []any{
+					map[string]any{"osvId": "GO-1", "reachable": true},
+					map[string]any{"osvId": "GO-2", "reachable": false},
+				}},
+			"report": []any{
+				map[string]any{"osv": map[string]any{"id": "GO-1", "aliases": []any{"CVE-1", ""}}},
+				map[string]any{"osv": map[string]any{"id": "GO-9", "aliases": []any{"CVE-9"}}},
+			}}
+	case ruleSARIFVEX:
+		return seededVEXParam(), map[string]any{"report": map[string]any{"runs": []any{
+			map[string]any{"results": []any{map[string]any{"ruleId": "CVE-1"}, map[string]any{"ruleId": "GO-2"}}},
+			map[string]any{"results": []any{}},
+		}}}
+	case ruleTrivySeverity:
+		return []any{"critical", "high"}, map[string]any{"summary": map[string]any{"bySeverity": map[string]any{
+			"critical": map[string]any{"fail": 0, "pass": 2}, "high": map[string]any{"pass": 1},
+			"low": map[string]any{"fail": 3}}}}
+	case ruleSLSAProvenance:
+		return nil, map[string]any{"buildDefinition": map[string]any{"resolvedDependencies": []any{
+			map[string]any{"uri": "git+https://example.com/app", "digest": map[string]any{"gitCommit": seededHex40}},
+			map[string]any{"name": "go", "digest": map[string]any{"sha256": seededHex64, "sha1": seededHex40}},
+		}}}
+	case ruleSBOMInventory:
+		return nil, map[string]any{"_sbomFormat": "cyclonedx",
+			"components": []any{map[string]any{"name": "a"}}, "packages": []any{}}
+	case ruleReviewApproved:
+		return nil, map[string]any{"commit_sha": "abc1", "prs": []any{
+			map[string]any{"reviews": []any{map[string]any{"state": "COMMENTED", "commit_id": "abc1"}}},
+			map[string]any{"reviews": []any{
+				map[string]any{"state": "APPROVED", "commit_id": "old"},
+				map[string]any{"state": "APPROVED", "commit_id": "abc1"},
+			}},
+		}}
+	case ruleProductsFrom:
+		return "build", map[string]any{"leaves": []any{
+			map[string]any{"path": "app", "fileDigest": seededHex64},
+			map[string]any{"path": "app.sig", "fileDigest": seededHex64b},
+		}}
 	}
 	return nil, nil
+}
+
+const (
+	seededHex40  = "0123456789abcdef0123456789abcdef01234567"
+	seededHex64  = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	seededHex64b = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+)
+
+func seededVEXParam() map[string]any {
+	return map[string]any{"vexStep": "vex", "products": []any{"pkg:golang/app"}}
+}
+
+// seededMutateMap applies n random edits to m, keeping only the edits that
+// leave it a map.
+func seededMutateMap(r *rand.Rand, m map[string]any, n int) map[string]any {
+	for range n {
+		if x, ok := seededMutate(r, m).(map[string]any); ok {
+			m = x
+		}
+	}
+	return m
+}
+
+// seededStepsBase is, for a rule that reads other steps through
+// attestationsFrom, the input.steps it admits with. nil for the rest.
+func seededStepsBase(id string) map[string]any {
+	switch id {
+	case ruleGovulncheckVEX, ruleSARIFVEX:
+		doc := map[string]any{"statements": []any{
+			map[string]any{"vulnerability": map[string]any{"name": "CVE-1"},
+				"products": []any{map[string]any{"@id": "pkg:golang/app"}}, "status": "fixed"},
+			map[string]any{"vulnerability": map[string]any{"@id": "GO-2", "aliases": []any{"CVE-2"}},
+				"products": []any{map[string]any{"identifiers": map[string]any{"purl": "pkg:golang/app"}}},
+				"status":   "not_affected", "justification": "vulnerable_code_not_present"},
+			map[string]any{"vulnerability": map[string]any{"name": "CVE-9"},
+				"products": []any{map[string]any{"hashes": map[string]any{"sha-256": "pkg:golang/other"}}}, "status": "affected"},
+		}}
+		return map[string]any{"vex": map[string]any{"collections": []any{
+			map[string]any{"attestations": map[string]any{"https://openvex.dev/ns": map[string]any{"vexDocument": doc}}},
+		}}}
+	case ruleProductsFrom:
+		leaves := []any{
+			map[string]any{"path": "app", "fileDigest": seededHex64},
+			map[string]any{"path": "app.sig", "fileDigest": seededHex64b},
+			map[string]any{"path": "notes"},
+		}
+		return map[string]any{"build": map[string]any{"collections": []any{
+			map[string]any{"attestations": map[string]any{typeProduct: map[string]any{"leaves": leaves}}},
+		}}}
+	}
+	return nil
 }
 
 // seededKeys are the keys a mutation adds to an object: every key a seeded
@@ -144,6 +237,14 @@ var seededKeys = []string{
 	"defaultConfiguration", "ruleId", "ruleIndex", "rule", "index", "toolComponent", "invocations",
 	"ruleConfigurationOverrides", "policies", "findings", "scope", "productDigestMismatches",
 	"reachableCount", "unreachableCount", "scanLevel", "reachable", "osvId", "attestation",
+	"totalFindings", "osv", "aliases", "vulnerability", "name", "@id", "products", "identifiers", "purl",
+	"hashes", "sha-256", "status", "justification", "statements", "vexDocument", "collections",
+	"attestations", "bySeverity", "fail", "buildDefinition", "resolvedDependencies", "digest", "sha256",
+	"_sbomFormat", "components", "packages", "prs", "reviews", "state", "commit_id", "commit_sha", "leaves",
+	"fileDigest", "processes", "paths", "network", "connections", "family", "hostname", "address",
+	"dnsLookups", "serverAddress", "execPathId", "exeDigestId", "programDigestId", "digests", "fileOps",
+	"writes", "renames", "oldPath", "newPath", "deletes", "permChanges", "writtenFiles", "pathId",
+	"openedFiles", "unhashedOpens", "scanRoots",
 }
 
 func seededScalar(r *rand.Rand) any {
@@ -155,8 +256,12 @@ func seededScalar(r *rand.Rand) any {
 	case 2:
 		return []int{-1, 0, 1, 2, 3, 5, 99}[r.IntN(7)]
 	default:
-		return []string{"", "../x", "/etc/passwd", "error", "warning", "note", "none", "ERROR", "symbol",
-			"module", "W1", "E1", "N1", "E1/sub", "W1/", "GO-1"}[r.IntN(16)]
+		ss := []string{"", "../x", "/etc/passwd", "error", "warning", "note", "none", "ERROR", "symbol",
+			"module", "W1", "E1", "N1", "E1/sub", "W1/", "GO-1", "GO-2", "CVE-1", "fixed", "not_affected",
+			"affected", "APPROVED", "abc1", "cyclonedx", "spdx", "AF_UNIX", "10.0.0.1", "/usr/bin/go",
+			"/work/a", "/work/../etc", "/work//a", "/work/.git/config", "/home/u/.ssh/id_rsa", "/etc/ssl/k.pem",
+			"/work/k.key", "pkg:golang/app", "vex", "build", seededHex40, seededHex64, seededHex64b, "ABCDEF0123456789ABCDEF0123456789"}
+		return ss[r.IntN(len(ss))]
 	}
 }
 
@@ -271,15 +376,17 @@ func TestFormalDifferentialSeededRules(t *testing.T) {
 		param, base := seededBase(id)
 		require.NotNil(t, base, "rule %s has no differential base; add one to seededBase", id)
 		for i := 0; i < n; i++ {
-			pred := seededClone(base).(map[string]any)
 			// Case 0 is the base itself; the rest take 1 to 3 edits.
-			for range min(i, 1+r.IntN(3)) {
-				if m, ok := seededMutate(r, pred).(map[string]any); ok {
-					pred = m
-				}
-			}
+			pred := seededMutateMap(r, seededClone(base).(map[string]any), min(i, 1+r.IntN(3)))
 			c := seededCase{Kind: "seeded", Rule: id, Param: seededClone(param), Predicate: pred}
-			if i%4 == 3 {
+			if steps := seededStepsBase(id); steps != nil {
+				// A rule that reads other steps always has them; every
+				// other case also edits them.
+				if i%2 == 1 {
+					steps = seededMutateMap(r, steps, 1+r.IntN(3))
+				}
+				c.Steps = steps
+			} else if i%4 == 3 {
 				c.Steps = map[string]any{"build": map[string]any{"collections": []any{}}}
 			}
 			cases = append(cases, c)
@@ -332,7 +439,7 @@ func TestFormalDifferentialSeededRules(t *testing.T) {
 		}
 		if lean[i] != goV {
 			mismatches[c.Rule]++
-			if len(examples) < 8 {
+			if mismatches[c.Rule] <= 2 {
 				b, _ := json.Marshal(c)
 				examples = append(examples, fmt.Sprintf("go=%s lean=%s (go err: %v) %s", goV, lean[i], evalErr, b))
 			}

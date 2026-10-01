@@ -126,12 +126,20 @@ def listedRule (run i : J) : Bool :=
       (match (rulesOf run).at (.num n) with | some (.obj _) => true | _ => false)
   | _ => false
 
+/-- An invocation that is not an object, or whose `executionSuccessful` is
+    not `true` (SARIF 2.1.0 §3.20.14): the run has no complete result list. -/
+def unfinishedInvocations (run : J) : Bool :=
+  !(field run "invocations" (.arr [])).isArr ||
+  (field run "invocations" (.arr [])).elems.any
+    (fun inv => !inv.isObj || !J.eqv (field inv "executionSuccessful" .null) (.bool true))
+
 /-- `unreadable_run` for one run: results or rules not an array, invocations
-    not an array, an invocation with ruleConfigurationOverrides other than
-    `[]`, or policies other than `[]`. -/
+    not an array, an invocation that is not an object or did not finish, an
+    invocation with ruleConfigurationOverrides other than `[]`, or policies
+    other than `[]`. -/
 def unreadableRun (run : J) : Bool :=
   !(field run "results" .null).isArr || !(rulesOf run).isArr ||
-  !(field run "invocations" (.arr [])).isArr ||
+  unfinishedInvocations run ||
   (field run "invocations" (.arr [])).elems.any
     (fun inv => !J.eqv (field inv "ruleConfigurationOverrides" (.arr [])) (.arr [])) ||
   !J.eqv (field run "policies" (.arr [])) (.arr [])
@@ -267,15 +275,27 @@ def vexReadable (docs : List J) : Bool :=
 
 def validId (x : J) : Bool := match x with | .str s => s != "" | _ => false
 
-/-- The govulncheck scan side: readable, and each finding's id with its aliases. -/
+def reachableFlagged (f : J) : Bool := J.eqv (field f "reachable" (.bool false)) (.bool true)
+
+/-- `counts_agree`: numeric reachableCount, unreachableCount and
+    totalFindings; with findings, the list length is reachable + unreachable,
+    the reachable count is the number flagged reachable, and totalFindings is
+    at least the length; with none, every count is 0. -/
+def countsAgree (s : J) (fs : List J) : Bool :=
+  match field s "reachableCount" .null, field s "unreachableCount" .null, field s "totalFindings" .null with
+  | .num r, .num u, .num t =>
+    (decide (0 < (fs.length : Int)) && decide ((fs.length : Int) = r + u) &&
+      decide (((fs.filter reachableFlagged).length : Int) = r) && decide ((fs.length : Int) ≤ t)) ||
+    (fs.isEmpty && decide (r = 0) && decide (u = 0) && decide (t = 0))
+  | _, _, _ => false
+
+/-- The govulncheck scan side: readable (every finding named, counts that
+    agree, non-empty scanRoots), and each finding's id with its aliases. -/
 def govulnScan (pred : J) : Option (List (J × List J)) :=
   let s := vulnSummary pred
   match vulnFindings s, field pred "report" (.arr []) with
   | some fs, .arr report =>
-    if fs.all (fun f => validId (field f "osvId" .null)) && scanned s &&
-       (match field s "reachableCount" .null, field s "unreachableCount" .null with
-        | .num r, .num u => decide ((fs.length : Int) = r + u)
-        | _, _ => false) then
+    if fs.all (fun f => validId (field f "osvId" .null)) && countsAgree s fs && scanned s then
       some (fs.map (fun f =>
         let id := field f "osvId" .null
         (id, id :: report.flatMap (fun m =>
@@ -286,13 +306,14 @@ def govulnScan (pred : J) : Option (List (J × List J)) :=
     else none
   | _, _ => none
 
-/-- The SARIF scan side: every run has a results array; every result a
-    non-empty string ruleId, which is its own only name. -/
+/-- The SARIF scan side: every run has a results array and finished
+    invocations; every result a non-empty string ruleId, which is its own
+    only name. -/
 def sarifScan (pred : J) : Option (List (J × List J)) :=
   match field (field pred "report" (.obj [])) "runs" .null with
   | .arr runs =>
     let rs := runs.flatMap (fun r => (field r "results" .null).elems)
-    if !runs.isEmpty && runs.all (fun r => (field r "results" .null).isArr) &&
+    if !runs.isEmpty && runs.all (fun r => (field r "results" .null).isArr && !unfinishedInvocations r) &&
        rs.all (fun r => validId (field r "ruleId" .null)) then
       some (rs.map (fun r => (field r "ruleId" .null, [field r "ruleId" .null])))
     else none
@@ -312,22 +333,24 @@ def vexCovered (scan : J → Option (List (J × List J))) (vexStep : String) (pr
 /-! ## trivy -/
 
 /-- trivy_blocked_severity: summary.bySeverity an object; for every blocked
-    severity the entry is absent or an object whose fail is absent or a
-    number ≤ 0. -/
+    severity the entry is absent or an object whose fail is absent or the
+    number 0 (a count below zero is unreadable, not clean). -/
 def trivySeverity (blocked : List String) (pred : J) : Bool :=
   match field (field pred "summary" (.obj [])) "bySeverity" .null with
   | .obj kvs => blocked.all (fun s =>
       match field (.obj kvs) s (.obj []) with
       | .obj e =>
-        (match field (.obj e) "fail" (.num 0) with | .num n => decide (n ≤ 0) | _ => false)
+        (match field (.obj e) "fail" (.num 0) with | .num n => decide (n = 0) | _ => false)
       | _ => false)
   | _ => false
 
 /-! ## SLSA, SBOM, review -/
 
+/-- `digest_ok`: a non-empty object whose every value is at least 32
+    lowercase hex digits. -/
 def hasDigest (d : J) : Bool :=
   match field d "digest" .null with
-  | .obj kvs => !kvs.isEmpty && kvs.all (fun (_, v) => match v with | .str s => s != "" | _ => false)
+  | .obj kvs => !kvs.isEmpty && kvs.all (fun (_, v) => match v with | .str s => hexAtLeast 32 s | _ => false)
   | _ => false
 
 /-- slsa_provenance: a non-empty array of inputs, each with a digest. -/
@@ -375,9 +398,10 @@ def leavesOf (c : J) : List J :=
   | some ls => ls.elems
   | none => []
 
+/-- `valid_digest(field(l, "fileDigest", null))`: a sha256, 64 lowercase hex digits. -/
 def digestOf (l : J) : Option String :=
-  match field l "fileDigest" (.str "") with
-  | .str d => if d != "" then some d else none
+  match field l "fileDigest" .null with
+  | .str d => if hexExactly 64 d then some d else none
   | _ => none
 
 /-- products_from: this step's leaves a non-empty list, each with a digest;
@@ -394,118 +418,6 @@ def productsFrom (up : String) (input : J) : Bool :=
     !mine.isEmpty &&
     mine.all (fun l => match digestOf l with | some d => upDigests.contains d | none => false)
   | _ => false
-
-/-! ## traces -/
-
-/-- The trace prelude: `traced` needs a non-empty array of process objects
-    and a paths array. -/
-def traced (pred : J) : Bool :=
-  match field pred "processes" .null, field pred "paths" (.arr []) with
-  | .arr ps, .arr _ => !ps.isEmpty && ps.all J.isObj
-  | _, _ => false
-
-def procs (pred : J) : List J := (field pred "processes" .null).elems
-
-/-- `path_at(i)`: the path at index i, `""` when there is none. `none` is
-    the function conflict Rego raises when the element is `false` (both of
-    path_at's bodies then succeed with different values). -/
-def pathAt (pred : J) (i : J) : Option J :=
-  match (field pred "paths" (.arr [])).at i with
-  | some (.bool false) => none
-  | some x => some x
-  | none => some (.str "")
-
-/-- trace_present. -/
-def tracePresent (pred : J) : Bool := traced pred
-
-/-- trace_network: every non-AF_UNIX connection names an allowed hostname or
-    address, and every DNS lookup an allowed server. -/
-def traceNetwork (allowed : List String) (pred : J) : Bool :=
-  traced pred &&
-  (procs pred).all (fun p =>
-    (field (field p "network" (.obj [])) "connections" (.arr [])).elems.all (fun c =>
-      (field c "family" (.str "")).isStrEq "AF_UNIX" ||
-      memStr (field c "hostname" (.str "")) allowed || memStr (field c "address" (.str "")) allowed) &&
-    (field (field p "network" (.obj [])) "dnsLookups" (.arr [])).elems.all (fun d =>
-      memStr (field d "serverAddress" (.str "")) allowed))
-
-def digestSha (pred : J) (i : J) : Option J :=
-  if i.geZero then
-    ((field pred "digests" (.arr [])).at i).bind (fun d => (d.get "digests").bind (·.get "sha256"))
-  else none
-
-def exePath (pred : J) (p : J) : Option J :=
-  let i := field p "execPathId" (.num (-1))
-  if i.geZero then (field pred "paths" (.arr [])).at i else none
-
-/-- trace_exec: every process ran an allowed executable, by path or by the
-    sha256 of its executable or program image. -/
-def traceExec (allowed : List String) (pred : J) : Bool :=
-  traced pred &&
-  (procs pred).all (fun p =>
-    (exePath pred p).any (memStr · allowed) ||
-    (digestSha pred (field p "exeDigestId" (.num (-1)))).any (memStr · allowed) ||
-    (digestSha pred (field p "programDigestId" (.num (-1)))).any (memStr · allowed))
-
-/-- Every path a process touched, as `trace_writes` collects them (`none`
-    when a path_at conflict aborts evaluation). -/
-def touched (pred : J) : Option (List J) :=
-  let direct := (procs pred).flatMap (fun p =>
-    let ops := field p "fileOps" (.obj [])
-    (field ops "writes" (.arr [])).elems.map (fun w => field w "path" (.str "")) ++
-    (field ops "renames" (.arr [])).elems.flatMap (fun r => [field r "oldPath" (.str ""), field r "newPath" (.str "")]) ++
-    (field ops "deletes" (.arr [])).elems.map (fun d => field d "path" (.str "")) ++
-    (field ops "permChanges" (.arr [])).elems.map (fun c => field c "path" (.str "")))
-  let written := (procs pred).flatMap (fun p =>
-    (field p "writtenFiles" (.arr [])).elems.map (fun f => pathAt pred (field f "pathId" (.num (-1)))))
-  if written.all Option.isSome then some (direct ++ written.filterMap id) else none
-
-def unnormalized (x : String) : Bool :=
-  strContains x "/../" || strEnds x "/.." || strContains x "/./" || strEnds x "/." || strContains x "//"
-
-def inGit (x : String) : Bool := strContains x "/.git/" || strEnds x "/.git"
-
-/-- A touched path the writes rule admits: a string under an allowed prefix,
-    normalized, not in .git. A non-string path is a builtin type error. -/
-def writeOk (prefixes : List String) (x : J) : Bool :=
-  match x with
-  | .str s => prefixes.any (strStarts s ·) && !unnormalized s && !inGit s
-  | _ => false
-
-/-- trace_writes. -/
-def traceWrites (prefixes : List String) (pred : J) : Bool :=
-  traced pred &&
-  (match touched pred with
-   | some xs => xs.all (writeOk prefixes)
-   | none => false)
-
-def credentialDirs : List String :=
-  ["/.ssh/", "/.aws/", "/.config/gcloud/", "/.azure/", "/.gnupg/", "/.docker/config.json", "/.kube/config",
-   "/.netrc", "/.git-credentials", "/.npmrc", "/.pypirc"]
-
-def systemCA : List String :=
-  ["/etc/ssl/", "/etc/pki/", "/usr/share/ca-certificates/", "/private/etc/ssl/", "/usr/local/etc/openssl",
-   "/opt/homebrew/etc/"]
-
-def sensitive (x : String) : Bool :=
-  credentialDirs.any (strContains x ·) ||
-  (strEnds x ".pem" && !systemCA.any (strStarts x ·)) ||
-  (strEnds x ".key" && !systemCA.any (strStarts x ·)) ||
-  strContains x "/id_rsa" || strContains x "/id_ed25519" || strContains x "/id_ecdsa"
-
-def opened (pred : J) : Option (List J) :=
-  let xs := (procs pred).flatMap (fun p =>
-    ((field p "openedFiles" (.arr [])).elems ++ (field p "unhashedOpens" (.arr [])).elems).map
-      (fun f => pathAt pred (field f "pathId" (.num (-1)))))
-  if xs.all Option.isSome then some (xs.filterMap id) else none
-
-/-- trace_credential_reads: no traced process opened a credential path. A
-    non-string path is a builtin type error. -/
-def traceCredentialReads (pred : J) : Bool :=
-  traced pred &&
-  (match opened pred with
-   | some xs => xs.all (fun x => match x with | .str s => !sensitive s | _ => false)
-   | none => false)
 
 /-! ## Dispatch -/
 
@@ -536,11 +448,6 @@ def admits (id : String) (param : J) (p : J) (steps : Option J) : Option Bool :=
   | "sbom-inventory" => some (sbomInventory pred)
   | "review-approved" => some (reviewApproved pred)
   | "products-from" => some (productsFrom (match param with | .str s => s | _ => "") input)
-  | "trace-present" => some (tracePresent pred)
-  | "trace-network" => some (traceNetwork (strList param) pred)
-  | "trace-exec" => some (traceExec (strList param) pred)
-  | "trace-writes" => some (traceWrites (strList param) pred)
-  | "trace-credential-reads" => some (traceCredentialReads pred)
   | _ => none
 
 end CilockEvaluators.Seeded

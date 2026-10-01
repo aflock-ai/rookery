@@ -345,7 +345,9 @@ func (a *Attestor) getCandidate(ctx *attestation.AttestationContext) error {
 		// Soft: no products at all is "nothing to do", not a contract
 		// violation (mirrors sbom). See the SoftError at the end of this
 		// function for the products-present-but-no-govulncheck-JSON case.
-		return attestation.NewSoftError("no products to attest")
+		return attestation.NewSoftError("no products to attest: the wrapped command wrote no files, so there is no " +
+			"govulncheck stream to record; next: wrap `sh -c 'govulncheck -json ./... > govulncheck.json'` " +
+			"(cilock policy guide --goal vulns)")
 	}
 
 	completed, rejected := classifyCandidates(ctx, products)

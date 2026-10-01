@@ -89,11 +89,6 @@ open CilockEvaluators
 #print axioms Seeded.slsaProvenance_empty
 #print axioms Seeded.sbomInventory_empty
 #print axioms Seeded.reviewApproved_empty
-#print axioms Seeded.tracePresent_empty
-#print axioms Seeded.traceNetwork_empty
-#print axioms Seeded.traceExec_empty
-#print axioms Seeded.traceWrites_empty
-#print axioms Seeded.traceCredentialReads_empty
 #print axioms Seeded.govulnScan_empty
 #print axioms Seeded.sarifScan_empty
 #print axioms Seeded.vexCovered_govuln_empty
@@ -120,17 +115,13 @@ open CilockEvaluators
 #print axioms Seeded.govulnScan_sound
 #print axioms Seeded.trivySeverity_sound
 #print axioms Seeded.slsaProvenance_iff
+#print axioms Seeded.hexAtLeast_length
 #print axioms Seeded.hasDigest_sound
 #print axioms Seeded.sbomInventory_sound
 #print axioms Seeded.reviewApproved_sound
 #print axioms Seeded.productsFrom_sound
+#print axioms Seeded.digestOf_sha256
 #print axioms Seeded.digestOf_nonempty
-#print axioms Seeded.traced_iff
-#print axioms Seeded.tracePresent_iff
-#print axioms Seeded.traceNetwork_sound
-#print axioms Seeded.traceExec_sound
-#print axioms Seeded.traceWrites_sound
-#print axioms Seeded.traceCredentialReads_sound
 -- Failure verdicts and stepResults
 #print axioms Vsa.emit_names_externals
 #print axioms Verdict.denies_join

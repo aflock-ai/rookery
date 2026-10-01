@@ -47,12 +47,12 @@ func evalRule(t *testing.T, id string, param string, predicate map[string]any, s
 	return policy.EvaluateRegoPolicy(predicateAttestor{predicate}, regos)
 }
 
-func requireDenied(t *testing.T, err error, contains string) {
+func requireDenied(t *testing.T, err error, contains string, msgAndArgs ...any) {
 	t.Helper()
-	require.Error(t, err)
+	require.Error(t, err, msgAndArgs...)
 	var denied policy.ErrPolicyDenied
-	require.True(t, errors.As(err, &denied), "want a rego denial, got %v", err)
-	require.Contains(t, strings.Join(denied.Reasons, " | "), contains)
+	require.True(t, errors.As(err, &denied), "want a rego denial, got %v %v", err, msgAndArgs)
+	require.Contains(t, strings.Join(denied.Reasons, " | "), contains, msgAndArgs...)
 }
 
 // Every seeded rule parses as RegoV0, passes cilock policy validate's syntax

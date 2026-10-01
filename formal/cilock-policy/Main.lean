@@ -14,6 +14,7 @@ import Lean.Data.Json
 import CilockPolicy.Verify
 import CilockPolicy.Trust
 import CilockPolicy.Bound9813
+import CilockPolicy.Draft
 
 open Lean CilockPolicy
 
@@ -108,6 +109,23 @@ def globCase (j : Json) : String :=
   | .ok (k, _, _) => s!"error: unknown kind {k}"
   | .error e => s!"error: {e}"
 
+/-- A parsed JSON value as the Draft model's `JV`. Lean's parser keeps an
+    object as a key-ordered map, the order the Go walk visits. A repeated key
+    never reaches either walk: the Go validator refuses the document first
+    (validateFillSlots), so what Lean's parser would do with one is moot. -/
+partial def toJV : Json → Draft.JV
+  | .null => .null
+  | .bool b => .bool b
+  | .num n => .num n.mantissa (n.exponent == 0)
+  | .str s => .str s
+  | .arr xs => .arr (xs.toList.map toJV)
+  | .obj kvs => .obj (kvs.toList.map fun (k, v) => (k, toJV v))
+
+/-- `--draft-slots`: each case is a policy document; prints the JSON array of
+    the unfilled-slot paths the validator reports, in its order. -/
+def draftSlotsCase (j : Json) : String :=
+  (Json.arr ((Draft.slots "" (toJV j)).toArray.map Json.str)).compress
+
 /-- `--assurance`: `{"min", "acr": [values]}`, answered by `meetsMin`
     (Trust.lean, CertConstraint.MinAssuranceLevel). -/
 def assuranceCase (j : Json) : String :=
@@ -128,6 +146,9 @@ def main (args : List String) : IO Unit := do
   | .ok cases =>
     if args.contains "--glob" then
       for c in cases do IO.println (globCase c)
+      return
+    if args.contains "--draft-slots" then
+      for c in cases do IO.println (draftSlotsCase c)
       return
     if args.contains "--assurance" then
       for c in cases do IO.println (assuranceCase c)

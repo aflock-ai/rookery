@@ -758,7 +758,7 @@ func TestFromBundles_FallsBackToFilename(t *testing.T) {
 		"missing predicate.name should fall back to filename with extension stripped")
 	// And no notice when nothing to compare against — the user didn't
 	// "lose" any expected name in this path.
-	assert.Empty(t, errOut.String(),
+	assert.NotContains(t, errOut.String(), "records step name",
 		"no notice should fire when the bundle carries no recorded name to diverge from")
 }
 

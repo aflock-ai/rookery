@@ -63,6 +63,14 @@ def field (x : J) (k : String) (d : J) : J :=
   | .obj kvs => (kvs.lookup k).getD d
   | _ => d
 
+/-- `object.get(x, k, d)` without the `field` guard: on a non-object it is a
+    builtin type error, which StrictBuiltinErrors turns into a refusal
+    (`none`). The tracing rules read process records this way. -/
+def oget (x : J) (k : String) (d : J) : Option J :=
+  match x with
+  | .obj kvs => some ((kvs.lookup k).getD d)
+  | _ => none
+
 /-- `x[_]`: the elements of an array, the values of an object, nothing else. -/
 def J.elems : J → List J
   | .arr xs => xs
@@ -115,6 +123,14 @@ where
   go : List Char → Bool
     | [] => sub.toList.isEmpty
     | c :: cs => sub.toList.isPrefixOf (c :: cs) || go cs
+
+def isHexChar (c : Char) : Bool := ('0' ≤ c && c ≤ '9') || ('a' ≤ c && c ≤ 'f')
+
+/-- `regex.match("^[0-9a-f]{n,}$", s)`: at least `n` lowercase hex digits. -/
+def hexAtLeast (n : Nat) (s : String) : Bool := decide (n ≤ s.length) && s.toList.all isHexChar
+
+/-- `regex.match("^[0-9a-f]{n}$", s)`: exactly `n` lowercase hex digits. -/
+def hexExactly (n : Nat) (s : String) : Bool := decide (s.length = n) && s.toList.all isHexChar
 
 /-- Rego `startswith(s, pre)`. -/
 def strStarts (s pre : String) : Bool := pre.toList.isPrefixOf s.toList
