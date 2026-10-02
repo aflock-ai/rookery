@@ -33,6 +33,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation/dsse"
 	"github.com/aflock-ai/rookery/attestation/gitoid"
+	"github.com/aflock-ai/rookery/attestation/log"
 )
 
 // maxErrorBodySize limits how much of an error response body we read to prevent OOM.
@@ -70,6 +71,8 @@ type Client struct {
 	headers     http.Header
 	client      *http.Client
 	tokenSource func() (string, error)
+	// authRefresh renews the credential tokenSource reads; see WithAuthRefresh.
+	authRefresh func() error
 	// retry, when non-nil, bounds automatic retry of Store on retryable
 	// failures. nil means a single attempt — see WithRetry for why retry is
 	// opt-in rather than the default.
@@ -106,6 +109,17 @@ func WithAuthTokenSource(fn func() (string, error)) Option {
 	return func(c *Client) {
 		c.tokenSource = fn
 	}
+}
+
+// WithAuthRefresh registers a renewal for the credential the token source
+// reads. Store calls it AT MOST ONCE per upload, and only after the server
+// answered 401: it then re-runs the upload with whatever the source returns
+// next. A refresh that fails, or a second 401, returns the ORIGINAL refusal
+// joined with the refresh error: failing to renew is never reported as success
+// and never hides what the server said. Without a token source it has no effect,
+// since there is no credential the refresh could change (#9358).
+func WithAuthRefresh(fn func() error) Option {
+	return func(c *Client) { c.authRefresh = fn }
 }
 
 // WithHTTPClient sets a custom http.Client for requests.
@@ -181,9 +195,20 @@ func (c *Client) Store(ctx context.Context, env dsse.Envelope) (string, error) {
 		return "", fmt.Errorf("marshal envelope: %w", err)
 	}
 
-	return c.storeWithRetry(ctx, body, func(ctx context.Context) (string, error) {
-		return c.storeOnce(ctx, body)
-	})
+	attempt := func(ctx context.Context) (string, error) { return c.storeOnce(ctx, body) }
+	stored, err := c.storeWithRetry(ctx, body, attempt)
+	var statusErr *StatusError
+	if err == nil || c.authRefresh == nil || c.tokenSource == nil ||
+		!errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusUnauthorized {
+		return stored, err
+	}
+	// A 401 is not retryable as-is, but it is retryable after the credential is
+	// renewed: re-exchange once, then upload again. One renewal, never a loop.
+	log.Warnf("archivista upload refused with 401; renewing the credential and retrying once")
+	if rerr := c.authRefresh(); rerr != nil {
+		return "", errors.Join(err, fmt.Errorf("renewing the upload credential after a 401: %w", rerr))
+	}
+	return c.storeWithRetry(ctx, body, attempt)
 }
 
 // storeOnce performs a single upload attempt with the already-marshalled body.

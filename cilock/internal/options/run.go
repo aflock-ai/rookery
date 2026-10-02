@@ -1420,6 +1420,11 @@ type ArchivistaOptions struct {
 	// --archivista-headers still wins outright.
 	AuthTokenSource func() (string, error)
 
+	// AuthRefresh renews the credential AuthTokenSource reads. The client calls
+	// it once, after the server answers an upload with 401, and retries once
+	// (archivista.WithAuthRefresh, #9358).
+	AuthRefresh func() error
+
 	// UploadRetries is how many EXTRA attempts a retryable upload failure gets
 	// beyond the first. 0 restores the historical single-attempt behaviour.
 	UploadRetries int
@@ -1553,6 +1558,9 @@ func (o *ArchivistaOptions) Client() (*archivista.Client, error) {
 	// token source installed rather than merely the last one.
 	if o.AuthTokenSource != nil {
 		opts = append(opts, archivista.WithAuthTokenSource(o.AuthTokenSource))
+		if o.AuthRefresh != nil {
+			opts = append(opts, archivista.WithAuthRefresh(o.AuthRefresh))
+		}
 	}
 
 	// Static headers (can override OIDC if both set — explicit headers win: an

@@ -225,6 +225,9 @@ func (ro *RunOptions) applyAgentCredential(cmd *cobra.Command, cred auth.AgentCr
 		// re-exchanges this token after the wrapped command, and a header
 		// frozen here would still be the first exchange's (#8740).
 		ro.ArchivistaOptions.AuthTokenSource = principal.archivistaTokenSource()
+		// A 401 at upload re-exchanges once and retries once (#9358): the
+		// same refresher the signing step runs, so both tokens move together.
+		ro.ArchivistaOptions.AuthRefresh = refresh
 	}
 	if !cmd.Flags().Changed("enable-archivista") && !cmd.Flags().Changed("enable-archivist") {
 		ro.ArchivistaOptions.Enable = true

@@ -42,6 +42,9 @@ const (
 type agentUploadRecorder struct {
 	srv       *httptest.Server
 	exchanges int64
+	// rejectBearer, when set, is answered 401 "Invalid API credential" on
+	// upload, as the platform does for a token it will not accept.
+	rejectBearer string
 
 	mu      sync.Mutex
 	uploads []string
@@ -75,6 +78,10 @@ func newAgentUploadRecorder(t *testing.T, uploadTokens ...string) *agentUploadRe
 			rec.mu.Lock()
 			rec.uploads = append(rec.uploads, r.Header.Get("Authorization"))
 			rec.mu.Unlock()
+			if rec.rejectBearer != "" && r.Header.Get("Authorization") == "Bearer "+rec.rejectBearer {
+				http.Error(w, "Invalid API credential", http.StatusUnauthorized)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(map[string]string{"gitoid": testStoreGitoid})
 		default:
@@ -453,5 +460,42 @@ func TestAgentWithdrawnUploadGrantDeclaresItselfPermanent(t *testing.T) {
 	}
 	if got := len(rec.seen()); got != 0 {
 		t.Fatalf("no upload may reach the server without a bearer, saw %d", got)
+	}
+}
+
+// TestAgentUploadRenewsOnA401 is #9358's refresh-then-retry: an upload the
+// platform refuses with 401 re-exchanges the agent credential once and retries
+// with the token that exchange minted. The first bearer is spent exactly once.
+func TestAgentUploadRenewsOnA401(t *testing.T) {
+	isolateCredentialStore(t)
+	rec := newAgentUploadRecorder(t, agentUploadBearerFirst, agentUploadBearerSecond)
+	rec.rejectBearer = agentUploadBearerFirst
+	seedAgent(t, rec.srv.URL)
+
+	ro := resolveAgentRun(t, rec.srv.URL)
+	if err := uploadOnce(t, *ro); err != nil {
+		t.Fatalf("upload must recover through one re-exchange: %v", err)
+	}
+	seen := rec.seen()
+	want := []string{"Bearer " + agentUploadBearerFirst, "Bearer " + agentUploadBearerSecond}
+	if len(seen) != 2 || seen[0] != want[0] || seen[1] != want[1] {
+		t.Fatalf("upload headers = %v, want %v", seen, want)
+	}
+}
+
+// TestAgentUploadStopsWhenTheReExchangeWithdrawsTheBearer: a re-exchange that
+// mints no upload token must not be answered with a retry on the refused one.
+func TestAgentUploadStopsWhenTheReExchangeWithdrawsTheBearer(t *testing.T) {
+	isolateCredentialStore(t)
+	rec := newAgentUploadRecorder(t, agentUploadBearerFirst, "")
+	rec.rejectBearer = agentUploadBearerFirst
+	seedAgent(t, rec.srv.URL)
+
+	ro := resolveAgentRun(t, rec.srv.URL)
+	if err := uploadOnce(t, *ro); err == nil {
+		t.Fatal("expected failure when the platform withdrew the upload token")
+	}
+	if seen := rec.seen(); len(seen) != 1 {
+		t.Fatalf("uploads = %v, want exactly the one refused attempt", seen)
 	}
 }

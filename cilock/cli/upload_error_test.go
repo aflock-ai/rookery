@@ -138,3 +138,15 @@ func TestUploadError_NoPlatformURLSkipsTrustAdvice(t *testing.T) {
 	err := uploadError("", storeStatus(http.StatusForbidden, "denied"))
 	require.NotContains(t, err.Error(), "cilock trust")
 }
+
+// The refusal names what the server said and lists what it might mean; it
+// must not assert a cause it never checked (#9358: "not trusted ... yet").
+func TestUploadError_AuthStatusDoesNotAssertACause(t *testing.T) {
+	t.Setenv("GITLAB_CI", "")
+	t.Setenv("GITHUB_ACTIONS", "")
+	err := uploadError(testPlatform, storeStatus(http.StatusUnauthorized, "Invalid API credential"))
+	require.ErrorContains(t, err, "Invalid API credential")
+	require.ErrorContains(t, err, "This can mean")
+	require.NotContains(t, err.Error(), "not trusted")
+	require.NotContains(t, err.Error(), "yet")
+}

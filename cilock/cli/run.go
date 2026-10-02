@@ -1523,9 +1523,9 @@ func shouldWarnNotUploaded(platformURL string, archivistaEnabled, runFailed, jso
 //
 // Two distinct failure classes reach here, and they need different advice.
 //
-// A 401/403 means signing succeeded but the repo/identity is not trusted for
-// upload yet, so surface the one-time fix (`cilock trust`) instead of a raw
-// "Invalid API credential". This is decided on the TYPED status code, not by
+// A 401/403 means signing succeeded and the server refused the credential. It
+// does not say why, so the message lists the possibilities and the one-time
+// fix (`cilock trust`) without asserting any. This is decided on the TYPED status code, not by
 // running strings.Contains over the message: the error carries up to 500 bytes
 // of server response body, so a 503 whose body happened to mention 401 used to
 // be mis-advised as an auth problem.
@@ -1552,8 +1552,14 @@ func uploadError(platformURL string, err error) error {
 	isAuth := errors.As(err, &statusErr) &&
 		(statusErr.StatusCode == http.StatusUnauthorized || statusErr.StatusCode == http.StatusForbidden)
 	if platformURL != "" && isAuth {
+		// Say what the SERVER said and what is unproven. A 401/403 is a refusal of
+		// the presented credential; this function never learns whether the
+		// identity is untrusted, unenrolled, or holding a token that expired or
+		// was minted for another audience, so it must not name one (#9358).
 		return fmt.Errorf("upload to %s rejected (%w)\n"+
-			"  %s\n"+
+			"  the server refused the credential presented for this upload; the attestation was signed but not stored.\n"+
+			"  This can mean an expired or wrong-audience token, a revoked or unenrolled identity, or a repo the platform has not been told to trust.\n"+
+			"  If this identity has never uploaded here: %s\n"+
 			"  or sign without uploading via --enable-archivista=false",
 			platformURL, err, options.CITrustHint(os.Getenv, platformURL))
 	}
