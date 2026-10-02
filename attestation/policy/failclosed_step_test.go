@@ -13,7 +13,7 @@
 // limitations under the License.
 //
 // ============================================================================
-// Fail-closed acceptance tests for step.go (issues #5746 and #5747).
+// Fail-closed acceptance tests for step.go.
 //
 // These were the RED tests (formerly build-tagged `redgate`) for findings F9,
 // F10, F17, and G. They assert the CORRECT, fail-closed behavior and pass now
@@ -34,7 +34,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// F9 (#5746, HIGH) — step.go validateAttestations
+// F9 — step.go validateAttestations
 // Fail-closed contract: a step with an EMPTY Attestations list is a
 // misconfigured no-op gate; it must NOT pass an arbitrary collection. A gate
 // with no requirements must reject (or produce no Passed), not accept anything.
@@ -55,7 +55,7 @@ func TestRed_F9_EmptyAttestationsMustNotPassAnyCollection(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// F10 (#5746, MEDIUM) — step.go validateAttestations (empty coll name)
+// F10 — step.go validateAttestations (empty coll name)
 // Fail-closed contract: an empty collection Name must NOT match every step. An
 // attacker who produces a name-less collection must not bypass the step-name
 // filter. A collection with Name=="" for a step named "build" must not pass.
@@ -82,7 +82,7 @@ func TestRed_F10_EmptyCollectionNameMustNotMatchAnyStep(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// F17 (#5746, MEDIUM) — step.go buildStepContext (last-writer-wins)
+// F17 — step.go buildStepContext (last-writer-wins)
 // Fail-closed contract: when two PASSED collections present the same
 // attestation type, buildStepContext must NOT let a later collection silently
 // overwrite the earlier one (which lets an attacker's second signed collection
@@ -124,7 +124,7 @@ func TestRed_F17_BuildStepContextMustNotLastWriterWin(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// G (#5747, MEDIUM) — step.go validateAttestations (duplicate type)
+// G — step.go validateAttestations (duplicate type)
 // Fail-closed contract: when a collection presents two attestors of the SAME
 // type — one that FAILS a Rego policy and one that PASSES — the failing one must
 // NOT be shadowed by last-writer-wins. The collection must be REJECTED (every

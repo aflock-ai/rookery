@@ -398,7 +398,7 @@ func diffRandomCase(r *mrand.Rand, keys diffKeys, i int) diffCase {
 				st.ArtifactsFrom = append(st.ArtifactsFrom, names[d])
 			}
 		}
-		// allowedUntracked only matters under an artifactsFrom edge (#9862).
+		// allowedUntracked only matters under an artifactsFrom edge.
 		if len(st.ArtifactsFrom) > 0 && r.Intn(3) == 0 {
 			st.AllowedUntracked = []string{pick([]string{"*.bin", "b.bin", "/tmp/*", "/tmp/**", "**/b.bin", "?.bin", "a*"})}
 		}
@@ -412,7 +412,7 @@ func diffRandomCase(r *mrand.Rand, keys diffKeys, i int) diffCase {
 		var out [][]interface{}
 		for _, p := range []string{"a.bin", "b.bin", "/tmp/x/y.sh", "vendor/b.bin"} {
 			// The two nested paths are rarer: no step is built to produce
-			// them, so they exercise allowedUntracked (#9862).
+			// them, so they exercise allowedUntracked.
 			odds := 2
 			if strings.Contains(p, "/") {
 				odds = 6
@@ -608,7 +608,7 @@ func TestFormalDifferential(t *testing.T) {
 	for i := 0; i < n; i++ {
 		cases = append(cases, diffRandomCase(r, keys, i))
 	}
-	// The engine ships the round-bounded #9813 fix (#9860), which the model
+	// The engine ships the round-bounded fix, which the model
 	// states as verifyFix9813.
 	lean := diffLeanVerdicts(t, cases, "--fix9813")
 	// The pre-#9860 as-built semantics, as a sensitivity check on the harness
@@ -796,9 +796,9 @@ func diffGoGlob(t *testing.T, c diffGlobCase) bool {
 var diffGlobKnownEngineDivergence = map[diffGlobCase]bool{}
 
 // TestFormalDifferentialGlobs holds the two glob matchers the verdict reads to
-// the model: certGlob (cert constraints, RE2 since #9867) and the
-// allowedUntracked matcher (#9862; gobwas syntax, matched through the same RE2
-// translation with '/' as separator since #10376). The allowedUntracked kind
+// the model: certGlob (cert constraints, RE2 since an earlier change) and the
+// allowedUntracked matcher (gobwas syntax, matched through the same RE2
+// translation with '/' as separator since an earlier change). The allowedUntracked kind
 // also runs the full-grammar enumeration (diffGlobGrammarCases).
 func TestFormalDifferentialGlobs(t *testing.T) {
 	cases := diffGlobCases()

@@ -16,7 +16,7 @@
 
 package policy
 
-// #9820 E5: typed Jev policies refuse a resolved model other than the one the
+// Typed Jev policies refuse a resolved model other than the one the
 // policy pins, but the generative (Ollama) path and injected providers never
 // checked which model answered. Every provider's resolved model must equal the
 // policy's, or the evaluation is refused (no verdict), the same as Jev.

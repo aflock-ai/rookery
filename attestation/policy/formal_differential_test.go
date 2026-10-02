@@ -219,7 +219,7 @@ var denyKinds = []denyKind{
 			}
 			return denyJSON{K: "collection", N: 0}
 		}, false, false, func(hasRef bool) bool { return !hasRef }},
-	// An allow no deny reads, over an empty deny: refused (#9870).
+	// An allow no deny reads, over an empty deny: refused.
 	{"allowUnread", "default allow := false\ndeny := []", coll(0), false, true, never},
 	// An allow a deny reads: the canonical gate, allowed, and it denies.
 	{"allowGated", "default allow := false\ndeny[msg] { not allow; msg := \"not allowed\" }", coll(1), false, false, never},
@@ -770,7 +770,7 @@ func genStubOutcome(r *rand.Rand, npol int) (stubOutcome, gateOutcomeJSON) {
 	}
 	statuses := []string{AiStatusPass, AiStatusPass, AiStatusPass, AiStatusFail, "", "pass"}
 	// The model the provider says answered: mostly the policies' own, but
-	// sometimes none or another one (pinResolvedModel, #9871).
+	// sometimes none or another one (pinResolvedModel).
 	models := []string{"jev-1.13.0", "jev-1.13.0", "jev-1.13.0", "jev-1.13.0", "", "jev-9.9.9"}
 	j.Rs = []gateRespJSON{}
 	for i := 0; i < count; i++ {

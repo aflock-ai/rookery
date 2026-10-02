@@ -14,16 +14,16 @@
 //
 // ============================================================================
 // Fail-closed acceptance tests for the policy verifier — change-set
-// "policy-safe" (issues #5746 / #5747).
+// "policy-safe".
 //
 // These were the RED tests (originally gated behind the `redgate` build tag in
 // redgate_findings_test.go); they assert the CORRECT, fail-closed behavior and
 // now PASS against the fixed verifier. Two findings are covered here:
 //
-//   - B   (#5747) verifySteps backref harvest must iterate stepResult.Passed
+//   - B verifySteps backref harvest must iterate stepResult.Passed
 //         (gate survivors), NOT the functionary-only survivors — a rejected
 //         collection's BackRefs must not widen the reachable-subject set.
-//   - F12 (#5746) Verify must not accumulate duplicate Passed collections across
+//   - F12 Verify must not accumulate duplicate Passed collections across
 //         depth iterations (cross-depth de-duplication).
 // ============================================================================
 
@@ -78,7 +78,7 @@ func (s *digestAwareTestSource) SearchByPredicateType(_ context.Context, _ []str
 }
 
 // ---------------------------------------------------------------------------
-// F12 (#5746) — policy.go verifySteps cross-depth merge.
+// F12 — policy.go verifySteps cross-depth merge.
 // Fail-closed contract: a single collection that the source returns on every
 // depth iteration must appear in StepResult.Passed AT MOST ONCE. The cross-
 // depth merge must not accumulate duplicate passed collections (which inflates
@@ -94,7 +94,7 @@ func TestRed_F12_NoDuplicatePassedAcrossDepthIterations(t *testing.T) {
 	stepName := "build"
 	// The step declares a real required attestation type and the collection
 	// carries it, so the collection actually PASSES the step gate. This is
-	// required since #5754 finding F9: a step with an EMPTY Attestations list is
+	// required since an earlier change finding F9: a step with an EMPTY Attestations list is
 	// a misconfigured no-op gate that now rejects every collection. Without a
 	// passing collection there would be nothing in Passed to (fail to) dedup, so
 	// the F12 invariant could not be exercised at all.
@@ -109,7 +109,7 @@ func TestRed_F12_NoDuplicatePassedAcrossDepthIterations(t *testing.T) {
 				// A back-reference is required to reach a SECOND depth iteration
 				// at all: verifySteps stops early when an iteration discovers no
 				// new digests, because the next iteration would then issue
-				// byte-identical queries (judge#7551). Without this the merge
+				// byte-identical queries (an earlier report). Without this the merge
 				// path would only ever run once and the F12 invariant below
 				// would be unreachable.
 				RecordedBackRefs: map[string]cryptoutil.DigestSet{"ref": newDigestSet("sha256:depth1")},
@@ -130,7 +130,7 @@ func TestRed_F12_NoDuplicatePassedAcrossDepthIterations(t *testing.T) {
 				Attestations:  []Attestation{{Type: noopStepAttType}},
 			},
 			// An intentionally unsatisfiable second step. verifySteps also stops
-			// early once EVERY step is satisfied (judge#7551), so a policy whose
+			// early once EVERY step is satisfied (an earlier report), so a policy whose
 			// only step passes at depth 0 never reaches the cross-depth merge.
 			// Keeping one step unsatisfied holds the depth loop open so the
 			// dedup invariant is actually exercised. The source returns only a
@@ -156,7 +156,7 @@ func TestRed_F12_NoDuplicatePassedAcrossDepthIterations(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// B (#5747) — policy.go verifySteps backref harvest source.
+// B — policy.go verifySteps backref harvest source.
 // Fail-closed contract: backref expansion must iterate the step's
 // policy-PASSED collections (stepResult.Passed), NOT the functionary-survivors
 // (passedCollections). A collection that clears the functionary check but is

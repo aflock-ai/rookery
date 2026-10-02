@@ -13,7 +13,7 @@
 // limitations under the License.
 //
 // ============================================================================
-// Fail-closed acceptance tests for #5746 (cert-constraint matching).
+// Fail-closed acceptance tests for cert-constraint matching.
 //
 // Each test asserts the CORRECT, FAIL-CLOSED behavior. They were RED against
 // the pre-fix code and pass once the constraints.go fixes land. They are the
@@ -41,7 +41,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// F1 (#5746, HIGH) — constraints.go checkCertConstraint
+// F1 — constraints.go checkCertConstraint
 // Fail-closed contract: duplicate constraints must NOT collapse via map dedup.
 // constraints=[A,A] requires TWO matching cert values; values=[A] must FAIL.
 // ---------------------------------------------------------------------------
@@ -56,7 +56,7 @@ func TestRed_F1_DuplicateConstraintsMustNotCollapse(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// F4 (#5746, HIGH) — constraints.go checkCertConstraint (AllowAll path)
+// F4 — constraints.go checkCertConstraint (AllowAll path)
 // Fail-closed contract: a single empty-string constraint must NOT behave like
 // "allow any". With the duplicate-collapse fixed (F1), a subset of required
 // values must be rejected. Here: constraint requires two DISTINCT values but
@@ -73,7 +73,7 @@ func TestRed_F4_SubsetMatchMustFail(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// F5 (#5746, HIGH) — constraints.go checkCertConstraintGlob
+// F5 — constraints.go checkCertConstraintGlob
 // Fail-closed contract: an EMPTY single-value constraint must NOT default to
 // "allow all". A policy author who forgets/empties CommonName must NOT silently
 // accept an attacker-controlled CN.
@@ -85,7 +85,7 @@ func TestRed_F5_EmptyGlobConstraintMustNotAllowAll(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// F11 (#5746, MEDIUM) — constraints.go checkCertConstraint
+// F11 — constraints.go checkCertConstraint
 // Fail-closed contract: empty-string normalization must apply to all positions,
 // not just index 0. constraints=["", "real"] with cert values=["real"] (no
 // empty value) must be treated as requiring "real" only; it must NOT require the
@@ -99,7 +99,7 @@ func TestRed_F11_EmptyStringNormalizationAllPositions(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// F14 (#5746, HIGH) — constraints.go CertConstraint.Check (short-circuit)
+// F14 — constraints.go CertConstraint.Check (short-circuit)
 // Fail-closed contract: Check must short-circuit on the first failing
 // constraint and NOT run the remaining checks (avoids cert-detail leakage via
 // accumulated errors + needless trust-bundle work). On a cert that fails the

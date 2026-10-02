@@ -536,7 +536,7 @@ func (s *scriptedAI) Evaluate(_ context.Context, _ attestation.Attestor, pol AiP
 	s.calls++
 	resp := s.resp
 	if resp.Status != "" {
-		resp.Model = pol.Model // a provider names the model that answered (#9820 E5)
+		resp.Model = pol.Model // a provider names the model that answered
 	}
 	return resp, s.err
 }

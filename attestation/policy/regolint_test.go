@@ -48,7 +48,7 @@ type lintRow struct {
 	// guarded marks a row whose finding sits behind a bare reference to a
 	// prefix of its path (`input.a` before `not f(input.a.b)`): on {} the
 	// guard is what fails, which is the author's explicit "only when
-	// present", so the admit stands (#9820).
+	// present", so the admit stands.
 	guarded bool
 }
 
@@ -319,7 +319,7 @@ func TestLintRegoFailOpenAgreesWithEngine(t *testing.T) {
 
 			// With every hardening option on, the verifier logs each finding.
 			// A deny on {} is the engine's own verdict. An admit on {} that
-			// rests on a finding's missing field is refused (#9820 E1); an
+			// rests on a finding's missing field is refused; an
 			// admit with no finding is the engine's, unless a deny body read
 			// a missing field, which regostrict_test.go covers.
 			withHardening(t, everyHardening())
@@ -336,7 +336,7 @@ func TestLintRegoFailOpenAgreesWithEngine(t *testing.T) {
 				require.ErrorContains(t, err, "#9820", "an admit on {} that rests on a finding must be refused")
 				require.False(t, errors.As(err, &denied), "a refusal, not the policy's deny")
 			case err != nil:
-				require.ErrorContains(t, err, "#9820", "the only error an admit can become is the #9820 refusal")
+				require.ErrorContains(t, err, "#9820", "the only error an admit can become is the refusal")
 			}
 			for _, f := range findings {
 				require.True(t, warnings.sawContaining(f.String()), "evaluation must log the finding as a warning: %s", f)
@@ -396,7 +396,7 @@ func TestEvaluateRegoPolicyLintsTheModuleSet(t *testing.T) {
 	warnings := installWarnCapture(t)
 	forgetFailOpenLint(t)
 	// The caller negates input.ref, which lintAttestor does not carry, so the
-	// admit is refused (#9820); the finding is still logged.
+	// admit is refused; the finding is still logged.
 	require.ErrorContains(t, EvaluateRegoPolicy(&lintAttestor{Reftype: "tag"}, siblingModules()), "#9820")
 	require.True(t, warnings.sawContaining("caller:"), "want the caller's finding logged, got %v", warnings.lines)
 	require.True(t, warnings.sawContaining("input.ref"), "want the caller's finding logged, got %v", warnings.lines)
@@ -481,6 +481,6 @@ func TestEvaluateRegoPolicyWarnsOnFailOpenUnderEveryHardening(t *testing.T) {
 	require.True(t, warnings.sawContaining("never fires when input.reftype is missing"), "want the finding logged, got %v", warnings.lines)
 
 	// On a predicate without reftype the engine admits; that admit rests on
-	// the missing field, so evaluation refuses it (#9820 E1).
+	// the missing field, so evaluation refuses it.
 	require.ErrorContains(t, EvaluateRegoPolicy(&lintAttestor{}, mod), "#9820")
 }

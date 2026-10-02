@@ -36,7 +36,7 @@ import (
 )
 
 // ===========================================================================
-// FINDING 1 (HIGH) — FIXED (#5746): Duplicate constraints in checkCertConstraint
+// FINDING 1 (HIGH) — FIXED: Duplicate constraints in checkCertConstraint
 // no longer collapse via map deduplication. Occurrences are counted, so a
 // duplicate constraint requires that many matching cert values. These tests
 // previously pinned the buggy fail-open behavior (assert.NoError); they now
@@ -55,7 +55,7 @@ func TestAdversarial_CheckCertConstraint_DuplicateConstraintsCollapse(t *testing
 	// FIXED: duplicate constraints are NOT deduplicated; one cert value cannot
 	// satisfy two required occurrences.
 	assert.Error(t, err,
-		"FIXED (#5746): duplicate constraints [ACME, ACME] are no longer collapsed; "+
+		"FIXED: duplicate constraints [ACME, ACME] are no longer collapsed; "+
 			"a cert with only one ACME value must fail closed.")
 }
 
@@ -69,12 +69,12 @@ func TestAdversarial_CheckCertConstraint_DuplicateConstraintsDifferentCounts(t *
 	)
 	// FIXED: the duplicate A constraint is honored, not silently dropped.
 	assert.Error(t, err,
-		"FIXED (#5746): constraints=[A, A, B] require two A values; a cert with "+
+		"FIXED: constraints=[A, A, B] require two A values; a cert with "+
 			"values=[A, B] must fail closed (the duplicate A is no longer dropped).")
 }
 
 // ===========================================================================
-// FINDING 2 (HIGH) — FIXED (#5746): checkCertConstraint now GLOB-matches
+// FINDING 2 (HIGH) — FIXED: checkCertConstraint now GLOB-matches
 // multi-value fields (DNSNames, Emails, Organizations, URIs) whenever a
 // constraint value carries a glob metacharacter (* ? { [), matching
 // checkCertConstraintGlob's behavior for CommonName. A constraint with NO glob
@@ -90,10 +90,10 @@ func TestAdversarial_CheckCertConstraint_NoGlobSupportForDNSNames(t *testing.T) 
 		[]string{"*.example.com"},   // glob constraint
 		[]string{"foo.example.com"}, // Cert has a matching DNS name
 	)
-	// FIXED (#5746, F2): the glob metachar '*' triggers glob matching for the
+	// FIXED: the glob metachar '*' triggers glob matching for the
 	// multi-value DNS field, so "*.example.com" matches "foo.example.com".
 	assert.NoError(t, err,
-		"FIXED (#5746, F2): checkCertConstraint glob-matches multi-value SAN fields; "+
+		"FIXED: checkCertConstraint glob-matches multi-value SAN fields; "+
 			"'*.example.com' now matches 'foo.example.com', consistent with CommonName.")
 }
 
@@ -104,7 +104,7 @@ func TestAdversarial_CheckCertConstraint_GlobInEmailConstraint(t *testing.T) {
 		[]string{"alice@example.com"}, // Cert has a matching email
 	)
 	assert.NoError(t, err,
-		"FIXED (#5746, F2): email constraints support glob patterns; "+
+		"FIXED: email constraints support glob patterns; "+
 			"'*@example.com' matches 'alice@example.com'.")
 }
 
@@ -190,7 +190,7 @@ func TestAdversarial_CheckCertConstraint_SubsetChecksCorrect(t *testing.T) {
 }
 
 // ===========================================================================
-// FINDING 5 (HIGH) — FIXED (#5746): checkCertConstraintGlob with an EMPTY
+// FINDING 5 (HIGH) — FIXED: checkCertConstraintGlob with an EMPTY
 // constraint now fails closed instead of defaulting to "allow all". A policy
 // author who forgets/empties CommonName must set the explicit AllowAllConstraint
 // ("*") to allow any value. This test previously pinned the dangerous fail-open
@@ -203,7 +203,7 @@ func TestAdversarial_CheckCertConstraintGlob_EmptyConstraintAllowsAnything(t *te
 	// silently accepts an attacker-controlled CN; the author must opt in with "*".
 	err := checkCertConstraintGlob("common name", "", "evil-cn.attacker.com")
 	assert.Error(t, err,
-		"FIXED (#5746): an empty CommonName constraint fails closed; "+
+		"FIXED: an empty CommonName constraint fails closed; "+
 			"require the explicit '*' (AllowAllConstraint) to allow any value.")
 }
 
@@ -224,7 +224,7 @@ func TestAdversarial_CheckCertConstraintGlob_DoubleStarAllowsAll(t *testing.T) {
 }
 
 func TestAdversarial_CheckCertConstraintGlob_NonStarGlobCharsNotSupported(t *testing.T) {
-	// FIXED (#5746, F2): checkCertConstraintGlob now triggers glob mode on ANY
+	// FIXED: checkCertConstraintGlob now triggers glob mode on ANY
 	// glob metacharacter (globMetaChars = "*?{["), not only "*". So patterns
 	// using "?", "[...]", or "{...}" WITHOUT any "*" are glob-matched, not
 	// treated as literal strings.
@@ -232,17 +232,17 @@ func TestAdversarial_CheckCertConstraintGlob_NonStarGlobCharsNotSupported(t *tes
 	// "?" matches any single character in glob semantics.
 	err := checkCertConstraintGlob("common name", "?.example.com", "a.example.com")
 	assert.NoError(t, err,
-		"FIXED (#5746, F2): '?' triggers glob mode; '?.example.com' matches 'a.example.com'.")
+		"FIXED: '?' triggers glob mode; '?.example.com' matches 'a.example.com'.")
 
 	// Character classes are honored.
 	err = checkCertConstraintGlob("common name", "[abc].example.com", "a.example.com")
 	assert.NoError(t, err,
-		"FIXED (#5746, F2): '[abc]' character class glob-matches 'a.example.com'.")
+		"FIXED: '[abc]' character class glob-matches 'a.example.com'.")
 
 	// Alternation is honored.
 	err = checkCertConstraintGlob("common name", "{foo,bar}.example.com", "foo.example.com")
 	assert.NoError(t, err,
-		"FIXED (#5746, F2): '{foo,bar}' alternation glob-matches 'foo.example.com'.")
+		"FIXED: '{foo,bar}' alternation glob-matches 'foo.example.com'.")
 
 	// Combining non-star globs with * also works (glob mode either way).
 	err = checkCertConstraintGlob("common name", "{foo,bar}*", "foo")
@@ -422,17 +422,17 @@ func TestAdversarial_ValidateAttestations_EmptyAttestationsPassesAnything(t *tes
 	}
 
 	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "", nil)
-	// FIXED (#5746, F9): a step with no required attestations is a misconfigured
+	// FIXED: a step with no required attestations is a misconfigured
 	// no-op gate and now fails CLOSED — the collection is rejected, not passed.
 	assert.Empty(t, result.Passed,
-		"FIXED (#5746, F9): a step with no required attestations rejects (fail closed) "+
+		"FIXED: a step with no required attestations rejects (fail closed) "+
 			"instead of rubber-stamping any collection.")
 	assert.Len(t, result.Rejected, 1,
 		"the no-requirements collection is rejected with a fail-closed reason")
 }
 
 // ===========================================================================
-// FINDING 10 (MEDIUM) — FIXED (#5746): validateAttestations now requires EXACT
+// FINDING 10 (MEDIUM) — FIXED: validateAttestations now requires EXACT
 // step-name equality. An empty collection name no longer acts as a wildcard —
 // only a collection explicitly named for the step is considered (fail closed).
 // This test previously pinned the empty-name-matches-any bypass (Passed len 1);
@@ -464,15 +464,15 @@ func TestAdversarial_ValidateAttestations_EmptyCollectionNameMatchesAnyStep(t *t
 	}
 
 	result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "", nil)
-	// FIXED (#5746, F10): the empty-name collection does NOT match the "build"
+	// FIXED: the empty-name collection does NOT match the "build"
 	// step (exact name equality required), so it is skipped — not passed.
 	assert.Empty(t, result.Passed,
-		"FIXED (#5746, F10): a collection with an empty name no longer matches every "+
+		"FIXED: a collection with an empty name no longer matches every "+
 			"step; only an exact step-name match is considered (fail closed).")
 }
 
 // ===========================================================================
-// FINDING 11 (MEDIUM) — FIXED (#5746): checkCertConstraint single-empty-string
+// FINDING 11 (MEDIUM) — FIXED: checkCertConstraint single-empty-string
 // normalization now applies at ALL positions, not just index 0.
 //
 // constraints=["", "real"] now normalizes the empty string away (it carries no
@@ -499,12 +499,12 @@ func TestAdversarial_CheckCertConstraint_EmptyStringInMultipleConstraints(t *tes
 		[]string{"real"},     // cert has "real" only
 	)
 	assert.NoError(t, err,
-		"FIXED (#5746): an embedded empty-string constraint normalizes away at any "+
+		"FIXED: an embedded empty-string constraint normalizes away at any "+
 			"position; the cert is not required to present a literal empty value.")
 }
 
 // ===========================================================================
-// FINDING 12 (HIGH) — FIXED (#5746): Policy.Verify must NOT accumulate duplicate
+// FINDING 12 (HIGH) — FIXED: Policy.Verify must NOT accumulate duplicate
 // passed collections across depth iterations.
 //
 // Previously the cross-depth merge appended stepResult.Passed each iteration,
@@ -570,7 +570,7 @@ func TestAdversarial_Verify_DuplicatePassedAcrossDepthIterations(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, pass)
 
-	// Fixed behavior (#5746, F12): the same collection seen across all 3 depth
+	// Fixed behavior: the same collection seen across all 3 depth
 	// iterations must be de-duplicated to a SINGLE Passed entry, not accumulated
 	// once per iteration. (Was a non-asserting t.Logf documenting the bug.)
 	assert.Len(t, results[stepName].Passed, 1,
@@ -579,7 +579,7 @@ func TestAdversarial_Verify_DuplicatePassedAcrossDepthIterations(t *testing.T) {
 }
 
 // ===========================================================================
-// FINDING 13 (HIGH) — FIXED (#5746): checkCertConstraint honors the AllowAll
+// FINDING 13 (HIGH) — FIXED: checkCertConstraint honors the AllowAll
 // wildcard ("*") at ANY position in the constraint list, not only index 0. A
 // list like ["specific-root", "*"] means "allow any value". This test previously
 // pinned the position-0-only bug (assert.Error); it now documents the fix
@@ -592,15 +592,15 @@ func TestAdversarial_CheckCertConstraint_WildcardNotAtIndex0(t *testing.T) {
 		[]string{"specific", AllowAllConstraint},
 		[]string{"anything"},
 	)
-	// FIXED (#5746, F13/F18): hasAllowAll scans every position, so a "*" anywhere
+	// FIXED: hasAllowAll scans every position, so a "*" anywhere
 	// in the list means "allow any value".
 	assert.NoError(t, err,
-		"FIXED (#5746, F13/F18): '*' at any position is honored as a wildcard; "+
+		"FIXED: '*' at any position is honored as a wildcard; "+
 			"constraints=['specific', '*'] allows all values.")
 }
 
 // ===========================================================================
-// FINDING 14 (HIGH) — FIXED (#5746): CertConstraint.Check now short-circuits on
+// FINDING 14 (HIGH) — FIXED: CertConstraint.Check now short-circuits on
 // the FIRST failing constraint instead of accumulating every check's error. This
 // avoids needless work (the trust-bundle check can be expensive) and stops the
 // error fan from enumerating certificate details to callers. This test
@@ -635,7 +635,7 @@ func TestAdversarial_CertConstraintCheck_ErrorAccumulation(t *testing.T) {
 	var constraintErr ErrConstraintCheckFailed
 	if assert.ErrorAs(t, err, &constraintErr) {
 		assert.LessOrEqual(t, len(constraintErr.errs), 1,
-			"FIXED (#5746): Check short-circuits on the first failing constraint "+
+			"FIXED: Check short-circuits on the first failing constraint "+
 				"and surfaces a single error, not one per failed check.")
 	}
 }
@@ -692,7 +692,7 @@ func TestAdversarial_CheckCertConstraintGlob_WhitespaceInValue(t *testing.T) {
 }
 
 // ===========================================================================
-// FINDING 17 (MEDIUM) — FIXED (#5746): buildStepContext is now FIRST-writer-wins
+// FINDING 17 (MEDIUM) — FIXED: buildStepContext is now FIRST-writer-wins
 // for duplicate attestation types across multiple passed collections. A second
 // passed collection presenting the same attestation type must NOT overwrite the
 // first (legitimate) one in the cross-step Rego context — that was a shadowing
@@ -752,16 +752,16 @@ func TestAdversarial_BuildStepContext_LastWriterWins(t *testing.T) {
 	attData, ok := scanCtx[attType].(map[string]interface{})
 	require.True(t, ok)
 
-	// FIXED (#5746, F17): the FIRST passed collection wins; the second collection
+	// FIXED: the FIRST passed collection wins; the second collection
 	// with the same attestation type does NOT overwrite it.
 	assert.Equal(t, "first-scan", attData["name"],
-		"FIXED (#5746, F17): buildStepContext is first-writer-wins. A second signed "+
+		"FIXED: buildStepContext is first-writer-wins. A second signed "+
 			"collection for the same step and attestation type can no longer shadow the "+
 			"first (legitimate) collection's data in the cross-step Rego context.")
 }
 
 // ===========================================================================
-// FINDING 18 (MEDIUM) — FIXED (#5746): checkCertConstraint honors the AllowAll
+// FINDING 18 (MEDIUM) — FIXED: checkCertConstraint honors the AllowAll
 // wildcard ("*") for multi-value fields at ANY position, not only constraints[0].
 // A list like ["A", "*"] means "allow any value". This test previously pinned the
 // position-0-only bug (assert.Error); it now documents the fix (assert.NoError).
@@ -773,10 +773,10 @@ func TestAdversarial_CheckCertConstraint_AllowAllNotFirstElement(t *testing.T) {
 		[]string{"admin@example.com", AllowAllConstraint},
 		[]string{"admin@example.com", "other@example.com"},
 	)
-	// FIXED (#5746, F13/F18): hasAllowAll honors "*" at any position, so the list
+	// FIXED: hasAllowAll honors "*" at any position, so the list
 	// ["admin@example.com", "*"] allows any email value.
 	assert.NoError(t, err,
-		"FIXED (#5746, F13/F18): '*' mixed with other constraints is honored as a "+
+		"FIXED: '*' mixed with other constraints is honored as a "+
 			"wildcard at any position, allowing all values.")
 }
 
@@ -820,7 +820,7 @@ func TestAdversarial_Verify_NegativeClockSkewTolerance(t *testing.T) {
 		WithSubjectDigests([]string{"sha256:abc"}),
 		WithClockSkewTolerance(-10*time.Minute), // would expire it 10 min EARLIER
 	)
-	// FIXED (F20, #5746): checkVerifyOpts now rejects a negative tolerance up
+	// FIXED: checkVerifyOpts now rejects a negative tolerance up
 	// front, so Verify fails with an option-validation error rather than
 	// silently treating the still-valid policy as expired.
 	require.Error(t, err, "F20: negative clock-skew tolerance must be rejected")

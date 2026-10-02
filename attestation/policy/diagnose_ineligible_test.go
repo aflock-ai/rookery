@@ -34,7 +34,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// testifysec/judge#9309: an envelope that IS loaded for a step but is dropped
+// an earlier report: an envelope that IS loaded for a step but is dropped
 // by the source's attestation-type or subject filter used to collapse into
 // ErrNoCollections — a ~700-character "Likely causes, in order: (1) the
 // attestation wasn't loaded ..." wall in which not one cause applied. These

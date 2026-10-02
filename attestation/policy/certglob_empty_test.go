@@ -23,7 +23,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// #9826: gobwas/glob matches "" for patterns that reduce to one-rune matchers.
+// Gobwas/glob matches "" for patterns that reduce to one-rune matchers.
 // Each of these patterns was observed matching the empty string in gobwas
 // v0.2.3. A cert field that is absent must not satisfy any of them.
 var emptyMatchingGobwasPatterns = []string{"?", "[!a]", "{a,?}", "{?}", "{,a}"}

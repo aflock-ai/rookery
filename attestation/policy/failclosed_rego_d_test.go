@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 //
-// Finding D (#5747, fork regression) — fail-closed acceptance test.
+// Finding D (fork regression) — fail-closed acceptance test.
 // Promoted from the redgate scaffold (//go:build redgate) to the default
 // suite now that the fix has landed; this is the Green acceptance criterion.
 
@@ -25,7 +25,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// D (#5747, HIGH) — rego.go EvaluateRegoPolicy :145-159 (non-string deny)
+// D — rego.go EvaluateRegoPolicy :145-159 (non-string deny)
 // Fail-closed contract: a genuine `deny` decision must NEVER depend on whether
 // the deny element is a string. A Rego module that emits a non-string deny
 // element (e.g. deny[42]) must FAIL verification, not silently pass because the

@@ -38,7 +38,7 @@ const (
 	AllowAllConstraint = "*"
 
 	// globMatchTimeout bounds a single glob match against a ReDoS-style
-	// pathological pattern (#5756). The matcher is now RE2 (certglob.go, #9826),
+	// pathological pattern. The matcher is now RE2 (certglob.go),
 	// which is linear-time, so this is defence in depth; it was added when
 	// gobwas/glob, which has no internal time bound, did the matching, and
 	// this PR EXPANDS glob usage to every multi-value SAN field, so an untrusted
@@ -64,7 +64,7 @@ func containsGlobMeta(s string) bool {
 // hasNonPrintable reports whether s contains a NUL byte or any other
 // non-printable rune. A NUL (or other control char) in a constraint is treated
 // as a reject (fail closed) — it is never a legitimate cert-field value and was
-// a fuzz finding (#5756 secondary). It also keeps such bytes out of the glob
+// a fuzz finding. It also keeps such bytes out of the glob
 // engine, where they can drive degenerate matching.
 func hasNonPrintable(s string) bool {
 	for _, r := range s {
@@ -77,7 +77,7 @@ func hasNonPrintable(s string) bool {
 
 // boundedGlobMatch runs safeGlobMatch under a deadline. A pattern that exceeds
 // globMatchTimeout is reported as a non-match with a timeout error, so the
-// caller fails the constraint closed (#5756). The recover() in safeGlobMatch
+// caller fails the constraint closed. The recover() in safeGlobMatch
 // still guards panics; this guards a hang.
 func boundedGlobMatch(g glob.Glob, s string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), globMatchTimeout)
@@ -133,7 +133,7 @@ type CertConstraint struct {
 }
 
 // IsSet reports whether the certificate constraint carries any configured field.
-// It is the zero-value test used to WARN (R3_184, #6266) when a functionary sets
+// It is the zero-value test used to WARN (R3_184) when a functionary sets
 // BOTH a PublicKeyID and a CertConstraint: the PublicKeyID short-circuit in
 // Functionary.Validate returns before CertConstraint.Check runs, so the
 // constraint is silently ignored on a key-ID match. reflect.DeepEqual against the

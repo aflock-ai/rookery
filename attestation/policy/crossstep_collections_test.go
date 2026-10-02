@@ -6,7 +6,7 @@ package policy
 // deterministic order, instead of the single first-writer-wins object per attestation type.
 //
 // Background (2026-09-18): buildStepContext keeps the first collection that presents a given
-// attestation type (F17, #5746: last-writer-wins was a shadowing vector). "First" was the
+// attestation type (F17: last-writer-wins was a shadowing vector). "First" was the
 // order collections were discovered in, so a verdict that read input.steps.<step>.<type>
 // could depend on which file or Archivista row arrived first when several collections had
 // passed. These tests pin three things:

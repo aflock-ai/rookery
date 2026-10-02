@@ -1125,10 +1125,10 @@ func TestCrossStep_BuildStepContext_OverlappingAttestationTypes(t *testing.T) {
 	require.NotNil(t, ctx)
 	buildCtx := ctx["build"].(map[string]interface{})
 	attData := buildCtx[attType].(map[string]interface{})
-	// FIXED (#5746, F17): first writer wins — a later duplicate of the same
+	// FIXED: first writer wins — a later duplicate of the same
 	// attestation type does NOT overwrite the first (legitimate) collection.
 	assert.Equal(t, "first", attData["name"],
-		"FIXED (#5746, F17): when multiple passed collections share an attestation type, "+
+		"FIXED: when multiple passed collections share an attestation type, "+
 			"the FIRST is preserved; a later duplicate can no longer shadow it")
 }
 
@@ -1571,7 +1571,7 @@ deny[msg] {
 	t.Run("fails_without_step_context", func(t *testing.T) {
 		// Without step context, input is the attestor directly (not wrapped),
 		// so input.steps doesn't exist and the deny body can never fire. That
-		// used to pass silently; since #9869 an admit that rests on a missing
+		// used to pass silently; since an earlier change an admit that rests on a missing
 		// input field is refused.
 		result := s.validateAttestations([]source.CollectionVerificationResult{cvr}, "", nil)
 		assert.Empty(t, result.Passed)
@@ -1705,13 +1705,13 @@ deny[msg] {
 	pass, results, err := p.Verify(context.Background(), verifyOpts(src)...)
 	require.NoError(t, err)
 
-	// FIXED (#5746, F17): buildStepContext is first-writer-wins. It iterates
+	// FIXED: buildStepContext is first-writer-wins. It iterates
 	// passedCollections in order and, for a duplicated attestation type, KEEPS the
 	// first (legitimate, build_status="safe") collection — the attacker's second
 	// collection cannot overwrite it. The Rego policy therefore sees "safe", does
 	// NOT deny, and deploy passes. The shadow attack is neutralized.
 	assert.True(t, pass,
-		"FIXED (#5746, F17): deploy passes because the legitimate first collection's "+
+		"FIXED: deploy passes because the legitimate first collection's "+
 			"data is preserved; the attacker's second collection cannot shadow it")
 	deployResult := results["deploy"]
 	assert.False(t, deployResult.HasErrors(), "deploy should have no rejections after the shadow attack is neutralized")
@@ -1725,7 +1725,7 @@ deny[msg] {
 		}
 	}
 	assert.False(t, foundShadowAttack,
-		"FIXED (#5746, F17): the Rego policy must NOT see compromised data; the "+
+		"FIXED: the Rego policy must NOT see compromised data; the "+
 			"attacker's second collection cannot shadow the legitimate first")
 }
 
@@ -1911,11 +1911,11 @@ func TestSecurity_R3_210_CertConstraintAllowAllNotAtPositionZero(t *testing.T) {
 	})
 
 	t.Run("star_not_at_position_0_is_literal", func(t *testing.T) {
-		// FIXED (#5746, F13/F18): ["foo", "*"] honors the "*" at any position as a
+		// FIXED: ["foo", "*"] honors the "*" at any position as a
 		// wildcard, so any cert value is allowed.
 		err := checkCertConstraint("org", []string{"foo", "*"}, []string{"foo", "bar"})
 		assert.NoError(t, err,
-			"FIXED (#5746, F13/F18): ['foo', '*'] honors '*' at any position as a wildcard; "+
+			"FIXED: ['foo', '*'] honors '*' at any position as a wildcard; "+
 				"a cert with ['foo', 'bar'] is allowed (no longer treated as a literal '*').")
 	})
 
@@ -1924,7 +1924,7 @@ func TestSecurity_R3_210_CertConstraintAllowAllNotAtPositionZero(t *testing.T) {
 		// value regardless of what the cert presents (F13/F18).
 		err := checkCertConstraint("org", []string{"foo", "*"}, []string{"foo", "*"})
 		assert.NoError(t, err,
-			"FIXED (#5746, F13/F18): '*' anywhere in the constraint list allows all values.")
+			"FIXED: '*' anywhere in the constraint list allows all values.")
 	})
 
 	t.Run("multiple_stars_allow_all", func(t *testing.T) {
@@ -1932,7 +1932,7 @@ func TestSecurity_R3_210_CertConstraintAllowAllNotAtPositionZero(t *testing.T) {
 		// allow any value (F13/F18).
 		err := checkCertConstraint("org", []string{"*", "*"}, []string{"*"})
 		assert.NoError(t, err,
-			"FIXED (#5746, F13/F18): a list containing '*' allows all values via hasAllowAll.")
+			"FIXED: a list containing '*' allows all values via hasAllowAll.")
 	})
 }
 
@@ -2143,7 +2143,7 @@ other { true }
 			"error should indicate missing deny rule")
 
 		// An allow that no deny depends on is refused before evaluation
-		// (#9870): the engine only queries deny, so allow would be ignored.
+		// the engine only queries deny, so allow would be ignored.
 		policy.Module = []byte(`package nodeny
 allow { true }
 `)

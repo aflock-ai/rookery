@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// #9813: an attestationsFrom dependent's Rego input was built from its
+// An attestationsFrom dependent's Rego input was built from its
 // dependency's PRE-pruning Passed set. A dependency collection that the
 // artifactsFrom chain check later rejects had already been fed to the
 // dependent's Rego, so a policy could flip FAIL→PASS on evidence about a
@@ -188,7 +188,7 @@ func prunedCtxRejectedRefs(cs []RejectedCollection) []string {
 	return out
 }
 
-// The reproduction from #9813, on every source arm: a wrong-chain "clean"
+// The reproduction, on every source arm: a wrong-chain "clean"
 // scan must not turn the control FAIL into a PASS.
 func TestAttestationsFromContextExcludesArtifactPrunedCollections(t *testing.T) {
 	for _, arm := range prunedCtxArms() {
@@ -198,7 +198,7 @@ func TestAttestationsFromContextExcludesArtifactPrunedCollections(t *testing.T) 
 			assert.Empty(t, resCtl["gate"].Passed)
 
 			pass, res := prunedCtxRun(t, arm, prunedCtxCorpus{wrongChainClean: true}, prunedCtxRequireClean)
-			assert.False(t, pass, "a scan collection rejected for a broken artifactsFrom chain laundered a PASS through the gate's Rego (#9813)")
+			assert.False(t, pass, "a scan collection rejected for a broken artifactsFrom chain laundered a PASS through the gate's Rego")
 			assert.NotContains(t, prunedCtxRefs(res["scan"].Passed), prunedCtxWrongChainRef, "wrong-chain scan must not survive artifact verification")
 			assert.Contains(t, prunedCtxRejectedRefs(res["scan"].Rejected), prunedCtxWrongChainRef, "wrong-chain scan must be recorded as rejected")
 			assert.Empty(t, res["gate"].Passed, "gate must not pass on a context holding the rejected scan")
@@ -244,7 +244,7 @@ func TestAttestationsFromContextReevaluatesRejectedDependents(t *testing.T) {
 }
 
 // Batch and streamed arms must reach the same verdict and the same Passed sets
-// on every corpus and rule (#7572 verdict identity).
+// on every corpus and rule (verdict identity).
 func TestAttestationsFromContextArmsAgree(t *testing.T) {
 	rules := map[string][]byte{"require-clean": prunedCtxRequireClean, "probe": prunedCtxProbeAbsent, "exactly-one": prunedCtxExactlyOne}
 	corpora := []prunedCtxCorpus{{}, {wrongChainClean: true}, {realClean: true}, {wrongChainClean: true, realClean: true}}
@@ -263,7 +263,7 @@ func TestAttestationsFromContextArmsAgree(t *testing.T) {
 	}
 }
 
-// Cost of the fixed point on the #9813 shape: the control corpus converges in
+// Cost of the fixed point on the shape: the control corpus converges in
 // one round, the wrong-chain corpus needs a second.
 func BenchmarkAttestationsFromContext(b *testing.B) {
 	for _, bc := range []struct {
@@ -564,7 +564,7 @@ func (f *flipAI) Evaluate(_ context.Context, att attestation.Attestor, pol AiPol
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls[att.Name()]++
-	// Echo the requested model the way Ollama does; #9820 E5 refuses a
+	// Echo the requested model the way Ollama does; the AI gate refuses a
 	// verdict that names no model.
 	if f.calls[att.Name()] == 1 {
 		return AiResponse{Status: AiStatusPass, Reason: "first answer", Model: pol.Model}, nil

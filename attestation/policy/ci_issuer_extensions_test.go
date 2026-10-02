@@ -24,7 +24,7 @@ import (
 )
 
 // The extension sets below are what a Fulcio CA (public Sigstore, or the
-// TestifySec platform since #9839) stamps for a GitLab.com, Buildkite and
+// TestifySec platform since an earlier change) stamps for a GitLab.com, Buildkite and
 // CircleCI job. These tests pin how a policy's certConstraint.extensions
 // reads them, including the fields those vendors leave empty, because the
 // customer docs tell people which constraints are meaningful per CI.

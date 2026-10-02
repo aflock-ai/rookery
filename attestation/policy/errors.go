@@ -216,7 +216,7 @@ func (e ErrMismatchArtifact) Error() string {
 // otherwise pass vacuously and must be rejected (GHSA-vmvj-p3hw-39q3).
 // ErrUntrackedMaterials is returned when a step with artifactsFrom consumed
 // materials that no accepted upstream step produced and that no
-// Step.AllowedUntracked glob admits (#9815).
+// Step.AllowedUntracked glob admits.
 type ErrUntrackedMaterials struct {
 	Step  string
 	Paths []string
@@ -298,7 +298,7 @@ type ErrCircularDependency struct {
 	// Edges, when set, names the relation (attestationsFrom or artifactsFrom)
 	// of each hop: Edges[i] links Steps[i] to Steps[i+1]. It is set for a cycle
 	// that runs through artifactsFrom, which is only a cycle in the union of
-	// the two relations (#9813).
+	// the two relations.
 	Edges []string
 }
 
@@ -323,8 +323,8 @@ func (e ErrSelfReference) Error() string {
 }
 
 // ErrStepNameIncoherent is returned by Policy.Validate, ONLY when step-name
-// coherence enforcement is opted in (HardeningOptions.EnforceStepNameCoherence,
-// #6266), when a step's Name is empty or disagrees with its map key. The map key
+// coherence enforcement is opted in (HardeningOptions.EnforceStepNameCoherence),
+// when a step's Name is empty or disagrees with its map key. The map key
 // is authoritative during search/result-merge while Step.Name drives the
 // collection-name filter and artifact lookup; a disagreement otherwise surfaces
 // far later at verify as a misleading "no passed collections" error. Key and Name
@@ -336,9 +336,9 @@ type ErrStepNameIncoherent struct {
 
 func (e ErrStepNameIncoherent) Error() string {
 	if e.Name == "" {
-		return fmt.Sprintf("step keyed %q has an empty Name; the map key and Step.Name must match (#6266)", e.Key)
+		return fmt.Sprintf("step keyed %q has an empty Name; the map key and Step.Name must match", e.Key)
 	}
-	return fmt.Sprintf("step keyed %q has mismatched Name %q; the map key and Step.Name must match (#6266)", e.Key, e.Name)
+	return fmt.Sprintf("step keyed %q has mismatched Name %q; the map key and Step.Name must match", e.Key, e.Name)
 }
 
 type ErrDependencyNotVerified struct {
@@ -353,7 +353,7 @@ func (e ErrDependencyNotVerified) Error() string {
 // artifact pruning do not reach a joint fixed point: no Rego context could be
 // found that equals the attestationsFrom evidence surviving pruning. The
 // verify refuses to answer rather than return a verdict judged on evidence it
-// rejected (#9813).
+// rejected.
 type ErrAttestationsFromNotConverged struct {
 	Rounds int
 }
@@ -485,7 +485,7 @@ func (e ErrExternalAttestationRejected) Unwrap() []error { return e.Rejections }
 // distinct from ErrNoCollections — whose "likely causes" list opens with "the
 // attestation wasn't loaded" — because here it WAS loaded, and the operator
 // needs the envelope named with the predicate that dropped it, not a list of
-// causes that do not apply (testifysec/judge#9309).
+// causes that do not apply (an earlier report).
 //
 // It unwraps to ErrNoCollections, so a consumer that classifies a step by
 // that type through errors.As — judge-api's readiness classifier, which reads

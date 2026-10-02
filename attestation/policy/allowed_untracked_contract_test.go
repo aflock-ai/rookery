@@ -32,7 +32,7 @@ import (
 
 // allowedUntrackedGrammarPatterns is every pattern of up to three characters
 // over the glob syntax that gobwas's parser accepts, the set of patterns the
-// allowedUntracked field accepted before #10376.
+// allowedUntracked field accepted before an earlier change.
 func allowedUntrackedGrammarPatterns() []string {
 	alphabet := []string{"a", "*", "?", "/", "{", "}", ",", "[", "]", "!", "-", "\\"}
 	var out []string

@@ -16,7 +16,7 @@
 
 package policy
 
-// #9820 item 5: an injected AI provider that returned no responses, or a
+// Item 5: an injected AI provider that returned no responses, or a
 // status other than exactly "PASS" or "FAIL" (for example "pass"), passed the
 // gate, because the gate only rejected on an exact "FAIL". An empty or
 // out-of-schema provider response is a FAIL.

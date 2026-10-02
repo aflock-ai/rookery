@@ -304,7 +304,7 @@ func TestProbeBound_ExactBoundary(t *testing.T) {
 			// guard. The real sources close the remainder separately: both
 			// gate their seen-set on source.IsDiagnosticProbe and so mark
 			// nothing for a probe at any size (judge-api's EntSource always
-			// did; ArchivistaSource since testifysec/judge#7592, pinned by
+			// did; ArchivistaSource since an earlier report, pinned by
 			// TestArchivistaSource_ProbeDoesNotBuryEvidenceFromALaterFilteredSearch).
 			// Teaching diagCorpus that guard would make every row below read
 			// 0 and stop measuring the bound.
@@ -671,7 +671,7 @@ func TestBoundedProbeIsStructurallyContained(t *testing.T) {
 	sort.Strings(got)
 
 	// The diagnostic and its three probe functions — and nothing else. The
-	// second probe (#9309) reaches the bound only through the shared walk.
+	// second probe reaches the bound only through the shared walk.
 	assert.Equal(t, []string{"diagnoseEmptyCollectionResult", "probeIneligibleCollections", "probeStepCollections", "probeStepEvidence"}, got,
 		"the diagnostic bound leaked outside the diagnostic path: %v", referencedBy)
 
@@ -704,7 +704,7 @@ func TestBoundedProbeIsStructurallyContained(t *testing.T) {
 //
 // Still an EXACT pin per function, not a growing allow-list. The bool on
 // probeStepEvidence reports whether the subject sample was truncated;
-// []IneligibleCollection (#9309) is a record of strings and bools about each
+// []IneligibleCollection is a record of strings and bools about each
 // dropped envelope; the int on the shared walk is a sample count. Each is a
 // fact ABOUT the probe, not a channel for evidence — no
 // CollectionVerificationResult, envelope, statement or verifier can travel

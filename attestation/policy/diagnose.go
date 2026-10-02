@@ -70,7 +70,7 @@ const maxDiagnosticProbeCollections = 4
 // Closing the remainder is the source's job, not the diagnostic's, and it is
 // now closed: both seen-tracking sources gate their seen-set on
 // source.IsDiagnosticProbe — judge-api's EntSource always did, ArchivistaSource
-// does since testifysec/judge#7592 — so a probe mutates nothing at any corpus
+// does since an earlier report — so a probe mutates nothing at any corpus
 // size. A probe must not mutate what the real search can still find, and only
 // the source can promise that at every size; this bound only ever removes
 // fetches.
@@ -94,7 +94,7 @@ var errDiagnosticProbeSatisfied = errors.New("diagnostic probe: sample bound rea
 //     attestation-type filter (and possibly its subject filter too). Each is
 //     named with the predicate that dropped it: the generic list below opens
 //     with "the attestation wasn't loaded", and for this case not one of its
-//     causes applies (testifysec/judge#9309).
+//     causes applies (an earlier report).
 //   - 0 collections either way → ErrNoCollections. The step legitimately has
 //     no envelope loaded — the operator forgot to pass --attestations, the
 //     file didn't load, etc.

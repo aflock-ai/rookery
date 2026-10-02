@@ -16,7 +16,7 @@
 
 package policy
 
-// #9820 E1: a deny body that reads a field the attestor did not emit never
+// A deny body that reads a field the attestor did not emit never
 // fires, so the step passed. An admit that rests on such a read is refused,
 // with no warn mode, under every hardening setting.
 
@@ -163,7 +163,7 @@ func evalRaw(t *testing.T, predicate string, module string) error {
 	return EvaluateRegoPolicy(att, []RegoPolicy{{Name: "m", Module: []byte(module)}})
 }
 
-// Review on #9869: a static "does some child have the field" check let one
+// Review: a static "does some child have the field" check let one
 // complete element hide another element's missing field, and ignored which
 // key a dynamic lookup actually used. The probes ask Rego for the bindings
 // the deny body had.

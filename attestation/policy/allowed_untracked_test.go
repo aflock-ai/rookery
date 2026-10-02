@@ -28,7 +28,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Issue #9815: Step.AllowedUntracked was documented as strict chain-of-custody
+// Step.AllowedUntracked was documented as strict chain-of-custody
 // ("Empty (the default) means strict mode") but nothing read it, and
 // compareArtifacts silently skipped any downstream material the upstream step
 // never produced. These tests pin the enforced contract:
@@ -100,7 +100,7 @@ func TestAllowedUntracked_ChainEnforcement(t *testing.T) {
 		wantInErr string
 	}{
 		{
-			// The #9815 repro: an untracked material with no allow-list.
+			// The repro: an untracked material with no allow-list.
 			name: "strict default rejects untracked material", allowed: nil,
 			products: upstream, materials: injected,
 			wantPass: false, wantInErr: "/tmp/injected.sh",
@@ -170,7 +170,7 @@ func TestAllowedUntracked_ChainEnforcement(t *testing.T) {
 
 // TestAllowedUntracked_WarnOnlyWithoutHardening pins the backward-compatible
 // library zero value: with EnforceAllowedUntracked off (any embedder
-// that never calls SetHardening) the #9815 repro keeps verifying exactly as it
+// that never calls SetHardening) the repro keeps verifying exactly as it
 // did before, so existing policies do not start failing on upgrade. The
 // overlap and digest-mismatch rules still apply in this mode.
 func TestAllowedUntracked_WarnOnlyWithoutHardening(t *testing.T) {

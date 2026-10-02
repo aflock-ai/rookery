@@ -26,7 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// #9826: gobwas counts '?' in bytes in some positions, so a multibyte value
+// Gobwas counts '?' in bytes in some positions, so a multibyte value
 // was refused by a pattern that plainly matches it.
 func TestCertGlob_QuestionMarkCountsRunes(t *testing.T) {
 	for _, c := range []struct{ pattern, value string }{

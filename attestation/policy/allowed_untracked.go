@@ -32,7 +32,7 @@ import (
 //   - each pattern is a gobwas/glob with '/' as the separator, so '*' stays
 //     inside one path segment and '**' crosses segments. gobwas only decides
 //     which patterns are valid. Matching is the RE2 translation cert
-//     constraints use (#9867, certglob.go), because gobwas's matcher let the
+//     constraints use (certglob.go), because gobwas's matcher let the
 //     literals on each side of '**' overlap: "a**a" admitted "a", and
 //     "vendor/**/x.go" admitted "vendor/x.go" while "vendor/**/*.go" refused
 //     "vendor/a.go". Here the literals never share bytes. The translation

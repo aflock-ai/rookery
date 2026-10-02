@@ -16,7 +16,7 @@
 
 package policy
 
-// #9820 E3: the engine is deny-only. A module that defines `allow` and has
+// The engine is deny-only. A module that defines `allow` and has
 // no deny depending on it reads as if allow gated the step, and it does not:
 // `default allow := false` over an empty deny passed.
 
@@ -86,7 +86,7 @@ func TestAllowUsedByDeny_Evaluates(t *testing.T) {
 
 // A deny that reads the whole package document (or data) depends on every
 // rule in it, allow included: object.get(data.gate, "allow", false) reads
-// allow through its parent. Found by review on #9870.
+// allow through its parent. Found by review.
 func TestAllowUsedThroughAParentDocument(t *testing.T) {
 	gate := RegoPolicy{Name: "gate", Module: []byte("package gate\ndefault allow := true\ndeny[msg] { false; msg := \"x\" }\n")}
 	for name, user := range map[string]string{

@@ -19,7 +19,7 @@ package policy
 // formal:differential
 //
 // Binds the verifier half of the Lean CI OIDC model (formal/ci-oidc,
-// CiOidc/Verifier.lean, #9920) to CertConstraint.checkExtensions. Each vector
+// CiOidc/Verifier.lean) to CertConstraint.checkExtensions. Each vector
 // is one (constraint, extension value, verdict) triple; "" is an extension the
 // leaf does not carry. The model proves an absent extension fails every pin
 // except exactly `*` (V1); `**` refuses it too.

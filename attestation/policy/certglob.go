@@ -22,7 +22,7 @@ import (
 	"github.com/gobwas/glob"
 )
 
-// certGlob is the matcher every cert-constraint glob goes through (#9826).
+// certGlob is the matcher every cert-constraint glob goes through.
 //
 // gobwas/glob v0.2.3 is kept only to decide which patterns are valid. Its
 // matcher is not used, because on this constraint language it:

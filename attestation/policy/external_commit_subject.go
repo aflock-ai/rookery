@@ -30,7 +30,7 @@ import (
 // externalCommitSubjects collects, per canonical predicate type, every
 // commitSubject a policy declares, sorted and de-duplicated. Keying by the
 // canonical type (attestation.ResolveLegacyType) matches the shared search,
-// which covers both spellings of a type (#9827).
+// which covers both spellings of a type.
 func externalCommitSubjects(externals map[string]ExternalAttestation) map[string][]string {
 	out := map[string][]string{}
 	for _, name := range sortedNames(externals) {
@@ -50,7 +50,7 @@ func externalCommitSubjects(externals map[string]ExternalAttestation) map[string
 }
 
 // externalPredicateTypes is the type an external declares plus its legacy
-// alternate spelling, if any (e.g. SLSA provenance "v1.0" and "v1", #9827).
+// alternate spelling, if any (e.g. SLSA provenance "v1.0" and "v1").
 func externalPredicateTypes(predicateType string) []string {
 	types := []string{predicateType}
 	if alt := attestation.LegacyAlternate(predicateType); alt != "" {

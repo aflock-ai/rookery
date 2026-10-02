@@ -97,7 +97,7 @@ func holdoutValidate(t *testing.T, f Functionary, rootID string, uri string, ext
 
 // holdoutEnforce is the hardening the cilock CLI and Judge install, read from
 // the engine rather than listed here: a hand-copied flag list silently missed
-// EnforceAllowedUntracked (#9862), so the differential ran the engine with a
+// EnforceAllowedUntracked, so the differential ran the engine with a
 // check off that the model's "enforce" had on, and agreed with a stale model.
 var holdoutEnforce = EnforcedHardening()
 
@@ -130,16 +130,16 @@ func TestFormalHoldout_ReleasePolicy(t *testing.T) {
 		t.Errorf("warn: model predicts ADMITTED, engine refused")
 	}
 
-	// Holdout.lean release_prediction: the policy as held out, before #9866,
+	// Holdout.lean release_prediction: the policy as held out, before an earlier change,
 	// with those lists empty, is refused under enforce (R3_181) and admitted
 	// under warn.
 	before := f
 	before.CertConstraint.DNSNames, before.CertConstraint.Emails, before.CertConstraint.Organizations = nil, nil, nil
 	if got := holdoutValidate(t, before, "platform-testifysec-fulcio", uri, ext, holdoutEnforce); got {
-		t.Errorf("enforce, before #9866: model predicts REFUSED (empty dnsnames/emails/organizations, R3_181), engine admitted")
+		t.Errorf("enforce, before an earlier change: model predicts REFUSED (empty dnsnames/emails/organizations, R3_181), engine admitted")
 	}
 	if got := holdoutValidate(t, before, "platform-testifysec-fulcio", uri, ext, HardeningOptions{}); !got {
-		t.Errorf("warn, before #9866: model predicts ADMITTED, engine refused")
+		t.Errorf("warn, before an earlier change: model predicts ADMITTED, engine refused")
 	}
 }
 

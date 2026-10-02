@@ -20,7 +20,7 @@ import (
 )
 
 // checkExtensions runs once per functionary per candidate collection per
-// search depth — the prod #7572 leader logged ~1,500 lines/sec from this file
+// search depth — a production leader logged ~1,500 lines/sec from this file
 // while OOM-crashlooping. The no-constraint fast path (every Extensions field
 // empty) must not allocate per call for reflection metadata or for boxing
 // log arguments: reflect.VisibleFields of the FIXED certificate.Extensions
