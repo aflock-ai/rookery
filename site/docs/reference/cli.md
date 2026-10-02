@@ -915,6 +915,29 @@ Writes a Pushgate policy draft skeleton: the enrolled agent functionary, the emp
 ```bash
 cilock policy template --goal tests --goal secrets --goal quality
 cilock policy template -p .pushgate/policy.json --add-step docs-build --attestor command-run
+```
+
+## `cilock policy prove`
+
+Proves a filled draft locally and offline, and never rewrites your steps or rules. It refuses a draft with a `__FILL__` slot, records every step for real under a throwaway key, records each command-run step again wrapping `false`, and verifies that the real evidence passes and each failing run is refused by its own step. It then validates the draft as `cilock policy validate` does and deletes the key and evidence. The first line is exactly `Local verify: passed` or `Local verify: REFUSED by <step>: <rule message>`. It exits non-zero on any refusal and still writes the draft, so your human can choose. It never signs the real policy, uploads, or activates.
+
+| Flag | Short | Default | Description |
+|---|---|---|---|
+| `--policy <path>` | `-p` | `.pushgate/policy.json` | The draft to prove. |
+| `--run <step>=<argv>` | (none) | (the step's command pin) | The command for a step, as a JSON array or plain words (repeat). |
+| `--step <name> -- <argv>` | (none) | (none) | One step's command after `--`. |
+| `--run-arg <flag>` | (none) | (none) | Pass an attestor flag through to every recorded run (repeat). |
+| `--output <path>` | `-o` | (back to `-p`) | Write the normalized draft here. |
+| `--workingdir <dir>` | `-d` | (current directory) | Directory each step's command runs in. |
+| `--trace` | (none) | `false` | Record every step with `--trace`. |
+| `--platform-url <url>` | (none) | (the cilock default platform) | Platform whose enrolled agent the functionary names. |
+| `--no-normalize` | (none) | `false` | Prove and validate the draft as written, without filling the functionary or trust placeholders. |
+
+```bash
+cilock policy prove -p .pushgate/policy.json
+cilock policy prove -p .pushgate/policy.json --step app-build -- go build -o bin/app ./cmd/app
+```
+
 ## `cilock policy input <envelope.json>`
 
 Decodes a signed step envelope (the `-o`/`--outfile` of `cilock run` or `cilock attest`) and shows what a Rego rule for that step reads as `input`. Without `--attestor` it lists the step, its subject count, and each attestation with its top-level fields. With `--attestor` it prints exactly that attestation's JSON, the object a rule on that attestor evaluates. A rule reads it as `input.attestation` when the verifier adds cross-step (`attestationsFrom`) or timestamp context, which a platform-signed step always has, and as bare `input` otherwise; read it as the seeded rules do, `pred := object.get(input, "attestation", input)`. An attestor the envelope does not carry is an error that names the ones it does.

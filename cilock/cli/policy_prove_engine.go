@@ -441,3 +441,63 @@ func requiresType(step map[string]any, t string) bool {
 	}
 	return false
 }
+
+// failingEvidence derives a step's failing run from its real one: the same
+// statement with the command-run exit status set to 1, re-signed with the
+// scratch key. Argv, products, materials and every other attestation stay as
+// recorded, so a rule that admits this evidence would admit the pinned
+// command failing for real; a wrapper such as `false` would have been
+// refused by an argv pin alone and proved nothing about exit status.
+func (p *prover) failingEvidence(step, good string) (string, error) {
+	raw, err := os.ReadFile(good) //nolint:gosec // an envelope prove itself wrote into its scratch dir
+	if err != nil {
+		return "", err
+	}
+	var env dsse.Envelope
+	if err := json.Unmarshal(raw, &env); err != nil {
+		return "", err
+	}
+	var stmt map[string]any
+	dec := json.NewDecoder(bytes.NewReader(env.Payload))
+	dec.UseNumber()
+	if err := dec.Decode(&stmt); err != nil {
+		return "", err
+	}
+	flipped := false
+	for _, a := range asList(asMap(stmt["predicate"])["attestations"]) {
+		if entry := asMap(a); entry["type"] == typeCommandRun {
+			att := asMap(entry["attestation"])
+			if att == nil {
+				continue
+			}
+			att["exitcode"] = json.Number("1")
+			flipped = true
+		}
+	}
+	if !flipped {
+		return "", fmt.Errorf("the real run of step %s recorded no command-run attestation", step)
+	}
+	payload, err := json.Marshal(stmt)
+	if err != nil {
+		return "", err
+	}
+	keyFile, err := os.Open(p.keyPath)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = keyFile.Close() }()
+	signer, err := cryptoutil.NewSignerFromReader(keyFile)
+	if err != nil {
+		return "", err
+	}
+	signed, err := dsse.Sign(env.PayloadType, bytes.NewReader(payload), dsse.SignWithSigners(signer))
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(signed)
+	if err != nil {
+		return "", err
+	}
+	out := filepath.Join(p.scratch, step+".bad.json")
+	return out, os.WriteFile(out, data, 0o600)
+}

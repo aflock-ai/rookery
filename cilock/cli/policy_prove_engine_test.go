@@ -34,9 +34,11 @@ import (
 // agent, a git repository to record in, a private TMPDIR to check cleanup
 // against, and this test binary standing in for cilock (TestMain).
 type proveEnv struct {
-	repo  string
-	tmp   string
-	draft string
+	repo   string
+	tmp    string
+	draft  string
+	stdout string
+	stderr string
 }
 
 func newProveEnv(t *testing.T, enrolled bool) *proveEnv {

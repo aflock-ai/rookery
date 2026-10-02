@@ -106,9 +106,7 @@ func TestSkillCommandsSendNoTelemetry(t *testing.T) {
 // must exist in the same binary; this list is the one allowed exception and it
 // only shrinks. The test fails once a pending command exists, so the entry is
 // removed in the change that lands it.
-var pendingSkillCommands = map[string]bool{
-	"policy prove": true,
-}
+var pendingSkillCommands = map[string]bool{}
 
 // Every `cilock ...` the skill tells an agent to run resolves to a real
 // command in this binary, and every --flag it spells exists on that command.
