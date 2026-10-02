@@ -4,7 +4,6 @@ go 1.26.3
 
 require (
 	github.com/BobuSumisu/aho-corasick v1.0.3
-	github.com/fatih/semgroup v1.2.0
 	github.com/hashicorp/go-version v1.7.0
 	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/rs/zerolog v1.33.0
@@ -20,6 +19,5 @@ require (
 
 require (
 	github.com/wasilibs/go-re2 v1.9.0
-	golang.org/x/sync v0.11.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect
 )

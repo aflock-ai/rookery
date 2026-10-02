@@ -17,7 +17,6 @@ import (
 	"github.com/zricethezav/gitleaks/v8/report"
 
 	ahocorasick "github.com/BobuSumisu/aho-corasick"
-	"github.com/fatih/semgroup"
 	"github.com/pelletier/go-toml/v2"
 	"github.com/rs/zerolog"
 	"golang.org/x/exp/maps"
@@ -139,9 +138,6 @@ type Detector struct {
 	// gitleaksIgnore
 	gitleaksIgnore map[string]struct{}
 
-	// Sema (https://github.com/fatih/semgroup) controls the concurrency
-	Sema *semgroup.Group
-
 	// report-related settings. The Reporter field upstream was a
 	// report.Reporter interface for streaming findings to CSV/SARIF/JSON
 	// emitters; the slim fork has no Reporter (CLI emit paths deleted),
@@ -158,7 +154,7 @@ func NewDetector(cfg config.Config) *Detector {
 
 // NewDetectorContext is the same as NewDetector but supports passing in a
 // context to use for timeouts
-func NewDetectorContext(ctx context.Context, cfg config.Config) *Detector {
+func NewDetectorContext(_ context.Context, cfg config.Config) *Detector {
 	return &Detector{
 		commitMap:      make(map[string]bool),
 		gitleaksIgnore: make(map[string]struct{}),
@@ -167,7 +163,6 @@ func NewDetectorContext(ctx context.Context, cfg config.Config) *Detector {
 		findings:       make([]report.Finding, 0),
 		Config:         cfg,
 		prefilter:      *ahocorasick.NewTrieBuilder().AddStrings(maps.Keys(cfg.Keywords)).Build(),
-		Sema:           semgroup.NewGroup(ctx, 40),
 	}
 }
 
