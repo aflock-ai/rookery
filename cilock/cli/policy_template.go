@@ -380,7 +380,7 @@ func (p *stepPlan) addAttestors(names []string) error {
 	for _, a := range names {
 		att, ok := attestorByName(a)
 		if !ok {
-			return fmt.Errorf("unknown attestor %q. Next: `cilock policy guide --topic attestors` lists the ones with guidance, and `cilock attestors list` every one this cilock records", a)
+			return templateUnknownAttestorError(a)
 		}
 		p.addType(att.Type)
 		for _, r := range att.Rules {

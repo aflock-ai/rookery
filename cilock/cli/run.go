@@ -908,6 +908,10 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 		if !duplicate {
 			attestor, err := attestation.GetAttestor(a)
 			if err != nil {
+				var notFound attestation.ErrAttestorNotFound
+				if errors.As(err, &notFound) {
+					return attestorNotFoundError(err, ro.Attestations)
+				}
 				return fmt.Errorf("failed to create attestor: %w", err)
 			}
 			attestors = append(attestors, attestor)
