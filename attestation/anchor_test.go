@@ -77,6 +77,22 @@ func TestAnchorRegistryGolden(t *testing.T) {
 			Evidence:      "plugins/attestors/oci/oci.go:468",
 			Since:         "4.5.0",
 		},
+		{
+			Attestor:      "https://aflock.ai/attestations/git/v0.1",
+			Prefix:        "commithash:",
+			Class:         ClassAnchor,
+			Kind:          KindGitCommit,
+			Role:          RoleAbout,
+			Basis:         BasisMeasured,
+			Algorithm:     "sha1",
+			SignedPath:    "$.commithash",
+			Normalization: NormalizationBareHex,
+			Gate:          "the exact hardened git type and $.commithashverified == true",
+			Measurement:   MeasurementGitCommitObject,
+			RecomputeFrom: "predicate",
+			Evidence:      "plugins/attestors/git/git.go:261-288",
+			Since:         "4.5.0",
+		},
 	}
 	got := AnchorRegistryRows()
 	require.Equal(t, want, got)
@@ -88,12 +104,12 @@ func TestAnchorRegistryGolden(t *testing.T) {
 
 func TestAnchorClosedListsGolden(t *testing.T) {
 	assert.Equal(t, []AnchorKind{KindImageRegistryManifest, KindImageConfig, KindGitCommit, KindFileContent}, AnchorKinds())
-	assert.Equal(t, []string{"oci-config-blob"}, AnchorMeasurements(), "L2-1 ships oci-config-blob only")
+	assert.Equal(t, []string{"git-commit-object", "oci-config-blob"}, AnchorMeasurements(), "L2-1 shipped oci-config-blob; D15-3 adds git-commit-object")
 	_, ok := LookupMeasurement("oci-registry-manifest")
 	assert.False(t, ok, "oci-registry-manifest is not a measurement until its own lane")
 
 	assert.Equal(t, []string{
-		"parenthash:", "commithash:", "commitsha:", "commit:",
+		"parenthash:", "commitsha:", "commit:",
 		"pullrequestheadsha:", "pullrequestheadref:", "pullrequest:", "mergecommitsha:", "pipelineurl:",
 		"projecturl:", "joburl:", "jenkinsurl:", "codebuild-", "imagetag:", "imagereference:", "imageref:",
 		"manifestdigest:", "tardigest:", "name:", "version:", "trivy:", "tree:", "remote:", "refnameshort:",

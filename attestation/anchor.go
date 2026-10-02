@@ -404,16 +404,43 @@ func AnchorKinds() []AnchorKind {
 }
 
 // Measurement is a core function from a fixture input artifact to the
-// artifact bytes. The check compares lowercase hex(sha256(bytes)) with the
-// attestor's value, so a measured value is re-derived without the attestor.
+// artifact bytes. The check compares the lowercase hex digest of those bytes,
+// under the row's algorithm, with the attestor's value, so a measured value is
+// re-derived without the attestor. A sha1 git-commit is hashed by the check
+// with the collision-detecting SHA-1, in a module that already carries it.
 type Measurement func(inputPath string) ([]byte, error)
 
 // MeasurementOCIConfigBlob reads the config blob that the first manifest.json
 // entry of a docker-save archive names.
 const MeasurementOCIConfigBlob = "oci-config-blob"
 
+// MeasurementGitCommitObject frames a commit object's content (as `git
+// cat-file commit` prints it) with git's "commit <len>\x00" header: the bytes
+// a git commit id is the digest of (D15, 3.7).
+const MeasurementGitCommitObject = "git-commit-object"
+
 var measurements = map[string]Measurement{
-	MeasurementOCIConfigBlob: measureOCIConfigBlob,
+	MeasurementOCIConfigBlob:   measureOCIConfigBlob,
+	MeasurementGitCommitObject: measureGitCommitObject,
+}
+
+// maxCommitObject bounds a commit object read into memory.
+const maxCommitObject = 16 * 1024 * 1024
+
+func measureGitCommitObject(inputPath string) ([]byte, error) {
+	f, err := os.Open(inputPath) //nolint:gosec // G304: the fixture input the check names
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	content, err := io.ReadAll(io.LimitReader(f, maxCommitObject+1))
+	if err != nil {
+		return nil, fmt.Errorf("git-commit-object: %w", err)
+	}
+	if len(content) == 0 || len(content) > maxCommitObject {
+		return nil, fmt.Errorf("git-commit-object: %d bytes is not a commit object", len(content))
+	}
+	return append([]byte(fmt.Sprintf("commit %d\x00", len(content))), content...), nil
 }
 
 // AnchorMeasurements returns the closed list of measurement names, sorted.
@@ -597,8 +624,10 @@ func AnchorPrefixDenylist() []string {
 
 const prefixTree = "tree:"
 
+// commithash: left this list in D15 (3.7): the hardened git attestor's own
+// measured commit is a git-commit anchor, and only that row may use it.
 var anchorPrefixDenylist = []string{
-	"parenthash:", "commithash:", "commitsha:", "commit:",
+	"parenthash:", "commitsha:", "commit:",
 	"pullrequestheadsha:", "pullrequestheadref:", "pullrequest:", "mergecommitsha:", "pipelineurl:",
 	"projecturl:", "joburl:", "jenkinsurl:", "codebuild-", "imagetag:", "imagereference:", "imageref:",
 	"manifestdigest:", "tardigest:", "name:", "version:", "trivy:", prefixTree, "remote:", "refnameshort:",
@@ -837,18 +866,47 @@ func validateRowPrefix(r AnchorRegistryRow) error {
 	return nil
 }
 
+// hardenedGitType is the git attestation whose commithash is re-hashed with the
+// collision-detecting SHA-1 and marked commithashverified (git.go). It is the
+// only type that may register commithash: (3.5), and its value is the only
+// sha1 any row admits (A3).
+const hardenedGitType = "https://aflock.ai/attestations/git/v0.1"
+
+const prefixCommitHash = "commithash:"
+
 func validateRowIdentity(r AnchorRegistryRow) error {
-	if r.Kind != KindImageRegistryManifest && r.Kind != KindImageConfig {
+	if r.Kind != KindImageRegistryManifest && r.Kind != KindImageConfig && r.Kind != KindGitCommit {
 		return fmt.Errorf("kind %q is not an admitted kind", r.Kind)
 	}
 	if !slices.Contains(kindAlgorithms[r.Kind], r.Algorithm) {
 		return fmt.Errorf("algorithm %q is not admitted for kind %s", r.Algorithm, r.Kind)
+	}
+	// git-commit has exactly one row (3.7): the hardened git attestor's own
+	// measured commit, an anchor of role about. It is A15's one named
+	// exception, never harvested, because a step is about its commit and did
+	// not produce it. commithash: names nothing else.
+	if (r.Kind == KindGitCommit) != (r.Prefix == prefixCommitHash) {
+		return errors.New("commithash: is the git-commit row and nothing else")
+	}
+	if r.Kind == KindGitCommit {
+		return validateCommitRow(r)
 	}
 	if r.Class == ClassAnchor && r.Role != RoleProduced {
 		return errors.New("an anchor row has role produced")
 	}
 	if r.Class == ClassAcceptor && r.Role != RoleAbout {
 		return errors.New("an acceptor row has role about")
+	}
+	return nil
+}
+
+// validateCommitRow checks the one git-commit row (3.7).
+func validateCommitRow(r AnchorRegistryRow) error {
+	if r.Attestor != hardenedGitType {
+		return fmt.Errorf("commithash: may be registered only by the hardened git type %s", hardenedGitType)
+	}
+	if r.Class != ClassAnchor || r.Role != RoleAbout || r.Basis != BasisMeasured || r.Measurement != MeasurementGitCommitObject {
+		return errors.New("the commithash: row is a measured git-commit-object anchor of role about")
 	}
 	return nil
 }

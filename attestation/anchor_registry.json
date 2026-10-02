@@ -30,6 +30,22 @@
       "recompute_from": "https://aflock.ai/attestations/command-run/v0.2",
       "evidence": "plugins/attestors/oci/oci.go:468",
       "since": "4.5.0"
+    },
+    {
+      "attestor": "https://aflock.ai/attestations/git/v0.1",
+      "prefix": "commithash:",
+      "class": "anchor",
+      "kind": "git-commit",
+      "role": "about",
+      "basis": "measured",
+      "algorithm": "sha1",
+      "signed_path": "$.commithash",
+      "normalization": "bare-hex",
+      "gate": "the exact hardened git type and $.commithashverified == true",
+      "measurement": "git-commit-object",
+      "recompute_from": "predicate",
+      "evidence": "plugins/attestors/git/git.go:261-288",
+      "since": "4.5.0"
     }
   ]
 }
