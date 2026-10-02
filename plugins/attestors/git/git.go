@@ -785,6 +785,28 @@ func (a *Attestor) Subjects() map[string]cryptoutil.DigestSet {
 	return subjects
 }
 
+// Anchors returns the collection's own measured commit as a git-commit anchor
+// of role about (D15, docs/design/attestation-anchors.md 3.7): one anchor,
+// only when Attest re-hashed the commit with the collision-detecting SHA-1
+// and set CommitHashVerified, and never a parent (A6). The registry row is
+// sha1, so a sha256 repository's commit has no anchor yet, and a value
+// Canonical refuses is never repaired into one.
+func (a *Attestor) Anchors(attestation.AnchorContext) []attestation.Anchor {
+	if !a.CommitHashVerified {
+		return nil
+	}
+	id, err := attestation.Canonical(attestation.KindGitCommit, a.CommitHash, attestation.NormalizationBareHex)
+	if err != nil || id.Algorithm != attestation.AlgorithmSHA1 {
+		return nil
+	}
+	return []attestation.Anchor{{
+		Key:      "commithash:" + a.CommitHash,
+		Identity: id,
+		Role:     attestation.RoleAbout,
+		Basis:    attestation.BasisMeasured,
+	}}
+}
+
 func (a *Attestor) BackRefs() map[string]cryptoutil.DigestSet {
 	backrefs := make(map[string]cryptoutil.DigestSet)
 
