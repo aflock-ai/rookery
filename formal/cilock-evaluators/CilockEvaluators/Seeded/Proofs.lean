@@ -188,8 +188,12 @@ theorem unreadableRun_false (run : J) (h : unreadableRun run = false) :
     J.eqv (field run "policies" (.arr [])) (.arr []) = true := by
   unfold unreadableRun at h
   simp only [Bool.or_eq_false_iff, Bool.not_eq_false', List.any_eq_false, Bool.not_eq_true'] at h
-  refine ⟨h.1.1.1.1, h.1.1.1.2, h.1.1.2, fun inv hi => ?_, h.2⟩
-  simpa using h.1.2 inv hi
+  refine ⟨h.1.1.1.1, h.1.1.1.2, ?_, fun inv hi => ?_, h.2⟩
+  · have hu := h.1.1.2
+    unfold unfinishedInvocations at hu
+    simp only [Bool.or_eq_false_iff, Bool.not_eq_false'] at hu
+    exact hu.1
+  · simpa using h.1.2 inv hi
 
 /-- sarif: an admitted result has an explicit level, or a default level, only
     from SARIF's enum (Codex round 1 on #10194: a level of 42 read as a
