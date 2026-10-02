@@ -301,18 +301,17 @@ func TestSecurity_R3_208_URLValidationAtRequestTime(t *testing.T) {
 	assert.Contains(t, err.Error(), "HTTPS")
 }
 
-// TestSecurity_R3_209_TimestampNilReaderPanic proves that Timestamp() panics
-// when given a nil io.Reader. The nil is passed directly to
-// timestamp.CreateRequest which dereferences it without nil check.
-//
-// BUG [HIGH]: tsp.go:97 — nil io.Reader causes panic in timestamp.CreateRequest.
+// TestSecurity_R3_209_TimestampNilReaderPanic: Timestamp() given a nil
+// io.Reader. It used to panic in timestamp.CreateRequest; Timestamp now returns an error.
 func TestSecurity_R3_209_TimestampNilReaderPanic(t *testing.T) {
 	ts := NewTimestamper(TimestampWithUrl("https://example.com/ts"))
 
-	assert.Panics(t, func() {
-		_, _ = ts.Timestamp(context.Background(), nil)
-	}, "BUG [HIGH]: Timestamp() panics on nil reader instead of returning error. "+
-		"File: tsp.go:97 -> timestamp.CreateRequest dereferences nil io.Reader")
+	// Fixed: Timestamp refuses a nil reader with an error before hashing.
+	var err error
+	assert.NotPanics(t, func() {
+		_, err = ts.Timestamp(context.Background(), nil)
+	}, "Timestamp() must not panic on a nil reader")
+	assert.Error(t, err, "Timestamp() must refuse a nil reader")
 }
 
 // TestSecurity_R3_210_VerifyNilCertChainError proves that the nil cert chain

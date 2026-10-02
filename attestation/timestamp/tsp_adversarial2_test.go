@@ -190,18 +190,17 @@ func TestAdversarial_URLValidation_HappensAtRequestTime(t *testing.T) {
 
 // TestAdversarial_Timestamp_NilReader tests Timestamp with a nil reader.
 //
-// BUG [HIGH]: Timestamp() panics with nil reader. The nil io.Reader is
-// passed to timestamp.CreateRequest which dereferences it without a nil
-// check. This is a crash bug if callers forget to validate their reader.
-// File: tsp.go:97, called with r=nil -> timestamp.CreateRequest panics.
+// It used to panic: the nil io.Reader reached timestamp.CreateRequest, which
+// dereferenced it. Timestamp now refuses it with an error.
 func TestAdversarial_Timestamp_NilReader(t *testing.T) {
 	ts := NewTimestamper(TimestampWithUrl("https://example.com/ts"))
 
-	// Confirmed: nil reader causes a panic in timestamp.CreateRequest.
-	assert.Panics(t, func() {
-		_, _ = ts.Timestamp(context.Background(), nil)
-	}, "BUG [HIGH]: Timestamp() panics on nil reader instead of returning error. "+
-		"File: tsp.go:97 -> timestamp.CreateRequest dereferences nil io.Reader")
+	// Fixed: Timestamp refuses a nil reader with an error before hashing.
+	var err error
+	assert.NotPanics(t, func() {
+		_, err = ts.Timestamp(context.Background(), nil)
+	}, "Timestamp() must not panic on a nil reader")
+	assert.Error(t, err, "Timestamp() must refuse a nil reader")
 }
 
 // TestAdversarial_Timestamp_EmptyReader tests Timestamp with an empty reader.

@@ -18,9 +18,11 @@ import (
 	"bytes"
 	"context"
 	"crypto"
+	"crypto/rand"
 	"crypto/x509"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/url"
@@ -114,10 +116,30 @@ func (t TSPTimestamper) Timestamp(ctx context.Context, r io.Reader) ([]byte, err
 		return nil, err
 	}
 
-	tsq, err := timestamp.CreateRequest(r, &timestamp.RequestOptions{
-		Hash:         t.hash,
-		Certificates: t.requestCertificate,
-	})
+	if r == nil {
+		return nil, fmt.Errorf("timestamp: nil data reader")
+	}
+	if !t.hash.Available() {
+		return nil, fmt.Errorf("timestamp: unavailable hash algorithm %v", t.hash)
+	}
+	// Hash here rather than in timestamp.CreateRequest: the requester must keep
+	// the imprint it asked for so it can compare the response against it, and
+	// CreateRequest's read loop stops only at io.EOF, so a reader that keeps
+	// failing with any other error would spin forever.
+	imprint, err := cryptoutil.Digest(r, t.hash)
+	if err != nil {
+		return nil, fmt.Errorf("timestamp: hash data: %w", err)
+	}
+	nonce, err := newRequestNonce()
+	if err != nil {
+		return nil, err
+	}
+	tsq, err := (&timestamp.Request{
+		HashAlgorithm: t.hash,
+		HashedMessage: imprint,
+		Certificates:  t.requestCertificate,
+		Nonce:         nonce,
+	}).Marshal()
 	if err != nil {
 		return nil, err
 	}
@@ -151,12 +173,70 @@ func (t TSPTimestamper) Timestamp(ctx context.Context, r io.Reader) ([]byte, err
 		return nil, err
 	}
 
-	timestamp, err := timestamp.ParseResponse(bodyBytes)
+	// ParseResponse rejects a PKIStatus other than granted (0) and verifies the
+	// token's CMS signature against its embedded certificate.
+	tst, err := timestamp.ParseResponse(bodyBytes)
 	if err != nil {
 		return nil, err
 	}
+	if err := checkResponseMatchesRequest(tst, t.hash, imprint, nonce); err != nil {
+		return nil, err
+	}
 
-	return timestamp.RawToken, nil
+	return tst.RawToken, nil
+}
+
+// requestNonceBits is the nonce size. RFC 3161 §2.4.1 asks for "a large
+// random number with a high probability that the client generates it only
+// once (e.g., a 64 bit integer)"; 128 bits leaves no birthday concern.
+const requestNonceBits = 128
+
+// newRequestNonce draws a fresh positive nonce from crypto/rand. A nonce of
+// zero is redrawn: zero is a legal INTEGER but is what a TSA that ignores the
+// field and zero-fills it would echo.
+func newRequestNonce() (*big.Int, error) {
+	limit := new(big.Int).Lsh(big.NewInt(1), requestNonceBits)
+	for {
+		n, err := rand.Int(rand.Reader, limit)
+		if err != nil {
+			return nil, fmt.Errorf("timestamp: draw request nonce: %w", err)
+		}
+		if n.Sign() > 0 {
+			return n, nil
+		}
+	}
+}
+
+// checkResponseMatchesRequest binds a TSA response to the request that asked
+// for it. RFC 3161 §2.4.2 (TSTInfo.nonce): "The nonce field MUST be present if
+// it was present in the TimeStampReq. In such a case it MUST equal the value
+// provided in the TimeStampReq structure." RFC 3161 §2.4.1: "the same nonce
+// value MUST be included in the response, otherwise the response shall be
+// rejected." RFC 3161 §2.2: the requester "SHALL verify that what was
+// time-stamped corresponds to what was requested to be time-stamped. The
+// requester SHALL verify that the TimeStampToken contains the correct
+// certificate identifier of the TSA, the correct data imprint and the correct
+// hash algorithm OID." (The certificate identifier is checked against trusted
+// roots by TSPVerifier.Verify; the requester holds no roots.)
+//
+// The imprint check is not redundant with TSPVerifier.Verify: that runs at
+// policy-verification time against the payload, long after a token for some
+// other datum has already been embedded in a signed envelope. Refusing here
+// keeps a replayed or misrouted token from being minted into evidence at all.
+func checkResponseMatchesRequest(tst *timestamp.Timestamp, hash crypto.Hash, imprint []byte, nonce *big.Int) error {
+	if tst.HashAlgorithm != hash {
+		return fmt.Errorf("timestamp response hash algorithm %v does not match the requested %v", tst.HashAlgorithm, hash)
+	}
+	if !bytes.Equal(tst.HashedMessage, imprint) {
+		return fmt.Errorf("timestamp response message imprint does not match the requested data")
+	}
+	if tst.Nonce == nil {
+		return fmt.Errorf("timestamp response omits the request nonce (RFC 3161 section 2.4.2)")
+	}
+	if tst.Nonce.Cmp(nonce) != 0 {
+		return fmt.Errorf("timestamp response nonce does not match the request nonce")
+	}
+	return nil
 }
 
 type TSPVerifier struct {
