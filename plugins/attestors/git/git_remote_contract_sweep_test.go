@@ -332,7 +332,7 @@ func TestRemoteContractHoldsAcrossTheGrammarCrossProduct(t *testing.T) {
 					// an ordinary path MUST be recorded.
 					if (cred == "" || cred == "git@") && path == "/acme/api.git" {
 						recordableControls++
-						require.Truef(t, verdict.recordable(),
+						require.Truef(t, verdict.Recordable(),
 							"refused a credential-free remote with an ordinary path: %q (reason %q)", in, reason)
 					}
 				}
@@ -627,7 +627,7 @@ func TestEveryRefusedRemoteIsCounted(t *testing.T) {
 					swept++
 					in := buildContractRemote(scheme, cred, host, path)
 					verdict, _, reason := recordRemote(in)
-					if verdict.recordable() {
+					if verdict.Recordable() {
 						continue
 					}
 					// Every refusal contributes exactly one to exactly one

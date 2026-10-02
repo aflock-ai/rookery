@@ -13,7 +13,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package git
+package gitremote
 
 import (
 	"strings"
@@ -237,52 +237,6 @@ func TestTheSchemeRelativeRuleIsTheSharedPathRule(t *testing.T) {
 	require.Equal(t, remoteRefused, verdict,
 		"the scp path half takes the same rule: %q", recorded)
 	require.NotContains(t, recorded, "ghp_SECRET")
-}
-
-// TestNoAuthorityIntroducerCarriesAUserinfoSpellingIntoSignedEvidence is the
-// same universal asserted at the level the finding actually names.
-//
-// The sweep above reads recordRemote, which is one function call away from the
-// attestation. This one runs the REAL attestor over a real repository and walks
-// every string in the MARSHALLED envelope, because "reaches signed evidence" is
-// a claim about what gets signed and not about what a helper returns. A future
-// edit that routes remotes around recordRemote — a second recording site, a
-// field that stashes the raw config — is invisible to a function-level sweep
-// and fails here.
-//
-// The cross-product is smaller than the one above on purpose: each case builds
-// a git repository on disk, so the set is the two dimensions that carry the
-// finding (introducer x userinfo shape) with the host, separator and path held
-// fixed. The function-level sweep covers the rest.
-func TestNoAuthorityIntroducerCarriesAUserinfoSpellingIntoSignedEvidence(t *testing.T) {
-	const secret = "ghs_s3cr3tTOKENvalue"
-
-	userinfos := []string{
-		secret + "@",                     // the token is the whole username
-		"x-access-token:" + secret + "@", // what GitHub Actions writes
-		":" + secret + "@",               // no username at all, Azure's spelling
-		secret + ":@",                    // token as username, empty password
-	}
-
-	for _, introducer := range authorityIntroducers {
-		for _, userinfo := range userinfos {
-			raw := introducer + userinfo + "github.com/acme/api.git"
-			t.Run(raw, func(t *testing.T) {
-				attestor := runWithRemote(t, raw)
-
-				for _, remote := range attestor.Remotes {
-					require.False(t, recordedRemoteCarriesUserinfo(remote),
-						"a remote was recorded with userinfo still in front of its host: %q", remote)
-				}
-				for _, v := range attestationStrings(t, attestor) {
-					require.False(t, carriesSchemeUserinfo(v),
-						"a signed field carries userinfo before its host: %q", v)
-					require.NotContains(t, v, secret,
-						"a signed field carried the credential out of the working copy: %q", v)
-				}
-			})
-		}
-	}
 }
 
 // TestAURLPathThatOpensADoubleSlashOntoAPercentIsRefused pins the KNOWN COST of

@@ -1,6 +1,6 @@
 // jade:ring local
 
-package git
+package gitremote
 
 // redactRemoteURL is the TWO-VALUED VIEW of recordRemote, and it lives in a
 // test file because production no longer has a two-valued contract.
