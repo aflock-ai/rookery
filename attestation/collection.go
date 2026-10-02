@@ -15,10 +15,14 @@
 package attestation
 
 import (
+	"context"
 	"crypto"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -67,6 +71,37 @@ func (c FailureClass) valid() bool {
 		return true
 	}
 	return false
+}
+
+// AttestorPanicError is an attestor that panicked. The run recovers it and
+// records the attestor as a crash.
+type AttestorPanicError struct {
+	Attestor string
+	Value    any
+}
+
+func (e AttestorPanicError) Error() string {
+	return fmt.Sprintf("attestor %s panicked: %v", e.Attestor, e.Value)
+}
+
+// ClassifyFailure maps an attestor's error to its fixed failure class. Only
+// the class is recorded, never the error's text.
+func ClassifyFailure(err error) FailureClass {
+	var soft SoftError
+	var crash AttestorPanicError
+	switch {
+	case errors.As(err, &crash):
+		return FailureCrash
+	case errors.As(err, &soft):
+		return FailureNoInput
+	case errors.Is(err, context.DeadlineExceeded) || errors.Is(err, os.ErrDeadlineExceeded):
+		return FailureTimeout
+	case errors.Is(err, fs.ErrNotExist) || errors.Is(err, exec.ErrNotFound):
+		return FailureNotFound
+	case errors.Is(err, fs.ErrPermission):
+		return FailurePermission
+	}
+	return FailureOther
 }
 
 // FailedAttestor records that an attestor was attempted and failed. It is

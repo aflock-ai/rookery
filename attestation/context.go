@@ -402,7 +402,7 @@ func (ctx *AttestationContext) runAttestor(attestor Attestor) {
 	err := func() (retErr error) {
 		defer func() {
 			if r := recover(); r != nil {
-				retErr = fmt.Errorf("attestor %s panicked: %v", attestor.Name(), r)
+				retErr = AttestorPanicError{Attestor: attestor.Name(), Value: r}
 			}
 		}()
 		return attestor.Attest(ctx)

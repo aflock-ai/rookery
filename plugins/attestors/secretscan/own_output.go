@@ -411,7 +411,7 @@ func isCollectionEnvelopeJSON(b []byte) bool {
 	if err := json.Unmarshal(payload, &stmt); err != nil {
 		return false
 	}
-	return stmt.PredicateType == attestation.CollectionType || stmt.PredicateType == attestation.LegacyCollectionType
+	return attestation.IsCollectionType(stmt.PredicateType)
 }
 
 // changedProductHint says why a product most likely changed between the

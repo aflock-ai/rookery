@@ -477,6 +477,15 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 
 	var collectionResult RunResult
 	collectionResult.Collection = attestation.NewCollection(ro.stepName, attestorsForCollection)
+	// An attestor whose evidence is not recordable is still named, with its
+	// failure class, so a verifier can tell "attempted and failed" from
+	// "never ran" (#10618). Such a collection is v0.2; one with no failure
+	// signs v0.1 exactly as before.
+	collectionResult.Collection.FailedAttestors = failedAttestors(runCtx.CompletedAttestors())
+	collectionType := attestation.CollectionType
+	if len(collectionResult.Collection.FailedAttestors) > 0 {
+		collectionType = attestation.CollectionTypeV02
+	}
 	// Merge user-supplied subjects into the collection's in-toto subject set.
 	// User entries take precedence on key collision so an explicit override is
 	// honoured deterministically. The merge runs for both signed and insecure
@@ -484,7 +493,7 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	// CollectionSubjects see the same set the signed path would have used.
 	collectionResult.CollectionSubjects = mergeCollectionSubjects(collectionResult.Collection.Subjects(), ro.additionalSubjects)
 	if !ro.insecure {
-		collectionResult.SignedEnvelope, err = createAndSignEnvelope(collectionResult.Collection, attestation.CollectionType, collectionResult.CollectionSubjects, ro.leadingSubjects(), ro.maxStatementBytes, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
+		collectionResult.SignedEnvelope, err = createAndSignEnvelope(collectionResult.Collection, collectionType, collectionResult.CollectionSubjects, ro.leadingSubjects(), ro.maxStatementBytes, dsse.SignWithSigners(ro.signers...), dsse.SignWithTimestampers(ro.timestampers...))
 		if err != nil {
 			return result, fmt.Errorf("failed to sign collection: %w", err)
 		}
@@ -559,6 +568,29 @@ func checkBeforeSigning(runCtx *attestation.AttestationContext) error {
 // own tests can assert against the real predicate rather than a copy of it.
 func evidenceIsRecordable(err error) bool {
 	return attestation.EvidenceIsRecordable(err)
+}
+
+// failedAttestors names each attestor whose evidence was not recordable, by
+// name and failure class only, sorted by name with one record per name.
+func failedAttestors(completed []attestation.CompletedAttestor) []attestation.FailedAttestor {
+	byName := make(map[string]attestation.FailureClass)
+	for _, c := range completed {
+		if evidenceIsRecordable(c.Error) {
+			continue
+		}
+		if _, seen := byName[c.Attestor.Name()]; !seen {
+			byName[c.Attestor.Name()] = attestation.ClassifyFailure(c.Error)
+		}
+	}
+	out := make([]attestation.FailedAttestor, 0, len(byName))
+	for name, class := range byName {
+		out = append(out, attestation.FailedAttestor{Name: name, Class: class})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func collectParentSubjects(runCtx *attestation.AttestationContext, additional map[string]cryptoutil.DigestSet) map[string]cryptoutil.DigestSet {
