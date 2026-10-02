@@ -43,12 +43,15 @@ import (
 // seconds needs a ceiling in the low single-digit MB, and 4 MiB sits there with
 // the parse cost of a full commit's worth of envelopes around two seconds.
 //
-// The edge has 4 MiB constants of its own (jade/factory/edge/git/bodylimit.go),
-// but do NOT read this limit as matching them: that file's 4 MiB is
-// maxPrefixBytes, the git push PREFIX (ref-update section, push certificate,
-// push-options), and its whole-body cap is 16 MiB. Neither bounds an envelope.
-// The agreement of the numbers is a coincidence, and an earlier draft of this
-// comment claimed the alignment as a justification, which was wrong.
+// The edge also reads envelopes under a 4 MiB cap of its own
+// (maxEnvelopeBytes in jade/factory/edge/git/bodylimit.go, mirrored by
+// MAX_RESPONSE_BYTES in evidence.js), but the two are NOT the same quantity:
+// this limit is on the STATEMENT, the edge cap is on the base64 ENVELOPE, which
+// is about 4/3 larger plus signatures. A statement between roughly 3 and 4 MiB
+// is signed and uploaded here yet exceeds what the edge fallback can read; the
+// upload size advice (attestation/archivista/size_advice.go) says so at 4 MiB of
+// envelope. The edge copies are held to one number by
+// jade/factory/edge/git/envelopecaps_test.go (#9084).
 //
 // Headroom, measured the same day so the number is not defended by assertion: a
 // real push-tests mint of the Judge repo (-a git -a alps-evidence, product
