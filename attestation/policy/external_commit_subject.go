@@ -188,7 +188,7 @@ func externalOwnSubjects(ext ExternalAttestation, payload []byte) ([]externalSta
 		return nil, false
 	}
 	if stmt.PredicateType != ext.PredicateType ||
-		stmt.PredicateType == attestation.CollectionType || stmt.PredicateType == attestation.LegacyCollectionType {
+		attestation.IsCollectionType(stmt.PredicateType) {
 		return nil, false
 	}
 	return stmt.Subject, true

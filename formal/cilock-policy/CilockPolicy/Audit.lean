@@ -78,6 +78,8 @@ namespace CilockPolicy
 #print axioms TrustCounterexamples.timestamp_after_expiry_passes
 #print axioms LinkingCounterexamples.l2_algorithm_label_compared
 #print axioms LinkingCounterexamples.l4_backref_not_followed
+#print axioms LinkingCounterexamples.failed_records_irrelevant
+#print axioms LinkingCounterexamples.failed_record_denies_like_omission
 #print axioms LinkingCounterexamples.v6_untracked_material
 #print axioms LinkingCounterexamples.v6_overlap_not_allowed
 #print axioms LinkingCounterexamples.v6_re2_grammar

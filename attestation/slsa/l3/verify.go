@@ -88,7 +88,7 @@ func signerCert(env dsse.Envelope, trusts []Trust) (Root, *x509.Certificate, err
 }
 
 func isCollectionType(t string) bool {
-	return t == attestation.CollectionType || t == attestation.LegacyCollectionType
+	return attestation.IsCollectionType(t)
 }
 
 // gather verifies every envelope and sorts the usable ones into provenance

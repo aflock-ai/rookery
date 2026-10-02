@@ -485,7 +485,7 @@ func (e ExternalAttestation) ValidateCommitSubject() error {
 	if err := cryptoutil.ValidateCommitSubjectPrefix(e.CommitSubject); err != nil {
 		return err
 	}
-	if e.PredicateType == attestation.CollectionType || e.PredicateType == attestation.LegacyCollectionType {
+	if attestation.IsCollectionType(e.PredicateType) {
 		return fmt.Errorf("commitSubject does not apply to predicateType %s: an attestation collection binds its commit through a hardened git attestation", e.PredicateType)
 	}
 	return nil
@@ -2240,10 +2240,15 @@ func (step Step) triageOne(statement source.CollectionVerificationResult, trustB
 	// A statement with the wrong predicate type must be rejected and must
 	// NOT proceed to functionary validation — otherwise it could appear in
 	// both the Passed and Rejected lists.
-	if statement.Statement.PredicateType != attestation.CollectionType && statement.Statement.PredicateType != attestation.LegacyCollectionType {
-		log.Debugf("policy: rejecting collection ref=%s: predicateType=%q (expected %q or %q), payload len=%d, errors=%v",
-			statement.Reference, statement.Statement.PredicateType, attestation.CollectionType, attestation.LegacyCollectionType, len(statement.Envelope.Payload), statement.Errors)
+	if !attestation.IsCollectionType(statement.Statement.PredicateType) {
+		log.Debugf("policy: rejecting collection ref=%s: predicateType=%q (expected %q, %q or %q), payload len=%d, errors=%v",
+			statement.Reference, statement.Statement.PredicateType, attestation.CollectionType, attestation.CollectionTypeV02, attestation.LegacyCollectionType, len(statement.Envelope.Payload), statement.Errors)
 		return statement, &RejectedCollection{Collection: compactRejected(statement), Reason: fmt.Errorf("predicate type %v is not a collection predicate type", statement.Statement.PredicateType)}
+	}
+	// A v0.1 collection must mean what it always meant, and a v0.2 failure
+	// record must stay a name and a fixed class (#10618).
+	if err := statement.Collection.ValidateFailedAttestors(statement.Statement.PredicateType); err != nil {
+		return statement, &RejectedCollection{Collection: compactRejected(statement), Reason: err}
 	}
 
 	if len(statement.Verifiers) == 0 {

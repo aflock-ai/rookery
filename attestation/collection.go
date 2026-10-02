@@ -30,6 +30,80 @@ import (
 const CollectionType = "https://aflock.ai/attestation-collection/v0.1"
 const LegacyCollectionType = "https://witness.testifysec.com/attestation-collection/v0.1"
 
+// CollectionTypeV02 is a collection that may also record the attestors that
+// were attempted and failed (FailedAttestors, #10618). Everything a v0.1
+// collection says, a v0.2 collection says the same way.
+const CollectionTypeV02 = "https://aflock.ai/attestation-collection/v0.2"
+
+// IsCollectionType reports whether a statement's predicateType is an
+// attestation collection of any version this verifier understands.
+func IsCollectionType(predicateType string) bool {
+	return predicateType == CollectionType || predicateType == LegacyCollectionType || predicateType == CollectionTypeV02
+}
+
+// FailureClass is the fixed vocabulary a failed attestor is recorded under.
+// The error text itself is never recorded: it can carry paths, environment
+// and tool output (Cole, 2026-10-01, #10618).
+type FailureClass string
+
+const (
+	// FailureNoInput: the attestor ran and had nothing to attest (SoftError).
+	FailureNoInput FailureClass = "no-input"
+	// FailureTimeout: the attestor's deadline or the run's context expired.
+	FailureTimeout FailureClass = "timeout"
+	// FailureNotFound: a file, binary or remote object it needed was absent.
+	FailureNotFound FailureClass = "not-found"
+	// FailurePermission: the attestor was denied access.
+	FailurePermission FailureClass = "permission"
+	// FailureCrash: the attestor panicked.
+	FailureCrash FailureClass = "crash"
+	// FailureOther: any failure the classes above do not name.
+	FailureOther FailureClass = "other"
+)
+
+func (c FailureClass) valid() bool {
+	switch c {
+	case FailureNoInput, FailureTimeout, FailureNotFound, FailurePermission, FailureCrash, FailureOther:
+		return true
+	}
+	return false
+}
+
+// FailedAttestor records that an attestor was attempted and failed. It is
+// never evidence: it satisfies no required attestation type and contributes
+// no subjects, materials, products or backrefs.
+type FailedAttestor struct {
+	Name  string       `json:"name"`
+	Class FailureClass `json:"class"`
+}
+
+// ValidateFailedAttestors refuses records a collection of predicateType may
+// not carry: any record on a v0.1 (or legacy) collection, which must mean
+// what it always meant, and on v0.2 a record with no name, a repeated name,
+// or a class outside the fixed vocabulary.
+func (c *Collection) ValidateFailedAttestors(predicateType string) error {
+	if len(c.FailedAttestors) == 0 {
+		return nil
+	}
+	if predicateType != CollectionTypeV02 {
+		return fmt.Errorf("collection of type %s carries failedattestors, which only %s may record", predicateType, CollectionTypeV02)
+	}
+	seen := make(map[string]struct{}, len(c.FailedAttestors))
+	for _, f := range c.FailedAttestors {
+		if f.Name == "" {
+			return errors.New("failedattestors: a record has no attestor name")
+		}
+		if _, dup := seen[f.Name]; dup {
+			return fmt.Errorf("failedattestors: attestor %q is recorded twice", f.Name)
+		}
+		seen[f.Name] = struct{}{}
+		if !f.Class.valid() {
+			return fmt.Errorf("failedattestors: attestor %q has unknown failure class %q", f.Name, f.Class)
+		}
+	}
+	return nil
+}
+
 type Collection struct {
 	Name         string                  `json:"name"`
 	Attestations []CollectionAttestation `json:"attestations"`
@@ -43,6 +117,9 @@ type Collection struct {
 	// Nil on collections serialized before this field existed; BackRefs()
 	// falls back to live aggregation for those.
 	RecordedBackRefs map[string]cryptoutil.DigestSet `json:"backrefs,omitempty"`
+	// FailedAttestors names the attestors that were attempted and failed,
+	// each with a fixed failure class (v0.2 only, #10618). Never evidence.
+	FailedAttestors []FailedAttestor `json:"failedattestors,omitempty"`
 }
 
 type CollectionAttestation struct {

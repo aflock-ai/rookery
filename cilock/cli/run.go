@@ -1422,7 +1422,7 @@ func persistRunResults(ctx context.Context, ro *options.RunOptions, results []wo
 			if err := saveRunEnvelope(result.SignedEnvelope, paths[i], compact || len(inventories) > 0, ro.OutputJSON()); err != nil {
 				return err
 			}
-			if statements[i].PredicateType == attestation.CollectionType {
+			if attestation.IsCollectionType(statements[i].PredicateType) {
 				summary.OutFile = paths[i]
 			}
 		}
@@ -1444,7 +1444,7 @@ func persistRunResults(ctx context.Context, ro *options.RunOptions, results []wo
 		log.Infof("Stored in archivista as %q", gitoid)
 		if modern {
 			summary.Inventories[j].Uploaded, summary.Inventories[j].Gitoid = true, gitoid
-		} else if statements[i].PredicateType == attestation.CollectionType {
+		} else if attestation.IsCollectionType(statements[i].PredicateType) {
 			summary.Uploaded, summary.Gitoid = true, gitoid
 			for j := range summary.Inventories {
 				if summary.Inventories[j].State == "inline" {

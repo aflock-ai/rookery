@@ -259,6 +259,9 @@ func describeIneligibleCollection(cvr source.CollectionVerificationResult, suppl
 		has = append(has, shortAttestationType(att.Type))
 	}
 	desc := IneligibleCollection{Reference: cvr.Reference, PresentAttestations: has}
+	for _, f := range cvr.Collection.FailedAttestors {
+		desc.FailedAttestors = append(desc.FailedAttestors, fmt.Sprintf("%s (%s)", f.Name, f.Class))
+	}
 	for _, req := range required {
 		if _, ok := present[req]; !ok {
 			desc.MissingAttestations = append(desc.MissingAttestations, req)

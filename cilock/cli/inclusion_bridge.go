@@ -119,8 +119,8 @@ func expandSubjectsWithInventoryLookup(subjects []cryptoutil.DigestSet, envelope
 		if err := json.Unmarshal(env.Payload, &stmt); err != nil {
 			continue
 		}
-		switch stmt.PredicateType {
-		case collectionPredicateType:
+		switch {
+		case attestation.IsCollectionType(stmt.PredicateType):
 			var coll struct {
 				Attestations []struct {
 					Type        string          `json:"type"`
@@ -213,7 +213,7 @@ func expandSubjectsWithInventoryLookup(subjects []cryptoutil.DigestSet, envelope
 					commitments = append(commitments, tc)
 				}
 			}
-		case inclusionproof.Type:
+		case stmt.PredicateType == inclusionproof.Type:
 			var p inclusionproof.Attestor
 			if err := json.Unmarshal(stmt.Predicate, &p); err != nil {
 				continue

@@ -96,7 +96,7 @@ func (ce CollectionEnvelope) SubjectMatchScope() cryptoutil.SubjectMatchScope {
 // matchable. Read from the SIGNED statement's predicateType, never inferred from
 // the predicate body — the body is what an attacker shapes.
 func isCollectionPredicateType(predicateType string) bool {
-	return predicateType == attestation.CollectionType || predicateType == attestation.LegacyCollectionType
+	return attestation.IsCollectionType(predicateType)
 }
 
 // StreamingSourcer is an optional extension of Sourcer: it yields matching

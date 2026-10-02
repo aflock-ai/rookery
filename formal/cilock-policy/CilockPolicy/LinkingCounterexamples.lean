@@ -59,6 +59,36 @@ theorem l4_backrefs_irrelevant (h : Hardening) (p : Policy) (o : Options) (s : S
     edgeOk o { e.payload with backRefs := b } u = edgeOk o e.payload u :=
   ⟨rfl, rfl, rfl⟩
 
+/-! ## #10618: a recorded failure is never evidence -/
+
+/-- No per-collection decision reads a v0.2 collection's failure records, so
+    recording that an attestor failed can neither satisfy a step nor change
+    any other outcome. (Rego sees attestors and input.steps collections, not
+    the records, as for BackRefs above.) -/
+theorem failed_records_irrelevant (h : Hardening) (p : Policy) (o : Options) (s : Step) (e : Envelope)
+    (rego : Rego) (ctx : Ctx) (u : Collection) (f : List FailedRecord) :
+    authorized h p o s { e with payload := { e.payload with failed := f } } = authorized h p o s e ∧
+    gate rego o s ctx { e.payload with failed := f } = gate rego o s ctx e.payload ∧
+    edgeOk o { e.payload with failed := f } u = edgeOk o e.payload u :=
+  ⟨rfl, rfl, rfl⟩
+
+/-- The collection a run signs when the attestor producing `attT` failed: it
+    carries another attestor, and on v0.2 a record that `attT`'s attestor was
+    attempted. -/
+def withoutAttT : Collection := { coll "build" with attestors := [⟨"other", 0, none⟩] }
+def failedOmitted : Envelope := env "o" withoutAttT
+def failedRecorded : Envelope :=
+  env "r" { withoutAttT with predicateType := "https://aflock.ai/attestation-collection/v0.2",
+                             failed := [⟨"att", "no-input"⟩] }
+
+/-- A policy requiring `attT` denies the recorded failure exactly as it denies
+    the omission: the record does not stand in for the attestation. -/
+theorem failed_record_denies_like_omission :
+    verifyFixed rego regoExt .enforce one opts [failedRecorded] = false ∧
+    verifyFixed rego regoExt .enforce one opts [failedOmitted] = false ∧
+    verifyFixed rego regoExt .enforce one opts [env "g" (coll "build")] = true := by
+  decide
+
 /-! ## V6: AllowedUntracked (testifysec/judge#9815, enforced since #9862) -/
 
 def srcStep : Step := step "source"

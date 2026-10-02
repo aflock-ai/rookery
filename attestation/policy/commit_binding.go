@@ -319,7 +319,7 @@ func externalCommitHashes(env source.StatementEnvelope) []string {
 	if err := json.Unmarshal(payload, &stmt); err != nil {
 		return nil
 	}
-	if stmt.PredicateType != attestation.CollectionType && stmt.PredicateType != attestation.LegacyCollectionType {
+	if !attestation.IsCollectionType(stmt.PredicateType) {
 		return nil
 	}
 	return signedCommitHashes(payload)

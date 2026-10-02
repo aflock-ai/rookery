@@ -101,12 +101,25 @@ structure Attestor where
   commitHash : Option String
 deriving DecidableEq, Repr
 
+/-- A failed-attestor record: the attestor's name and a fixed failure class.
+    No error text is recorded (#10618). -/
+structure FailedRecord where
+  name : String
+  cls  : String
+deriving DecidableEq, Repr
+
 /-- The signed collection predicate (attestation.Collection) plus the facts the
     engine reads off its statement. -/
 structure Collection where
   name           : String
-  /-- predicateType is the collection type (`policy.go`).
-  -- cite: attestation/policy/policy.go:2223 sha256:40966cb8a742b836ec622532156befb4a32d4ed1debbb886daf32272a004bafe
+  /-- predicateType is a collection type (v0.1, legacy or v0.2) and the
+  collection's failure records are admissible for it: none on v0.1, and on
+  v0.2 each a unique name with a fixed class (`policy.go`, `collection.go`,
+  #10618).
+  -- cite: attestation/policy/policy.go:2243 sha256:32acc744c41c20007bb510aceb723618e41c7cf67bc73a21152263978af7fcbc
+  -- cite: attestation/policy/policy.go:2250-2252 sha256:d72ba5dba4f28675f9f4227f709a9efc4a731c5673b16b448ebd71fe489b6108
+  -- cite: attestation/collection.go:40-42 sha256:b36bf1121f719aef5b9b289b1719ba03c79513799cb999d5cef6b2efaa67fa3b
+  -- cite: attestation/collection.go:84-105 sha256:f28e64d8c4aa2a6965e06c09f0288fdf7e292f693d92687722e92f9b835685df
   -/
   isCollection   : Bool
   predicateType  : String
@@ -124,6 +137,12 @@ structure Collection where
   -- cite: attestation/policy/policy.go:977-982 sha256:02729af599c32c78c149bc44223b5c85ab327eaf880015995a092724246ced22
   -/
   backRefs       : List Digest
+  /-- The attestors a v0.2 collection records as attempted and failed, by
+  name and fixed class (`collection.go`, #10618). Never evidence: nothing in
+  the engine reads them.
+  -- cite: attestation/collection.go:122 sha256:4d352b5100ca8b62c7466452a6989d5457d94e7f0a9c33d17fe17f3fe90bdb9c
+  -/
+  failed         : List FailedRecord := []
 deriving DecidableEq, Repr
 
 /-- A DSSE envelope as a source returns it. `ref` is source-provided

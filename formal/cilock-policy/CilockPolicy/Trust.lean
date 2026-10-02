@@ -282,7 +282,7 @@ def tscOk (tsc : Option TsConstraint) (times : List Time) (now : Time) : Bool :=
       c.maxAge.all fun m => decide (e ≤ now + maxClockSkew) && decide (now - e ≤ m)
 
 /-! ## Functionary triage (`policy.go`)
-  -- cite: attestation/policy/policy.go:2174-2264 sha256:6ad551cd73674d984aedc1755a5fb4b29e5e835f5e5d6f10fef7e2147ea92f5d
+  -- cite: attestation/policy/policy.go:2174-2269 sha256:ca2b3ee27a663d31432e679d359ba069d4e8aede5fbb4325b5ff868fbdb0c141
   -- cite: attestation/policy/tsa_time.go:36-50 sha256:1fc88b3a0d1ac34db8a3f50cf1444e7b6d565790a3c3a2156bc805ac9c2dd9a5
 -/
 
@@ -291,7 +291,8 @@ def validFunctionaries (h : Hardening) (p : Policy) (fs : List Functionary) (e :
     List Verifier :=
   (verifiers p e).filter fun v => fs.any fun f => fValidate h p.roots f v.cred
 
-/-- triageOne: collection predicate type, some verifier, some functionary match,
+/-- triageOne: collection predicate type with admissible failure records
+    (`isCollection`, #10618), some verifier, some functionary match,
     and the timestamp constraint judged on the matched verifiers' times only. -/
 def triage (h : Hardening) (p : Policy) (o : Options) (s : Step) (e : Envelope) : Bool :=
   e.payload.isCollection && !(verifiers p e).isEmpty &&

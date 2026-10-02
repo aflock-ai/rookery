@@ -1014,7 +1014,7 @@ func describeSidecarRejects(rejects []sidecarReject) string {
 // envelopes we recurse into the inner attestation types; for bare
 // predicates we return the outer type as the only entry.
 func extractPredicateTypes(outerType string, innerTypes []string) []string {
-	if outerType != collectionPredicateURI {
+	if !attestation.IsCollectionType(outerType) {
 		if outerType == "" {
 			return nil
 		}
@@ -1214,7 +1214,7 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 		// See certSigner doc for the red-team motivation.
 		funcs = append(funcs, buildCertFunctionaries(stderr, s.certSigners, p)...)
 
-		if s.outerPredicateType == "" || s.outerPredicateType == collectionPredicateURI {
+		if s.outerPredicateType == "" || attestation.IsCollectionType(s.outerPredicateType) {
 			// Collection envelope → a Step.
 			atts := stepAttestations(s.predicateTypes)
 			if _, dup := p.Steps[s.stepName]; dup {

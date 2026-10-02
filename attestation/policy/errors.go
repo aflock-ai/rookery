@@ -521,6 +521,9 @@ type IneligibleCollection struct {
 	// SignatureErrors carry the source's verification errors, when the
 	// envelope would have failed signature verification as well.
 	SignatureErrors []string
+	// FailedAttestors are the attestors a v0.2 collection records as
+	// attempted and failed, "name (class)" (#10618). Never evidence.
+	FailedAttestors []string
 }
 
 func (e ErrIneligibleCollections) Error() string {
@@ -558,7 +561,11 @@ func (c IneligibleCollection) describe() string {
 		if len(c.MissingAttestations) > 1 {
 			noun = "attestations"
 		}
-		reasons = append(reasons, fmt.Sprintf("is missing required %s %s (has: %s)", noun, strings.Join(c.MissingAttestations, ", "), has))
+		missing := fmt.Sprintf("is missing required %s %s (has: %s)", noun, strings.Join(c.MissingAttestations, ", "), has)
+		if len(c.FailedAttestors) > 0 {
+			missing += "; attempted and failed: " + strings.Join(c.FailedAttestors, ", ")
+		}
+		reasons = append(reasons, missing)
 	}
 	if c.SubjectMismatch {
 		observed := "none"
