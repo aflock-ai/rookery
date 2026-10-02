@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/aflock-ai/rookery/cilock/internal/config"
+	"github.com/aflock-ai/rookery/cilock/internal/options"
 	internalpolicy "github.com/aflock-ai/rookery/cilock/internal/policy"
 	"github.com/spf13/cobra"
 )
@@ -384,10 +385,7 @@ func (p *prover) checkFailingRun(doc draftDoc, plan *provePlan, name string, goo
 	case verr != nil:
 		report.problem("step %s: the failing run could not be checked: %v", name, verr)
 	case len(refused[name]) > 0:
-		real := "real run admitted"
-		if len(goodRefused) > 0 {
-			real = "real run REFUSED (" + strings.Join(goodRefused, "; ") + ")"
-		}
+		real := realRunOutcome(goodRefused, plan.good[name])
 		report.steps = append(report.steps, fmt.Sprintf("%s: %s; failing run refused (%s)", name, real, strings.Join(refused[name], "; ")))
 	default:
 		report.problem("step %s admits a failing run: add a rule (e.g. command-succeeded on command-run) that refuses it", name)
@@ -633,6 +631,43 @@ func envelopeList(good map[string]string, order []string, replace, with string) 
 		}
 	}
 	return out
+}
+
+// realRunOutcome is the real run's half of a step line. A refused run whose
+// recorded command-run exit is one the shell reports when it could not run the
+// command at all (126, 127) carries the same hint `cilock run` prints
+// (mx-commander-l4-muh1lia3 read only "wrapped command exited 127, not 0").
+func realRunOutcome(refusals []string, envelope string) string {
+	if len(refusals) == 0 {
+		return "real run admitted"
+	}
+	out := "real run REFUSED (" + strings.Join(refusals, "; ") + ")"
+	if code, ok := recordedExitCode(envelope); ok {
+		out += options.CommandExitHint(code)
+	}
+	return out
+}
+
+// recordedExitCode reads the wrapped command's exit code from the command-run
+// attestation in an envelope prove wrote; ok is false when there is none.
+func recordedExitCode(envelope string) (int, bool) {
+	stmt, err := readStatement(envelope)
+	if err != nil {
+		return 0, false
+	}
+	for _, a := range stmt.Predicate.Attestations {
+		if a.Type != typeCommandRun {
+			continue
+		}
+		var cr struct {
+			ExitCode *int `json:"exitcode"`
+		}
+		if json.Unmarshal(a.Attestation, &cr) != nil || cr.ExitCode == nil {
+			return 0, false
+		}
+		return *cr.ExitCode, true
+	}
+	return 0, false
 }
 
 // traceMissing reports why a traced run carries no process tree.
