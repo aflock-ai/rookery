@@ -83,14 +83,14 @@ func DecodePolicyEnvelope(payloadType string, payload []byte) (Policy, error) {
 	case PolicyPredicate, LegacyPolicyPredicate:
 		var p Policy
 		if err := json.Unmarshal(payload, &p); err != nil {
-			return Policy{}, err
+			return Policy{}, explainDecodeError(payload, err)
 		}
 		p.payloadVersion = policyVersionV01
 		return p, nil
 	case PolicyPredicateV02:
 		p, err := decodePolicyV02(payload)
 		if err != nil {
-			return Policy{}, fmt.Errorf("policy %s: %w", PolicyPredicateV02, err)
+			return Policy{}, fmt.Errorf("policy %s: %w", PolicyPredicateV02, explainDecodeError(payload, err))
 		}
 		p.payloadVersion = policyVersionV02
 		return p, nil

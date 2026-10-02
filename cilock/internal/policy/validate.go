@@ -220,8 +220,7 @@ func ValidatePolicy(ctx context.Context, envelope dsse.Envelope, verifier crypto
 
 	var policy policyDocument
 	if err := json.Unmarshal(envelope.Payload, &policy); err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("Failed to unmarshal policy payload: %v", err))
-		result.Valid = false
+		appendDecodeErrors(result, "Failed to unmarshal policy payload", envelope.Payload, err)
 		return result
 	}
 
@@ -256,8 +255,7 @@ func ValidateRawPolicy(ctx context.Context, policyJSON []byte) *ValidationResult
 
 	var policy policyDocument
 	if err := json.Unmarshal(policyJSON, &policy); err != nil {
-		result.Errors = append(result.Errors, fmt.Sprintf("Failed to unmarshal policy JSON: %v", err))
-		result.Valid = false
+		appendDecodeErrors(result, "Failed to unmarshal policy JSON", policyJSON, err)
 		return result
 	}
 
@@ -327,6 +325,19 @@ func validateFillSlots(policyJSON []byte, result *ValidationResult) {
 		}
 	}
 	walk("", doc)
+}
+
+// appendDecodeErrors reports a policy that does not decode. When the cause is
+// a value of the wrong JSON kind on the steps/attestations/regopolicies path,
+// each such value is named by path with the shape the schema wants, instead
+// of encoding/json's Go-type message.
+func appendDecodeErrors(result *ValidationResult, prefix string, payload []byte, err error) {
+	result.Valid = false
+	if shape := attpolicy.ShapeErrors(payload); len(shape) > 0 {
+		result.Errors = append(result.Errors, shape...)
+		return
+	}
+	result.Errors = append(result.Errors, fmt.Sprintf("%s: %v", prefix, err))
 }
 
 // validatePolicyContent checks the decoded policy. placeholderRoots names the

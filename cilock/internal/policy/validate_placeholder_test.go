@@ -188,6 +188,23 @@ func TestPlaceholder_JSONCarriesPlaceholders(t *testing.T) {
 	}
 }
 
+// fullblind45: a rego module written as a bare string.
+func TestValidateRaw_RegoPolicyShapeIsNamed(t *testing.T) {
+	doc := strings.Replace(placeholderDraft(templateRoots, templateTSAs),
+		`{ "type": "https://aflock.ai/attestations/command-run/v0.1" }`,
+		`{ "type": "https://aflock.ai/attestations/command-run/v0.1", "regopolicies": ["cGFja2FnZSB4"] }`, 1)
+	res := validateRaw(t, doc)
+	want := `steps.build.attestations[0].regopolicies[0] must be an object {"name": "<rule name>", "module": "<base64 rego>"}; got a string`
+	if res.Valid || !containsSubstr(res.Errors, want) {
+		t.Fatalf("want %q, got valid=%v errors=%q", want, res.Valid, res.Errors)
+	}
+	env := dsse.Envelope{PayloadType: ExpectedPolicyTypeAflock, Payload: []byte(doc)}
+	res = ValidatePolicy(context.Background(), env, nil)
+	if res.Valid || !containsSubstr(res.Errors, want) {
+		t.Fatalf("envelope: want %q, got valid=%v errors=%q", want, res.Valid, res.Errors)
+	}
+}
+
 func containsSubstr(list []string, want string) bool {
 	for _, s := range list {
 		if strings.Contains(s, want) {

@@ -190,6 +190,10 @@ func templateAddStep(out io.Writer, o templateOptions) error {
 	}
 	doc, err := loadDraft(o.policyPath)
 	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			// A draft that exists but is malformed names its own fix.
+			return err
+		}
 		return fmt.Errorf("%w. Next: create a draft first with `cilock policy template --goal <id> -o %s`", err, o.policyPath)
 	}
 	if draftSteps(doc) == nil {

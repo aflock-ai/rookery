@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	attpolicy "github.com/aflock-ai/rookery/attestation/policy"
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	"github.com/aflock-ai/rookery/cilock/internal/canonicaljson"
 	"github.com/aflock-ai/rookery/cilock/internal/config"
@@ -71,6 +72,12 @@ func loadDraft(path string) (draftDoc, error) {
 		if _, isObject := v.(map[string]any); !isObject {
 			return nil, fmt.Errorf("%s: steps is not an object (a JSON map of step name to step); nothing was changed", path)
 		}
+	}
+	// The draft is read untyped, so a value of the wrong kind (a rego module
+	// written as a bare string) would otherwise read as "no rule" here and
+	// fail only later, in the verifier's typed decode. Name it now.
+	if shape := attpolicy.ShapeErrors(raw); len(shape) > 0 {
+		return nil, fmt.Errorf("%s: %s", path, strings.Join(shape, "; "))
 	}
 	return doc, nil
 }
