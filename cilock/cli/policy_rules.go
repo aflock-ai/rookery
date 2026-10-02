@@ -979,7 +979,7 @@ deny[msg] {
 	n := object.get(object.get(by, s, {}), "fail", 0)
 	is_number(n)
 	n > 0
-	msg := sprintf("trivy: %v failed %v finding(s)", [n, s])
+	msg := sprintf("trivy: %v failed %v finding(s); this rule blocks every finding at %v", [n, s, blocked])
 }
 `
 
@@ -1199,6 +1199,8 @@ const traceNetworkModule = `package trace_network
 ` + predRead + `
 allowed := {a | a := __ALLOWED__[_]}
 
+allowlist := sort([a | allowed[a]])
+
 ` + tracedProcesses + `
 connection[c] {
 	p := procs[_]
@@ -1239,14 +1241,14 @@ deny[msg] {
 	c := connection[_]
 	internet(c)
 	not permitted(c)
-	msg := sprintf("network: %v to %v port %v (SNI %v, client-asserted) is not in the allowlist", [object.get(c, "syscall", "a connection"), object.get(c, "address", "an unobserved address"), object.get(c, "port", 0), object.get(c, "hostname", "none")])
+	msg := sprintf("network: %v to %v port %v (SNI %v, client-asserted) is not in the allowlist %v", [object.get(c, "syscall", "a connection"), object.get(c, "address", "an unobserved address"), object.get(c, "port", 0), object.get(c, "hostname", "none"), allowlist])
 }
 
 deny[msg] {
 	traced
 	d := lookup[_]
 	not permitted_address(object.get(d, "serverAddress", ""))
-	msg := sprintf("network: DNS lookup via %v is not in the allowlist", [object.get(d, "serverAddress", "an unknown server")])
+	msg := sprintf("network: DNS lookup via %v is not in the allowlist %v", [object.get(d, "serverAddress", "an unknown server"), allowlist])
 }
 `
 
@@ -1254,6 +1256,8 @@ const traceExecModule = `package trace_exec
 
 ` + predRead + `
 allowed := {a | a := __ALLOWED__[_]}
+
+allowlist := sort([a | allowed[a]])
 
 digests := object.get(pred, "digests", [])
 
@@ -1284,7 +1288,7 @@ deny[msg] {
 	traced
 	p := procs[_]
 	not permitted(p)
-	msg := sprintf("exec: process %v ran %v, which is not in the allowlist", [object.get(p, "processid", "unknown"), describe(p)])
+	msg := sprintf("exec: process %v ran %v, which is not in the allowlist %v", [object.get(p, "processid", "unknown"), describe(p), allowlist])
 }
 `
 
@@ -1359,7 +1363,7 @@ deny[msg] {
 	x := touched[_]
 	is_string(x)
 	not inside(x)
-	msg := sprintf("writes: %v was modified outside the allowed paths", [x])
+	msg := sprintf("writes: %v was modified outside the allowed paths %v", [x, prefixes])
 }
 
 deny[msg] {
