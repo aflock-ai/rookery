@@ -672,13 +672,26 @@ cilock sign -f policy.hydrated.json -o policy.hydrated.signed.json
 
 > Reads one or more signed attestation bundles and emits a **starter Witness policy** — one step per bundle (step name = the bundle basename without the `.bundle.json` suffix), functionaries populated from each signing keyid, and `attestations[]` populated from the predicate types found. Edit, then sign with `cilock sign`. Use `--step-prefix` to prepend a prefix to every generated step name.
 
+The TSA certificates embedded in the bundles are never trusted: evidence cannot vouch for its own signing time. So a keyless policy comes out with an empty `timestampauthorities[]`, and `cilock verify` rejects its short-lived leaves. `--trust-platform-tsa` anchors the TSA root your platform publishes instead. It fetches the chain from the platform's discovery document (`tsa_cert_chain_url`, https and same-origin only) and checks it against the trust pin `cilock verify` recorded. It writes the self-signed root to `timestampauthorities["platform-tsa"]` and prints each certificate's sha256 for review.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--expires <dur>` | `8760h` (1 year) | How far in the future the policy's `expires` field is set. |
+| `--output, -o <path>` | `-` (stdout) | Write the generated policy here. |
+| `--platform-url <url>` | the logged-in platform | Platform whose discovery document supplies the TSA chain. Only valid with `--trust-platform-tsa`. |
+| `--publickey, -k <path>` | (none) | Public-key PEM file(s) for the bundles' signers. Repeatable. |
+| `--step-prefix <str>` | (none) | Optional prefix prepended to every generated step name. |
+| `--trust-platform-tsa` | `false` | Anchor the platform's published TSA root in `timestampauthorities["platform-tsa"]`. Evidence-embedded TSA certificates are never trusted. |
+
 ```bash
 cilock policy from-bundles -k signer.pub build.bundle.json scan.bundle.json -o policy.json
+# keyless bundles: anchor the platform TSA so the policy verifies
+cilock policy from-bundles build.bundle.json -o policy.json --trust-platform-tsa
 ```
 
 ## `cilock policy from-commit <commit-sha>`
 
-> Authors a starter Witness policy from the CI attestations the platform already holds for a commit — no local bundle files needed. It resolves the commit, finds every DSSE whose subjects include it, groups them by witness collection name (one step per collection), populates functionaries from each collection's signers (raw keyid or Fulcio keyless cert with the leaf SAN email pinned), recovers TSA trust anchors so short-lived keyless leaves verify, and wires cross-step provenance edges. Author-only by default (write the policy, then `cilock sign` → [`policy push`](#cilock-policy-push---file--definition---tag) → [`policy bind`](#cilock-policy-bind---definition--product)); pass both `--product` and `--tag` for the one-shot derive → sign → push → bind flow. The Archivista query needs a logged-in session; publication needs `policy:publish`, and the optional Product binding additionally needs legacy `policy:write`.
+> Authors a starter Witness policy from the CI attestations the platform already holds for a commit — no local bundle files needed. It resolves the commit, finds every DSSE whose subjects include it, groups them by witness collection name (one step per collection), populates functionaries from each collection's signers (raw keyid or Fulcio keyless cert with the leaf SAN email pinned), leaves `timestampauthorities[]` empty unless `--trust-platform-tsa` anchors the platform's published TSA root (the evidence's own TSA certificates are never trusted), and wires cross-step provenance edges. Author-only by default (write the policy, then `cilock sign` → [`policy push`](#cilock-policy-push---file--definition---tag) → [`policy bind`](#cilock-policy-bind---definition--product)); pass both `--product` and `--tag` for the one-shot derive → sign → push → bind flow. The Archivista query needs a logged-in session; publication needs `policy:publish`, and the optional Product binding additionally needs legacy `policy:write`.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -690,6 +703,7 @@ cilock policy from-bundles -k signer.pub build.bundle.json scan.bundle.json -o p
 | `--product, -p <id\|name>` | (none) | Product id or exact name. With `--tag`, runs the one-shot sign→push→bind flow against this product. |
 | `--step-prefix <str>` | (none) | Optional prefix prepended to every generated step name (e.g. `release-`). |
 | `--tag, -t <t>` | (none) | Release tag for the one-shot flow (requires `--product`). |
+| `--trust-platform-tsa` | `false` | Anchor the session platform's published TSA root in `timestampauthorities["platform-tsa"]` (discovery `tsa_cert_chain_url`, https, same origin, checked against the trust pin). Evidence-embedded TSA certificates are never trusted. |
 
 ```bash
 # Author a policy from a commit's CI evidence, write it for review

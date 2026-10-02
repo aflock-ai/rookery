@@ -82,10 +82,12 @@ const (
 // key; multiple -k flags can be passed for multi-signer suites.
 func PolicyFromBundlesCmd() *cobra.Command {
 	var (
-		pubKeyPaths    []string
-		output         string
-		expiresIn      time.Duration
-		stepNamePrefix string
+		pubKeyPaths      []string
+		output           string
+		expiresIn        time.Duration
+		stepNamePrefix   string
+		trustPlatformTSA bool
+		platformURL      string
 	)
 
 	cmd := &cobra.Command{
@@ -118,7 +120,13 @@ entry the user must fill in before the policy can be signed.`,
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runPolicyFromBundles(cmd.OutOrStdout(), cmd.ErrOrStderr(), args, pubKeyPaths, output, expiresIn, stepNamePrefix)
+			tsaPlatformURL := ""
+			if trustPlatformTSA {
+				tsaPlatformURL = localDraftPlatformURL(platformURL)
+			} else if platformURL != "" {
+				return fmt.Errorf("--platform-url is only used with --%s", trustPlatformTSAFlag)
+			}
+			return runPolicyFromBundlesAnchored(cmd.OutOrStdout(), cmd.ErrOrStderr(), args, pubKeyPaths, output, expiresIn, stepNamePrefix, tsaPlatformURL)
 		},
 	}
 
@@ -130,6 +138,9 @@ entry the user must fill in before the policy can be signed.`,
 		"How far in the future the policy's `expires` field is set. Defaults to one year. Generated policies are starter templates — set this short and re-issue after review.")
 	cmd.Flags().StringVar(&stepNamePrefix, "step-prefix", "",
 		"Optional prefix prepended to every generated step name (e.g. 'release-' yields 'release-source-git'). Empty by default.")
+	cmd.Flags().BoolVar(&trustPlatformTSA, trustPlatformTSAFlag, false, trustPlatformTSAUsage)
+	cmd.Flags().StringVar(&platformURL, "platform-url", "",
+		"Platform whose discovery document supplies the TSA chain for --"+trustPlatformTSAFlag+" (default: the logged-in platform)")
 	return cmd
 }
 
@@ -257,6 +268,13 @@ type sidecarSet struct {
 }
 
 func runPolicyFromBundles(stdout, stderr io.Writer, bundlePaths, pubKeyPaths []string, outputPath string, expiresIn time.Duration, stepPrefix string) error {
+	return runPolicyFromBundlesAnchored(stdout, stderr, bundlePaths, pubKeyPaths, outputPath, expiresIn, stepPrefix, "")
+}
+
+// runPolicyFromBundlesAnchored is runPolicyFromBundles plus the operator's
+// --trust-platform-tsa choice: a non-empty tsaPlatformURL anchors that
+// platform's TSA root (see finishStarterTSA).
+func runPolicyFromBundlesAnchored(stdout, stderr io.Writer, bundlePaths, pubKeyPaths []string, outputPath string, expiresIn time.Duration, stepPrefix, tsaPlatformURL string) error {
 	if len(bundlePaths) == 0 {
 		return fmt.Errorf("at least one bundle path is required")
 	}
@@ -273,6 +291,9 @@ func runPolicyFromBundles(stdout, stderr io.Writer, bundlePaths, pubKeyPaths []s
 
 	pol, err := buildStarterPolicy(stderr, summaries, pubKeys, expiresIn)
 	if err != nil {
+		return err
+	}
+	if err := finishStarterTSA(stderr, pol, summaries, tsaPlatformURL); err != nil {
 		return err
 	}
 
@@ -1271,14 +1292,8 @@ func buildStarterPolicy(stderr io.Writer, summaries []bundleSummary, pubKeys map
 		return nil, fmt.Errorf("generated policy does not validate: %w", err)
 	}
 
-	// A cert-signed (keyless) policy with no timestampauthorities[] cannot
-	// establish proof-of-signing-time for short-lived leaves and WILL fail
-	// verify. We recover the TSA from the bundle's RFC3161 token above; warn
-	// (don't fail) when a cert-signed bundle carried no recoverable timestamp
-	// so the operator knows the policy needs a manual timestampauthorities[]
-	// entry (or the evidence simply wasn't timestamped).
-	warnMissingTimestampAuthorities(stderr, p, summaries)
-
+	// timestampauthorities[] is settled by the caller (finishStarterTSA): it
+	// anchors the platform TSA the operator named, or warns.
 	return p, nil
 }
 
@@ -1335,7 +1350,11 @@ func warnMissingTimestampAuthorities(stderr io.Writer, p *policy.Policy, summari
 				"TSA leaf is NOT trusted automatically (evidence cannot vouch for its own "+
 				"signing time). timestampauthorities[] is empty. Add the signing platform's "+
 				"KNOWN TSA root to timestampauthorities[] before signing, or cilock verify "+
-				"will reject short-lived leaf certs without proof-of-signing-time.\n")
+				"will reject short-lived leaf certs without proof-of-signing-time.\n"+
+				"  To anchor the TSA root your platform publishes, re-run with --%s "+
+				"[--platform-url <url>]: it fetches the chain from the platform's discovery "+
+				"document and writes timestampauthorities[%q].\n",
+			trustPlatformTSAFlag, localHydrateTSAID)
 		return
 	}
 	_, _ = fmt.Fprintf(stderr,

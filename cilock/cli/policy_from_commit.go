@@ -193,6 +193,7 @@ func addFromCommitFlags(cmd *cobra.Command, o *policyFromCommitOpts) {
 	f.StringVarP(&o.definition, "definition", "d", "", "PolicyDefinition name for the one-shot flow (default: the product name).")
 	f.StringVar(&o.description, "description", "", "Description used only when the one-shot flow creates a new PolicyDefinition.")
 	f.BoolVarP(&o.yes, "yes", "y", false, "Confirm the one-shot sign→push→bind of a policy whose functionaries were derived entirely from platform evidence. Required for one-shot publish; review the printed functionaries/TSA-anchors first (#5989).")
+	f.BoolVar(&o.trustPlatformTSA, trustPlatformTSAFlag, false, trustPlatformTSAUsage)
 }
 
 // policyFromCommitOpts groups the resolved flag values for `policy from-commit`.
@@ -208,6 +209,12 @@ type policyFromCommitOpts struct {
 	definition    string
 	description   string
 	yes           bool
+
+	// trustPlatformTSA is --trust-platform-tsa. tsaPlatformURL is the
+	// resolved platform it anchors, set by runPolicyFromCommit from the
+	// session; empty means "do not anchor".
+	trustPlatformTSA bool
+	tsaPlatformURL   string
 }
 
 // oneShot reports whether the command should run the full sign→push→bind flow.
@@ -244,6 +251,10 @@ func runPolicyFromCommit(cmd *cobra.Command, o policyFromCommitOpts) error {
 	archivistaURL := o.archivistaURL
 	if archivistaURL == "" {
 		archivistaURL = resolveArchivistaURL(sess.platformURL)
+	}
+
+	if o.trustPlatformTSA {
+		o.tsaPlatformURL = sess.platformURL
 	}
 
 	// Fetch + derive the policy from the commit's CI attestations.
@@ -300,7 +311,7 @@ func printDerivedTrustSurface(stderr io.Writer, pol *policy.Policy) {
 		}
 	}
 	if len(pol.TimestampAuthorities) == 0 {
-		_, _ = fmt.Fprintf(stderr, "  timestampauthorities: NONE (add a known platform TSA root before signing)\n")
+		_, _ = fmt.Fprintf(stderr, "  timestampauthorities: NONE (add a known platform TSA root before signing, or re-run with --%s)\n", trustPlatformTSAFlag)
 	} else {
 		ids := make([]string, 0, len(pol.TimestampAuthorities))
 		for id := range pol.TimestampAuthorities {
@@ -367,6 +378,9 @@ func derivePolicyFromCommit(ctx context.Context, stderr io.Writer, o policyFromC
 
 	pol, err := buildStarterPolicy(stderr, summaries, map[string][]byte{}, o.expiresIn)
 	if err != nil {
+		return nil, 0, err
+	}
+	if err := finishStarterTSA(stderr, pol, summaries, o.tsaPlatformURL); err != nil {
 		return nil, 0, err
 	}
 	return pol, len(pol.Steps) + len(pol.ExternalAttestations), nil
