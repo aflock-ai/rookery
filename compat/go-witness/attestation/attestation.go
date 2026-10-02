@@ -31,6 +31,7 @@ type EnvironmentCapturer = rookery.EnvironmentCapturer
 const (
 	CollectionType       = rookery.CollectionType
 	LegacyCollectionType = rookery.LegacyCollectionType
+	CollectionTypeV02    = rookery.CollectionTypeV02
 	PreMaterialRunType   = rookery.PreMaterialRunType
 	MaterialRunType      = rookery.MaterialRunType
 	ExecuteRunType       = rookery.ExecuteRunType
@@ -42,6 +43,7 @@ const (
 // Functions
 var NewContext = rookery.NewContext
 var NewCollection = rookery.NewCollection
+var IsCollectionType = rookery.IsCollectionType
 var NewCollectionAttestation = rookery.NewCollectionAttestation
 
 // Context options
