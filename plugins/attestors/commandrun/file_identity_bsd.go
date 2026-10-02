@@ -12,17 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build !linux && !darwin && !windows && !freebsd && !netbsd && !openbsd && !dragonfly && !solaris && !illumos
+//go:build freebsd || netbsd
 
 package commandrun
 
-import "os"
+import (
+	"os"
+	"syscall"
+)
 
-// identityFromInfo on a platform with no (device, inode, change time) source
-// cilock knows how to read. It reports the stat as uncomparable, so a program
-// read here yields no digest and says why, rather than a digest bracketed on
-// size and modification time, which anyone who can write the file can restore
-// (issue #10571). No platform cilock ships for lands here.
-func identityFromInfo(os.FileInfo) (fileIdentity, bool) {
-	return fileIdentity{}, false
+// identityFromInfo reads device, inode and change time from the stat of the
+// open descriptor, as on Linux and macOS (issue #10571).
+//
+//nolint:unconvert // Stat_t field widths differ across GOARCH and OS.
+func identityFromInfo(st os.FileInfo) (fileIdentity, bool) {
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fileIdentity{}, false
+	}
+	return fileIdentity{
+		dev:       uint64(sys.Dev),
+		ino:       uint64(sys.Ino),
+		ctimeSec:  int64(sys.Ctimespec.Sec),
+		ctimeNsec: int64(sys.Ctimespec.Nsec),
+		size:      st.Size(),
+	}, true
 }

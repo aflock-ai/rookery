@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"os"
 	"sync/atomic"
-	"syscall"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/plugins/attestors/commandrun/ebpf"
@@ -41,7 +40,10 @@ import (
 // used, and the forgery digest_binding_linux_test.go reproduces. It does NOT
 // cover stores through an established writable mapping; see tracing_linux.go.
 type fileIdentity struct {
-	dev, ino  uint64
+	dev, ino uint64
+	// inoHi is the high half of a 128-bit file id (Windows FileIdInfo on
+	// ReFS); zero wherever a file id fits 64 bits.
+	inoHi     uint64
 	ctimeSec  int64
 	ctimeNsec int64
 	size      int64
@@ -114,22 +116,6 @@ func observedUnchanged(before, after os.FileInfo) error {
 	return nil
 }
 
-// openForHashing resolves `path` EXACTLY ONCE and hands back the descriptor
-// that resolution produced. Every stat afterwards is an fstat of this
-// descriptor, so a name swapped after the open cannot change what is hashed
-// or what the digest is reported for.
-//
-// O_NONBLOCK keeps the open of a FIFO from blocking on a writer that will
-// never come; digestOpenFile then refuses it, because the descriptor's fstat
-// says it is not a regular file. That is stricter than the code this
-// replaces, which stat'd the name, saw "not a directory", and went on to
-// open and read it -- draining a pipe the tracee was waiting on, or reading
-// a character device without end.
-func openForHashing(path string) (*os.File, error) {
-	pathResolutions.Add(1)
-	return os.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0) //nolint:gosec // G304: hashing a path the tracee named is this attestor's whole job
-}
-
 // pathResolutions counts name resolutions performed for hashing. Every open
 // in this package's measurement path goes through openForHashing, so it is
 // the number of times a pathname was turned into a file.
@@ -170,6 +156,13 @@ func digestOpenFileStat(f *os.File, hashes []cryptoutil.DigestValue, duringRead 
 		}
 		return nil, nil, fmt.Errorf("%w: pre-read fstat: %w", errUncomparableRead, err)
 	}
+	// Where the settle's stat cannot carry the identity (Windows reads it
+	// through the handle), take the pre-read stat through the same source
+	// the post-read stat uses, so both ends compare like with like.
+	before, err = bracketBefore(f, before)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: pre-read fstat: %w", errUncomparableRead, err)
+	}
 	if !before.Mode().IsRegular() {
 		return nil, nil, errNotRegularFile
 	}
@@ -185,7 +178,7 @@ func digestOpenFileStat(f *os.File, hashes []cryptoutil.DigestValue, duringRead 
 	if err != nil {
 		return nil, nil, fmt.Errorf("hash: %w", err)
 	}
-	after, err := f.Stat()
+	after, err := statForBracket(f)
 	if err != nil {
 		// Nothing to compare the read against. Refuse: this is the
 		// fail-open shape the repo has a standing rule against, and the
