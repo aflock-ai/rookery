@@ -31,6 +31,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/archivista"
@@ -1196,10 +1197,75 @@ func refuseTakenEvidencePaths(outFile string, compact bool) error {
 	}
 	for _, path := range paths {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
-			return fmt.Errorf("refuse existing or inaccessible evidence path %q; select a new --outfile (checked before the command runs)", path)
+			return fmt.Errorf("%w (checked before the command runs)", takenEvidencePathError(path, outFile))
 		}
 	}
 	return nil
+}
+
+// maxOutfileSuggestions bounds the search for a free numbered outfile.
+const maxOutfileSuggestions = 99
+
+// takenEvidencePathError is the refusal for an evidence path that already
+// exists or cannot be checked. It says which file of the evidence set is in
+// the way (the outfile, or a companion the author never named), that every
+// run needs a fresh outfile, and a concrete free one to pass.
+func takenEvidencePathError(path, outFile string) error {
+	role := "the --outfile itself"
+	if path != outFile {
+		kind := "a companion"
+		for _, k := range inventoryCompanionKinds {
+			if path == outFile+"-"+k+"-inventory.json" {
+				kind = "the " + k + " inventory"
+			}
+		}
+		role = fmt.Sprintf("%s written beside --outfile %q", kind, outFile)
+	}
+	msg := fmt.Sprintf("refuse existing or inaccessible evidence path %q (%s); select a new --outfile: "+
+		"cilock never overwrites evidence, so every run, a re-run of the same step included, needs a fresh --outfile "+
+		"whose companion files do not exist either", path, role)
+	if next := suggestFreshOutfile(outFile); next != "" {
+		msg += ". Next: rerun with --outfile " + shellQuote(next)
+	} else {
+		msg += ". Next: pass an --outfile that does not exist yet, in a directory you can read and write"
+	}
+	return errors.New(msg)
+}
+
+// suggestFreshOutfile returns the first <stem>-<n><ext> (n from 2) beside
+// outFile whose outfile and inventory companions are all verifiably absent,
+// or "" when none is, or when the name holds a character a terminal would
+// act on (it is shown to be pasted).
+func suggestFreshOutfile(outFile string) string {
+	for _, r := range outFile {
+		if !unicode.IsPrint(r) {
+			return ""
+		}
+	}
+	ext := filepath.Ext(outFile)
+	stem := strings.TrimSuffix(outFile, ext)
+	for n := 2; n <= maxOutfileSuggestions+1; n++ {
+		candidate := fmt.Sprintf("%s-%d%s", stem, n, ext)
+		free := true
+		for _, p := range append([]string{candidate}, companionPaths(candidate)...) {
+			if _, err := os.Lstat(p); !os.IsNotExist(err) {
+				free = false
+				break
+			}
+		}
+		if free {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func companionPaths(outFile string) []string {
+	out := make([]string, 0, len(inventoryCompanionKinds))
+	for _, kind := range inventoryCompanionKinds {
+		out = append(out, outFile+"-"+kind+"-inventory.json")
+	}
+	return out
 }
 
 func writeRunPreflight(o options.RunOptions, detectedNames []string, cmdErr error, preflightWarned bool) {
@@ -1316,7 +1382,7 @@ func persistRunResults(ctx context.Context, ro *options.RunOptions, results []wo
 		seenPaths[key] = true
 		if compact || len(inventories) > 0 {
 			if _, err := os.Lstat(path); !os.IsNotExist(err) {
-				return fmt.Errorf("refuse existing or inaccessible evidence path %q; select a new --outfile", path)
+				return takenEvidencePathError(path, ro.OutFilePath)
 			}
 		}
 	}

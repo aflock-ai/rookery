@@ -488,9 +488,10 @@ func proveCommands(doc draftDoc, o proveOptions) (map[string][]string, error) {
 		var b strings.Builder
 		fmt.Fprintf(&b, "prove needs a command for step(s) %s: none was given and none is pinned by a command-pin rule. Next: pass", strings.Join(missing, ", "))
 		for _, name := range missing {
-			fmt.Fprintf(&b, " --run %s='<argv>'", name)
+			fmt.Fprintf(&b, ` --run %s='["<command>","<arg>"]'`, name)
 		}
-		fmt.Fprintf(&b, " (or --step %s -- <argv> for one of them)", missing[0])
+		fmt.Fprintf(&b, " (the argv is a JSON array or plain words, e.g. --run %s='go test ./...'), "+
+			"or --step %s -- <command> <arg>... for one step. To make it permanent, pin it in the draft with a command-pin rule", missing[0], missing[0])
 		return nil, errors.New(b.String())
 	}
 	return commands, nil

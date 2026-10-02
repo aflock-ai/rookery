@@ -56,10 +56,19 @@ func (a *Attestor) checkProductCount(pairs []productPair) error {
 		paths = append(paths, p.normalized)
 	}
 	contributors := topContributors(paths)
+	glob := suggestedExcludeGlob(neededContributors(contributors, len(pairs), a.maxProducts))
+	excludeFlag := registry.AttestorFlagName(Name, optExcludeGlob)
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "product attestor: %d files matched, which exceeds the limit of %d.\n\n",
+	// The first line carries the fix on its own: the run summary prints this
+	// error on one line with its newlines escaped, so anything below it reads
+	// as a wall of \x0a there.
+	fmt.Fprintf(&b, "product attestor: %d files matched, which exceeds the limit of %d",
 		len(pairs), a.maxProducts)
+	if glob != "" {
+		fmt.Fprintf(&b, "; exclude the directories responsible with --%s '%s'", excludeFlag, glob)
+	}
+	b.WriteString(".\n\n")
 	b.WriteString("An attestation this large is refused by the evidence store rather than\n")
 	b.WriteString("verified, so the run is stopped here where the cause is still visible.\n")
 	b.WriteString("A product set this size normally means a dependency or build directory\n")
@@ -81,7 +90,7 @@ func (a *Attestor) checkProductCount(pairs []productPair) error {
 			fmt.Fprintf(&b, "  %8d  %q  (unusual characters -- quoted, and left out of the command below)\n",
 				c.count, c.dir)
 		}
-		if glob := suggestedExcludeGlob(contributors); glob != "" {
+		if glob != "" {
 			// The flag NAME is derived, never typed. An attestor registers
 			// "exclude-glob"; the CLI is the thing that namespaces it, and the
 			// parser only ever accepts the namespaced spelling. See #9230.
@@ -90,8 +99,8 @@ func (a *Attestor) checkProductCount(pairs []productPair) error {
 			// cmd.Flags().String, so pflag keeps the LAST occurrence and
 			// silently discards the rest. suggestedExcludeGlob already emits a
 			// single brace alternation for exactly that reason.
-			fmt.Fprintf(&b, "\nExclude them with (one pattern -- the flag is not repeatable):\n  --%s '%s'\n",
-				registry.AttestorFlagName(Name, optExcludeGlob), glob)
+			fmt.Fprintf(&b, "\nExclude what brings the count under the limit with (one pattern -- the flag is not repeatable):\n  --%s '%s'\n",
+				excludeFlag, glob)
 		}
 		if unsafe > 0 {
 			fmt.Fprintf(&b, "\n%d of these contain characters a shell would act on, so no ready-made\n"+
@@ -107,6 +116,28 @@ func (a *Attestor) checkProductCount(pairs []productPair) error {
 type contributor struct {
 	dir   string
 	count int
+}
+
+// neededContributors returns the shortest prefix of the (count-descending)
+// safe contributors whose exclusion brings total at or under limit, so the
+// suggested fix drops no directory it does not need to: a 36-file tests/ next
+// to a 15,953-file .venv/ may hold the very report the step records. When the
+// listed contributors cannot reach the limit together, all of them are
+// returned; the message also offers raising the limit.
+func neededContributors(cs []contributor, total, limit int) []contributor {
+	var out []contributor
+	remaining := total
+	for _, c := range cs {
+		if !shellSafePath(c.dir) {
+			continue
+		}
+		out = append(out, c)
+		remaining -= c.count
+		if remaining <= limit {
+			break
+		}
+	}
+	return out
 }
 
 // shellSafePath reports whether a path may be interpolated into the suggested

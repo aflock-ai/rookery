@@ -195,8 +195,8 @@ func TestProveNamesTheMissingCommand(t *testing.T) {
 	require.NoError(t, saveDraft(e.draft, doc, false))
 	err := e.prove(t)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "--run lint='<argv>'")
-	require.Contains(t, err.Error(), "--step lint -- <argv>")
+	require.Contains(t, err.Error(), `--run lint='["<command>","<arg>"]'`)
+	require.Contains(t, err.Error(), "--step lint -- <command> <arg>...")
 }
 
 // build -> test chain with real evidence: the test step's materials must be

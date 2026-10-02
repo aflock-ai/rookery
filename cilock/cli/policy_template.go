@@ -180,7 +180,7 @@ func templateCreate(out io.Writer, o templateOptions) error {
 
 func templateAddStep(out io.Writer, o templateOptions) error {
 	if o.policyPath == "" {
-		return fmt.Errorf("--add-step appends to an existing draft. Next: pass it with -p, e.g. `cilock policy template -p %s --add-step %s ...`", defaultDraftPath, o.addStep)
+		return addStepWithoutDraftError(o)
 	}
 	if len(o.goals) > 1 {
 		return errors.New("--add-step adds one step: pass at most one --goal (and any number of --attestor)")
@@ -214,6 +214,56 @@ func templateAddStep(out io.Writer, o templateOptions) error {
 		return err
 	}
 	return reportTemplate(out, o.policyPath, doc, id, added, "Added to")
+}
+
+// addStepWithoutDraftError answers `--add-step` with no -p. The usual cause
+// is an author starting a new draft with -o and one custom step; a new draft
+// starts from --goal, so the fix is two commands, spelled with the author's
+// own path and flags (shell-quoted: they are meant to be pasted).
+func addStepWithoutDraftError(o templateOptions) error {
+	draft := o.output
+	if draft == "" {
+		draft = defaultDraftPath
+	}
+	add := []string{"cilock policy template -p", shellQuote(draft), "--add-step", shellWord(o.addStep)}
+	for _, g := range o.goals {
+		add = append(add, "--goal", shellWord(g))
+	}
+	for _, a := range o.attestors {
+		add = append(add, "--attestor", shellWord(a))
+	}
+	for _, r := range o.rules {
+		add = append(add, "--rule", shellWord(r))
+	}
+	for _, s := range o.artifactsFrom {
+		add = append(add, "--artifacts-from", shellWord(s))
+	}
+	for _, s := range o.attestationsFrom {
+		add = append(add, "--attestations-from", shellWord(s))
+	}
+	if o.traced {
+		add = append(add, "--traced")
+	}
+	for _, f := range o.fills {
+		add = append(add, "--fill", shellWord(f))
+	}
+	addCmd := "`" + strings.Join(add, " ") + "`"
+	if _, err := os.Stat(draft); err == nil {
+		return fmt.Errorf("--add-step appends a step to an existing draft named by -p; -o only names a new draft. Next: %s", addCmd)
+	}
+	return fmt.Errorf("--add-step appends a step to an existing draft named by -p; -o only names a new draft, and a new draft starts from --goal. "+
+		"Next: `cilock policy template --goal <id> -o %s` (ids: %s), then %s",
+		shellQuote(draft), strings.Join(goalIDs(), ", "), addCmd)
+}
+
+// shellWord leaves a word a shell would not act on bare and quotes the rest.
+func shellWord(s string) string {
+	if s != "" && strings.IndexFunc(s, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("-_./:=@,+", r))
+	}) < 0 {
+		return s
+	}
+	return shellQuote(s)
 }
 
 func templateFillOnly(out io.Writer, o templateOptions) error {
@@ -528,14 +578,14 @@ func applyFills(doc draftDoc, fills []string) error {
 		if !ok || !strings.Contains(target, ".") || value == "" {
 			return fmt.Errorf("--fill %q: want <step>.<rule>=<json value>, e.g. tests.command-pin='[\"go\",\"test\",\"./...\"]'", spec)
 		}
-		_, ruleName, entry, err := resolveFillTarget(doc, steps, target)
+		stepName, ruleName, entry, err := resolveFillTarget(doc, steps, target)
 		if err != nil {
 			return err
 		}
 		mod, _ := entry["module"].(string)
 		m := slotRuleRE.FindStringSubmatch(mod)
 		if m == nil {
-			return fmt.Errorf("--fill %s: rule %s is not an unfilled slot, and template never overwrites a rule. Edit it by hand if it must change", target, ruleName)
+			return filledRuleError(target, stepName, ruleName, asMap(steps[stepName]))
 		}
 		src, err := renderRule(m[1], jsonValue(value))
 		if err != nil {
@@ -597,6 +647,39 @@ func regoEntryNames(step map[string]any) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+// filledRuleError refuses a --fill on a rule that already holds a value. It
+// names the module's JSON path so the author can edit it, and for a pinned
+// command shows what it pins, which is usually why the author wanted it.
+func filledRuleError(target, stepName, ruleName string, step map[string]any) error {
+	msg := fmt.Sprintf("--fill %s: rule %s is not an unfilled slot: it already holds a value, and template never overwrites a rule", target, ruleName)
+	if ruleName == ruleCommandPin {
+		if argv, ok := pinnedArgv(step); ok {
+			if b, err := json.Marshal(argv); err == nil {
+				msg += "; it pins " + string(b)
+			}
+		}
+	}
+	if path := regoEntryPath(stepName, step, ruleName); path != "" {
+		msg += fmt.Sprintf(". Next: if it must change, edit %s.module by hand (base64 of the rego module), then run `cilock policy validate -p <draft>`", path)
+	} else {
+		msg += ". Next: if it must change, edit that rule's module by hand, then run `cilock policy validate -p <draft>`"
+	}
+	return errors.New(msg)
+}
+
+// regoEntryPath is the JSON path of the named rule in a step, in the form the
+// validator prints (steps.<step>.attestations[i].regopolicies[j]).
+func regoEntryPath(stepName string, step map[string]any, name string) string {
+	for i, a := range asList(step["attestations"]) {
+		for j, r := range asList(asMap(a)["regopolicies"]) {
+			if e := asMap(r); e != nil && e["name"] == name {
+				return fmt.Sprintf("steps.%s.attestations[%d].regopolicies[%d]", stepName, i, j)
+			}
+		}
+	}
+	return ""
 }
 
 func findRegoEntry(step map[string]any, name string) map[string]any {
