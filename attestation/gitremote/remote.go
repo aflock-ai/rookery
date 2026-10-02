@@ -213,8 +213,9 @@ func classifyRemote(raw string) (remoteForm, string, string) {
 	return remoteFormSCP, "", raw
 }
 
-// recordRemote decides what a git remote contributes to the attestation, under
-// the three-valued contract remoteVerdict describes.
+// recordRemoteGrammar decides what a git remote contributes to the attestation,
+// under the three-valued contract remoteVerdict describes. recordRemote applies
+// the token backstop to whatever it would record.
 //
 // The attestation is signed and uploaded, so every remote recorded here
 // outlives the build and is readable by anything that can read the envelope. A
@@ -233,7 +234,7 @@ func classifyRemote(raw string) (remoteForm, string, string) {
 // cannot classify is dropped rather than passed through. What makes that drop
 // acceptable rather than a third silent failure is RemotesRefused: the refusal
 // is recorded, so the evidence is honest about its own gap.
-func recordRemote(rawWithQuery string) (remoteVerdict, string, string) {
+func recordRemoteGrammar(rawWithQuery string) (remoteVerdict, string, string) {
 	if rawWithQuery == "" {
 		return refuseRemote(refusalAmbiguousAuthority)
 	}
@@ -813,7 +814,116 @@ func pathIsCredentialFree(path string) bool {
 	if !strings.ContainsRune(path, '@') {
 		return true
 	}
+	if FirstSegmentHoldsUserinfo(path) {
+		return false
+	}
 	return !strings.ContainsAny(path, ":[")
+}
+
+// FirstSegmentHoldsUserinfo reports whether a path's first slash-delimited
+// segment carries an at-sign and a slash follows it. That is the shape of a
+// scheme-less authority, "TOKEN@github.com/acme/api.git", and the at-sign-plus-
+// delimiter rule cannot see it: there is no colon and no bracket in it. As an
+// scp path ("alice@example.com:ghs_TOKEN@github.com/acme/api.git") or a local
+// remote it was recorded verbatim.
+//
+// An at-sign with no slash after its segment stays recordable, which is what
+// keeps "git@example.com:repo@release.git" a repository name. A path that opens
+// with '/' has an empty first segment and is untouched.
+//
+// KNOWN COST: a relative name like "repo@v1/sub.git" is refused.
+func FirstSegmentHoldsUserinfo(path string) bool {
+	seg, _, found := strings.Cut(path, "/")
+	return found && strings.ContainsRune(seg, '@')
+}
+
+// tokenPrefixes are the issuer prefixes of GitHub and GitLab credentials.
+var tokenPrefixes = []string{"ghp_", "gho_", "ghs_", "ghu_", "ghr_", "github_pat_", "glpat-"}
+
+// maxPercentLayers bounds how many layers of percent-encoding CarriesTokenPrefix
+// peels. A value still changing after that many layers counts as carrying one.
+const maxPercentLayers = 8
+
+// CarriesTokenPrefix is the BACKSTOP behind the grammar: it reports whether a
+// value about to be recorded holds a known token prefix at a word boundary,
+// case-insensitively, as written or under any number of percent-encoding
+// layers. The grammar decides where a credential CAN sit; this catches one that
+// sits where the grammar admits a name, such as an scp login
+// ("ghp_TOKEN@github.com:acme/api.git") or a path segment.
+//
+// It is a refusal test only. Nothing it decodes is ever recorded, so peeling
+// layers invents no value; it can only take one away. The cost is a repository
+// whose name begins a word with one of these prefixes, which is refused and
+// counted.
+func CarriesTokenPrefix(v string) bool {
+	cur := v
+	for range maxPercentLayers {
+		if tokenPrefixAtBoundary(strings.ToLower(cur)) {
+			return true
+		}
+		next := percentDecodeLenient(cur)
+		if next == cur {
+			return false
+		}
+		cur = next
+	}
+	return true
+}
+
+func tokenPrefixAtBoundary(lower string) bool {
+	for _, p := range tokenPrefixes {
+		for from := 0; ; {
+			i := strings.Index(lower[from:], p)
+			if i < 0 {
+				break
+			}
+			i += from
+			if i == 0 || !isASCIIAlnum(lower[i-1]) {
+				return true
+			}
+			from = i + 1
+		}
+	}
+	return false
+}
+
+func isASCIIAlnum(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+}
+
+// percentDecodeLenient decodes every well-formed %XX once and leaves any other
+// '%' as it is, so one malformed escape cannot shield a well-formed one.
+func percentDecodeLenient(v string) string {
+	if !strings.ContainsRune(v, '%') {
+		return v
+	}
+	var b strings.Builder
+	b.Grow(len(v))
+	for i := 0; i < len(v); i++ {
+		if v[i] == '%' && i+2 < len(v) {
+			hi, okHi := unhex(v[i+1])
+			lo, okLo := unhex(v[i+2])
+			if okHi && okLo {
+				b.WriteByte(hi<<4 | lo)
+				i += 2
+				continue
+			}
+		}
+		b.WriteByte(v[i])
+	}
+	return b.String()
+}
+
+func unhex(c byte) (byte, bool) {
+	switch {
+	case c >= '0' && c <= '9':
+		return c - '0', true
+	case c >= 'a' && c <= 'f':
+		return c - 'a' + 10, true
+	case c >= 'A' && c <= 'F':
+		return c - 'A' + 10, true
+	}
+	return 0, false
 }
 
 // schemeRelativeAuthority returns the span a URL reader would read as the
@@ -1086,3 +1196,15 @@ func (v remoteVerdict) Recordable() bool { return v.recordable() }
 // Record applies the contract to one configured remote and returns the
 // verdict, the value to record, and the refusal reason when refused.
 func Record(raw string) (Verdict, string, string) { return recordRemote(raw) }
+
+// recordRemote is the grammar verdict with the token backstop applied to the
+// value it would record. The refusal reuses ambiguous-authority so the signed
+// reason set stays closed; a token-shaped span is one this file cannot show to
+// be anything but a credential.
+func recordRemote(raw string) (remoteVerdict, string, string) {
+	verdict, recorded, reason := recordRemoteGrammar(raw)
+	if verdict.recordable() && CarriesTokenPrefix(recorded) {
+		return refuseRemote(refusalAmbiguousAuthority)
+	}
+	return verdict, recorded, reason
+}

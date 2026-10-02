@@ -56,6 +56,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/detection"
+	"github.com/aflock-ai/rookery/attestation/gitremote"
 	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/attestation/registry"
 	"github.com/go-git/go-git/v5"
@@ -598,6 +599,12 @@ func sanitizeRemoteURL(rawWithQuery string) (string, bool) {
 		// The query was the whole remote. Nothing is left to name a repository.
 		return unclassifiableRemote(raw)
 	}
+	// The token backstop the git attestor applies, on the value recorded: a
+	// login or path segment the grammar admits as a name can still hold a
+	// pasted token ("ghp_TOKEN@github.com:acme/api.git").
+	if gitremote.CarriesTokenPrefix(clean) {
+		return unclassifiableRemote(raw)
+	}
 	return clean, true
 }
 
@@ -1058,6 +1065,11 @@ func sanitizeSCPRemote(raw string) (string, bool) {
 // authority to a human, and the two disagree about TOKEN.
 func sanitizeLocalRemote(raw string) (string, bool) {
 	if strings.ContainsRune(raw, ':') && strings.ContainsRune(raw, '@') {
+		return unclassifiableRemote(raw)
+	}
+	// "TOKEN@github.com/acme/api.git" holds no colon, and reads as userinfo
+	// in front of a host to every URL reader.
+	if gitremote.FirstSegmentHoldsUserinfo(raw) {
 		return unclassifiableRemote(raw)
 	}
 	return raw, true
