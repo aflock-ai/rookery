@@ -846,11 +846,14 @@ Prints the JSON Schema document for the named attestor's predicate. Useful for w
 
 Validates a Witness/cilock policy document for schema correctness. An unsigned policy is the normal input (validate, then `cilock sign`) and produces no signature warning; a DSSE envelope that carries no signatures does.
 
+A raw draft from `cilock policy template` carries two empty platform trust placeholders, `roots.fulcio-root` and `timestampauthorities.platform-tsa`, each exactly `{"certificate": ""}`, which the platform fills when a human signs. A draft whose only gap is those placeholders passes as `PASSED (unsigned draft)` (exit 0), lists them (`placeholders` in JSON), and says it is not releasable. Any other empty root, a placeholder in any other shape, and a placeholder inside a DSSE envelope stay errors. `--strict` refuses the placeholders too.
+
 | Flag | Short | Default | Description |
 |---|---|---|---|
 | `--policy <path>` | `-p` | (required) | Policy to validate: raw JSON or a signed DSSE envelope. |
 | `--publickey <path>` | `-k` | (none) | Verify the envelope's signature against this key. Requires a DSSE envelope. |
 | `--require-signed` | (none) | `false` | Fail unless the policy is a DSSE envelope with at least one signature (presence only; add `-k` to verify it). |
+| `--strict` | (none) | `false` | Also fail on the empty platform trust placeholders an unsigned draft carries. |
 | `--format <fmt>` | (none) | `text` | `text` or `json`. `--output`/`-o` are deprecated aliases that print a notice. |
 
 ## `cilock policy guide`

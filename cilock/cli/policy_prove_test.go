@@ -73,7 +73,7 @@ func TestProvePassingStep(t *testing.T) {
 	require.Equal(t, "Local verify: passed", e.firstLine())
 	require.Contains(t, e.stdout, "step app-build: real run admitted; failing run refused (")
 	require.Contains(t, e.stdout, "wrapped command exited 1, not 0")
-	require.Contains(t, e.stdout, `validate: only the expected "Root 'fulcio-root': missing certificate data"`)
+	require.Contains(t, e.stdout, "validate: passed as an unsigned draft; roots.fulcio-root, timestampauthorities.platform-tsa are empty platform placeholders")
 	require.Contains(t, e.stdout, "https://pushgate.example.invalid/policy/new?mode=manual")
 	require.NotContains(t, e.stdout, "PROBLEM")
 	e.requireScratchGone(t)
@@ -104,7 +104,7 @@ func TestProveRefusedGoodEvidenceStillWritesTheDraft(t *testing.T) {
 	require.Error(t, err, "a refused real run exits non-zero")
 	require.Equal(t, "Local verify: REFUSED by app-build: product: the step recorded no products; write the outputs under the working directory so they are recorded by digest", e.firstLine())
 	require.FileExists(t, out, "the draft is written anyway, so the human can choose")
-	require.Equal(t, []string{expectedPlatformRootError}, validateErrors(t, out))
+	requireOnlyPlatformPlaceholders(t, out)
 	e.requireScratchGone(t)
 }
 
@@ -163,7 +163,7 @@ func TestProveNormalizesAHandWrittenDraft(t *testing.T) {
 		asMap(asMap(funcs[0])["certConstraint"])["uris"])
 	require.Equal(t, module(commandSucceededModule), asMap(asList(asMap(asList(asMap(draftSteps(got)["build"])["attestations"])[0])["regopolicies"])[0])["module"],
 		"prove never rewrites a rule")
-	require.Equal(t, []string{expectedPlatformRootError}, validateErrors(t, e.draft))
+	requireOnlyPlatformPlaceholders(t, e.draft)
 }
 
 func TestProveHandWrittenStepBesideTemplatedOnesAndAStepWithNoRule(t *testing.T) {

@@ -73,8 +73,8 @@ rewrites your steps or rules.
   5. Signs a scratch copy whose functionaries name the throwaway key, and
      verifies: the real evidence must pass; each failing run must be refused
      by its own step, or the step "admits a failing run: add a rule".
-  6. Validates the draft: only "Root 'fulcio-root': missing certificate data"
-     is expected, because the platform fills the root.
+  6. Validates the draft as 'cilock policy validate' does: the empty platform
+     placeholders pass as an unsigned draft, because the platform fills them.
   7. Deletes the key, the evidence and the scratch policy.
 
 The first line of the report is exactly 'Local verify: passed' or
@@ -591,7 +591,9 @@ func checkFunctionaryTenants(doc draftDoc, platformURL string, r *proveReport) {
 }
 
 // validateDraft runs `cilock policy validate` on the draft as it will be
-// handed over and reports anything beyond the one expected root error.
+// handed over. The empty platform trust placeholders are not errors in an
+// unsigned draft (the validator reports them in Placeholders), so every
+// error it returns is a problem.
 func validateDraft(ctx context.Context, doc draftDoc, r *proveReport) {
 	raw, err := encodeDraft(doc)
 	if err != nil {
@@ -599,21 +601,12 @@ func validateDraft(ctx context.Context, doc draftDoc, r *proveReport) {
 		return
 	}
 	result := internalpolicy.ValidateRawPolicy(ctx, raw)
-	var unexpected []string
-	sawRoot := false
 	for _, e := range result.Errors {
-		if e == expectedPlatformRootError {
-			sawRoot = true
-			continue
-		}
-		unexpected = append(unexpected, e)
-	}
-	for _, e := range unexpected {
 		r.problem("validate: %s", e)
 	}
-	if len(unexpected) == 0 {
-		if sawRoot {
-			r.note("validate: only the expected %q (the platform fills it when your human signs)", expectedPlatformRootError)
+	if len(result.Errors) == 0 {
+		if len(result.Placeholders) > 0 {
+			r.note("validate: passed as an unsigned draft; %s are empty platform placeholders the platform fills when your human signs", strings.Join(result.Placeholders, ", "))
 		} else {
 			r.note("validate: passed")
 		}

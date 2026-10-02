@@ -65,6 +65,73 @@ type ValidationResult struct {
 	// carries no signatures is also "unsigned" and does warn, because the
 	// signed form was presented without the signature.
 	Signature string `json:"signature"`
+	// Placeholders lists, by JSON path, the empty platform trust entries an
+	// unsigned draft still holds (PlatformRootPlaceholder,
+	// PlatformTSAPlaceholder in exactly the shape `cilock policy template`
+	// writes). They are not errors in a raw draft: the platform fills them
+	// when a human signs. A draft that lists any is not releasable, and
+	// RequireFilledTrust turns them back into errors.
+	Placeholders []string `json:"placeholders,omitempty"`
+}
+
+// The platform trust placeholders `cilock policy template` (and `policy prove`
+// normalization) write into an unsigned draft, each as {"certificate": ""}.
+// The platform replaces them with the tenant's own Fulcio root and TSA when a
+// human signs; the release path then verifies that human signature against
+// the platform's CA, never against anything in the draft.
+const (
+	PlatformRootPlaceholder = "fulcio-root"
+	PlatformTSAPlaceholder  = "platform-tsa"
+)
+
+// RequireFilledTrust is the --strict form: every platform placeholder the
+// draft still holds becomes the error an unfilled trust entry always was.
+func (r *ValidationResult) RequireFilledTrust() {
+	for _, p := range r.Placeholders {
+		switch {
+		case strings.HasPrefix(p, "roots."):
+			r.Errors = append(r.Errors, fmt.Sprintf("Root '%s': missing certificate data (an unfilled platform placeholder; the platform fills it when a human signs)", strings.TrimPrefix(p, "roots.")))
+		case strings.HasPrefix(p, "timestampauthorities."):
+			r.Errors = append(r.Errors, fmt.Sprintf("Timestamp authority '%s': missing certificate data (an unfilled platform placeholder; the platform fills it when a human signs)", strings.TrimPrefix(p, "timestampauthorities.")))
+		}
+		r.Valid = false
+	}
+}
+
+// platformPlaceholders returns the trust entries of a raw draft that are
+// exactly a platform placeholder: the named entry is an object with one
+// member, "certificate", whose value is the empty JSON string. A missing or
+// null certificate, any other member, or any other name is not a placeholder,
+// so it keeps the error it always had.
+func platformPlaceholders(policyJSON []byte) (roots map[string]bool, paths []string) {
+	var doc struct {
+		Roots map[string]json.RawMessage `json:"roots"`
+		TSAs  map[string]json.RawMessage `json:"timestampauthorities"`
+	}
+	if err := json.Unmarshal(policyJSON, &doc); err != nil {
+		return nil, nil
+	}
+	roots = map[string]bool{}
+	if isEmptyCertificateEntry(doc.Roots[PlatformRootPlaceholder]) {
+		roots[PlatformRootPlaceholder] = true
+		paths = append(paths, "roots."+PlatformRootPlaceholder)
+	}
+	if isEmptyCertificateEntry(doc.TSAs[PlatformTSAPlaceholder]) {
+		paths = append(paths, "timestampauthorities."+PlatformTSAPlaceholder)
+	}
+	return roots, paths
+}
+
+func isEmptyCertificateEntry(raw json.RawMessage) bool {
+	if len(raw) == 0 {
+		return false
+	}
+	var entry map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &entry); err != nil || len(entry) != 1 {
+		return false
+	}
+	cert, ok := entry["certificate"]
+	return ok && string(cert) == `""`
 }
 
 type policyDocument struct {
@@ -159,7 +226,9 @@ func ValidatePolicy(ctx context.Context, envelope dsse.Envelope, verifier crypto
 	}
 
 	validateFillSlots(envelope.Payload, result)
-	validatePolicyContent(&policy, result)
+	// The signed form tolerates no placeholder: an empty root in an envelope
+	// can never admit a signer, so it stays the error it always was.
+	validatePolicyContent(&policy, nil, result)
 	validateStepAbout(&policy, envelope.PayloadType, true, result)
 	validateV02Decodes(envelope, result)
 
@@ -193,7 +262,9 @@ func ValidateRawPolicy(ctx context.Context, policyJSON []byte) *ValidationResult
 	}
 
 	validateFillSlots(policyJSON, result)
-	validatePolicyContent(&policy, result)
+	placeholderRoots, placeholders := platformPlaceholders(policyJSON)
+	result.Placeholders = placeholders
+	validatePolicyContent(&policy, placeholderRoots, result)
 	validateStepAbout(&policy, "", false, result)
 
 	return result
@@ -258,13 +329,16 @@ func validateFillSlots(policyJSON []byte, result *ValidationResult) {
 	walk("", doc)
 }
 
-func validatePolicyContent(policy *policyDocument, result *ValidationResult) {
+// validatePolicyContent checks the decoded policy. placeholderRoots names the
+// roots that are exact platform placeholders in an unsigned raw draft; it is
+// nil for every signed or envelope input.
+func validatePolicyContent(policy *policyDocument, placeholderRoots map[string]bool, result *ValidationResult) {
 	validatePolicySchema(policy, result)
 	validateExpiration(policy, result)
 	validateSteps(policy, result)
 	validateExternalAttestations(policy, result)
 	validatePublicKeys(policy, result)
-	validateRoots(policy, result)
+	validateRoots(policy, placeholderRoots, result)
 	validateRegoPolicies(policy, result)
 	validateKeyReferences(policy, result)
 }
@@ -665,8 +739,12 @@ func validatePublicKeys(policy *policyDocument, result *ValidationResult) {
 	}
 }
 
-func validateRoots(policy *policyDocument, result *ValidationResult) {
+func validateRoots(policy *policyDocument, placeholderRoots map[string]bool, result *ValidationResult) {
 	for rootID, rootEntry := range policy.Roots {
+		if rootEntry.Certificate == "" && placeholderRoots[rootID] {
+			// Reported in result.Placeholders; the platform fills it.
+			continue
+		}
 		if rootEntry.Certificate == "" {
 			result.Errors = append(result.Errors, fmt.Sprintf("Root '%s': missing certificate data", rootID))
 			result.Valid = false

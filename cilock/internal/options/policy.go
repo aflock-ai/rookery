@@ -27,6 +27,12 @@ type PolicyValidateOptions struct {
 	// flow, so the raw policy is the normal input and gets no signature
 	// warning. Set it (or pass -k) when a signature is expected (#9311).
 	RequireSigned bool
+	// Strict refuses the empty platform trust placeholders a `cilock policy
+	// template` draft carries (fulcio-root, platform-tsa). Off by default:
+	// those placeholders are expected in an unsigned draft, because the
+	// platform fills them when a human signs. Set it where the policy must
+	// already be the complete form that gets signed.
+	Strict bool
 }
 
 var RequiredPolicyValidateFlags = []string{
@@ -48,6 +54,10 @@ func (pvo *PolicyValidateOptions) AddFlags(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&pvo.RequireSigned, "require-signed", false,
 		"Fail unless the policy is a DSSE envelope carrying at least one signature (the form `cilock sign` "+
 			"produces). Presence only; pass -k/--publickey to verify the signature.")
+
+	cmd.Flags().BoolVar(&pvo.Strict, "strict", false,
+		"Also fail on the empty platform trust placeholders (roots.fulcio-root, timestampauthorities.platform-tsa) "+
+			"an unsigned draft carries until the platform fills them when a human signs.")
 
 	cmd.MarkFlagsRequiredTogether(RequiredPolicyValidateFlags...)
 }

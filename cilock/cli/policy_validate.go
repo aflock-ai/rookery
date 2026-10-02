@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
 	"github.com/aflock-ai/rookery/cilock/internal/options"
@@ -34,9 +35,20 @@ func PolicyValidateCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "validate",
 		Short: "Validate a Witness policy file",
-		Long:  "Validates a Witness policy file for correct schema, structure, and optionally verifies signatures",
+		Long: `Validates a Witness policy file for correct schema, structure, and optionally verifies signatures.
+
+An unsigned draft from 'cilock policy template' carries two empty platform trust
+placeholders, roots.fulcio-root and timestampauthorities.platform-tsa, each
+exactly {"certificate": ""}. The platform fills them when a human signs, so a
+draft whose only gap is those placeholders PASSES as an unsigned draft (exit 0)
+and is reported as not releasable. Any other empty or malformed root, and any
+placeholder inside a signed envelope, is still an error. --strict refuses the
+placeholders too.`,
 		Example: `  # Validate a policy's schema and structure (unsigned input is the normal case)
   cilock policy validate -p policy.json
+
+  # Require the complete, filled form (placeholders are errors)
+  cilock policy validate -p policy.json --strict
 
   # Also verify the policy signature against a public key, as JSON
   cilock policy validate -p policy.json -k policy-pub.pem --format json
@@ -76,6 +88,11 @@ func runValidatePolicy(ctx context.Context, pvo options.PolicyValidateOptions, o
 	result, err := validatePolicyInput(ctx, pvo, policyBytes, verifier)
 	if err != nil {
 		return err
+	}
+	if pvo.Strict {
+		result.RequireFilledTrust()
+		// Reported as errors now; the draft note would contradict them.
+		result.Placeholders = nil
 	}
 
 	if pvo.OutputFormat == formatJSON {
@@ -120,10 +137,26 @@ func outputJSON(out io.Writer, result *policy.ValidationResult) error {
 	return nil
 }
 
+// placeholderNote is the one line an unsigned draft's platform placeholders
+// get. It says what they are, who fills them, and that the draft is not the
+// releasable policy, so an author neither chases them nor mistakes the pass
+// for a release.
+func placeholderNote(result *policy.ValidationResult) string {
+	return fmt.Sprintf("  placeholders: %s are empty on purpose; the platform fills them when your human signs. "+
+		"This draft is not signed and not releasable (--strict refuses it).", strings.Join(result.Placeholders, ", "))
+}
+
 func outputText(out io.Writer, result *policy.ValidationResult) error {
 	if result.Valid {
-		_, _ = fmt.Fprintln(out, "Policy validation: PASSED")
+		verdict := "Policy validation: PASSED"
+		if len(result.Placeholders) > 0 {
+			verdict += " (unsigned draft)"
+		}
+		_, _ = fmt.Fprintln(out, verdict)
 		_, _ = fmt.Fprintf(out, "  signature: %s\n", result.Signature)
+		if len(result.Placeholders) > 0 {
+			_, _ = fmt.Fprintln(out, placeholderNote(result))
+		}
 
 		if len(result.Warnings) > 0 {
 			_, _ = fmt.Fprintln(out)
@@ -143,6 +176,11 @@ func outputText(out io.Writer, result *policy.ValidationResult) error {
 		for i, err := range result.Errors {
 			_, _ = fmt.Fprintf(out, "  %d. %q\n", i+1, err)
 		}
+	}
+
+	if len(result.Placeholders) > 0 {
+		_, _ = fmt.Fprintln(out)
+		_, _ = fmt.Fprintln(out, placeholderNote(result))
 	}
 
 	if len(result.Warnings) > 0 {

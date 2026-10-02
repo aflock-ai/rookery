@@ -82,6 +82,20 @@ func validateErrors(t *testing.T, path string) []string {
 	return internalpolicy.ValidateRawPolicy(context.Background(), raw).Errors
 }
 
+// requireOnlyPlatformPlaceholders asserts a draft validates as an unsigned
+// draft whose only gap is the two platform trust placeholders. Before the
+// validator learned the placeholder rule this was the one expected error
+// "Root 'fulcio-root': missing certificate data".
+func requireOnlyPlatformPlaceholders(t *testing.T, path string) {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	require.NoError(t, err)
+	res := internalpolicy.ValidateRawPolicy(context.Background(), raw)
+	require.Empty(t, res.Errors)
+	require.True(t, res.Valid)
+	require.Equal(t, []string{"roots." + platformFulcioRoot, "timestampauthorities." + platformTSA}, res.Placeholders)
+}
+
 func TestTemplateRefusesWithoutAnEnrolledAgent(t *testing.T) {
 	sandboxCredentials(t, false)
 	out := filepath.Join(t.TempDir(), "policy.json")
@@ -138,7 +152,7 @@ func TestTemplateWritesThePartsAgentsGetWrong(t *testing.T) {
 	require.Contains(t, joined, "unfilled template slot")
 }
 
-func TestTemplateFilledDraftValidatesWithOnlyTheExpectedRootError(t *testing.T) {
+func TestTemplateFilledDraftValidatesWithOnlyThePlatformPlaceholders(t *testing.T) {
 	sandboxCredentials(t, true)
 	out := filepath.Join(t.TempDir(), "policy.json")
 	_, err := templateCmd(t, "--goal", "tests", "--goal", "secrets", "--goal", "vulns", "-o", out,
@@ -146,7 +160,7 @@ func TestTemplateFilledDraftValidatesWithOnlyTheExpectedRootError(t *testing.T) 
 		"--fill", `vulns.command-pin=["sh","-c","govulncheck -json ./... > govulncheck.json"]`)
 	require.NoError(t, err)
 	require.Empty(t, findFillSlots(readDraft(t, out)))
-	require.Equal(t, []string{expectedPlatformRootError}, validateErrors(t, out))
+	requireOnlyPlatformPlaceholders(t, out)
 
 	// The pinned argv is what prove will run.
 	argv, ok := pinnedArgv(asMap(draftSteps(readDraft(t, out))["tests"]))
@@ -279,7 +293,7 @@ func TestTemplateAddStep(t *testing.T) {
 		require.Contains(t, string(src), `upstream := "app-build"`)
 	})
 
-	require.Equal(t, []string{expectedPlatformRootError}, validateErrors(t, out))
+	requireOnlyPlatformPlaceholders(t, out)
 }
 
 func TestTemplateTracedAndVEX(t *testing.T) {

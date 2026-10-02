@@ -21,6 +21,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation"
 	"github.com/aflock-ai/rookery/attestation/detection"
+	internalpolicy "github.com/aflock-ai/rookery/cilock/internal/policy"
 )
 
 // The authoring catalog is what `cilock policy guide` prints, what
@@ -567,14 +568,12 @@ func agentFunctionary(trustDomain, tenantID string) map[string]any {
 	}
 }
 
+// The placeholder names are the validator's, so the entries template writes
+// and the entries `cilock policy validate` tolerates in an unsigned draft
+// cannot drift apart (cilock/internal/policy/validate.go platformPlaceholders).
 const (
-	platformFulcioRoot = "fulcio-root"
-	platformTSA        = "platform-tsa"
-	// expectedPlatformRootError is the one error `cilock policy validate`
-	// reports on a correct Pushgate draft, because the platform fills the
-	// root when the human prepares the policy for signing
-	// (cilock/internal/policy/validate.go validateRoots).
-	expectedPlatformRootError = "Root 'fulcio-root': missing certificate data"
+	platformFulcioRoot = internalpolicy.PlatformRootPlaceholder
+	platformTSA        = internalpolicy.PlatformTSAPlaceholder
 )
 
 // platformTrustPlaceholders are the empty trust entries the platform fills.
