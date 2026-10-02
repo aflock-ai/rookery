@@ -111,6 +111,7 @@ func TestRunGitSignerDefaultsToPlatformAndRequiresTimestamp(t *testing.T) {
 }
 
 func TestRunGitSignerFailsClosedWhenTimestampFails(t *testing.T) {
+	isolateStores(t)
 	// A sibling test leaves an httptest URL in CILOCK_PLATFORM_URL; on a machine
 	// with an enrolled agent, RunGitSigner compares that URL against the agent's
 	// platform and refuses before any stub below is reached. Pin it empty so the
@@ -137,6 +138,7 @@ func TestRunGitSignerFailsClosedWhenTimestampFails(t *testing.T) {
 }
 
 func TestRunGitSignerRejectsInsecurePlatformBeforeIdentityResolution(t *testing.T) {
+	isolateStores(t)
 	oldResolve := resolveGitSigningToken
 	t.Cleanup(func() { resolveGitSigningToken = oldResolve })
 	called := false

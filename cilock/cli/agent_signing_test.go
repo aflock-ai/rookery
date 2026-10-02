@@ -270,6 +270,9 @@ func TestAgentStatusDistinguishesPendingFromRedeemed(t *testing.T) {
 // stalled activation knows which identity their runs use meanwhile.
 func TestAgentStatusNamesAPendingDeliveryBesideTheActiveIdentity(t *testing.T) {
 	isolateAgentConfig(t)
+	// Two agents on one platform need the explicitly migrated version 2 store.
+	_, err := auth.MigrateAgentStore()
+	require.NoError(t, err)
 	active := auth.AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-active", RefreshCredential: agentTestSecret, TrustDomain: "p.example.com"}
 	require.NoError(t, auth.SaveAgent(active))
 	require.NoError(t, auth.SavePendingAgent(auth.AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-new", RefreshCredential: "new-" + agentTestSecret}))

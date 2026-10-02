@@ -286,7 +286,7 @@ func TestExchangeAfterEnrollmentWarnsWhenExpiryCannotBeRecorded(t *testing.T) {
 				RefreshCredential: theSecret, TrustDomain: "platform.example.com"}
 			require.NoError(t, SaveAgent(cred))
 			replacement = cred
-			replacement.AgentID = "a-new"
+			replacement.EnrolledAt = time.Now().UTC()
 			replacement.RefreshCredential = "replacement-secret"
 			replacement.ExpiresAt = time.Now().Add(2 * time.Hour).UTC()
 
@@ -398,7 +398,7 @@ func TestActivateEnrolledAgentRefusesToRedeemACredentialThatIsNotThisCeremonys(t
 	require.Error(t, err)
 	assert.False(t, reached, "a credential that is not this ceremony's is never presented")
 	assert.Contains(t, err.Error(), "a-A")
-	assert.Contains(t, err.Error(), "a-B")
+	assert.Contains(t, err.Error(), "no delivered agent credential")
 	assert.NotContains(t, err.Error(), "b-secret")
 
 	cred, err := LookupPendingAgent(srv.URL)
@@ -441,7 +441,7 @@ func TestAGetCarryingEveryFieldIsNotADelivery(t *testing.T) {
 
 func TestExchangeDerivedWritesLandOnlyOnTheCredentialThatWasExchanged(t *testing.T) {
 	// The platform answers for credential A. Between the request and the
-	// writes, another command stored credential B under the same platform.
+	// writes, another command rotated credential A under the same platform.
 	// The pin and the ceiling A's answer produced must not land on B, and B
 	// must be left exactly as that command stored it.
 	isolateConfig(t)
@@ -449,7 +449,7 @@ func TestExchangeDerivedWritesLandOnlyOnTheCredentialThatWasExchanged(t *testing
 	a := AgentCredential{PlatformURL: "", TenantID: "t-1", AgentID: "a-A", RefreshCredential: "a-secret"}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		// The swap happens while the request is in flight.
-		require.NoError(t, SaveAgent(AgentCredential{PlatformURL: a.PlatformURL, TenantID: "t-1", AgentID: "a-B", RefreshCredential: "b-secret"}))
+		require.NoError(t, SaveAgent(AgentCredential{PlatformURL: a.PlatformURL, TenantID: "t-1", AgentID: "a-A", RefreshCredential: "b-secret"}))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"token": jwtWithSubject(t, spiffeID), "token_type": "oidc", "spiffe_id": spiffeID,
@@ -467,7 +467,7 @@ func TestExchangeDerivedWritesLandOnlyOnTheCredentialThatWasExchanged(t *testing
 	b, err := LookupAgent(srv.URL)
 	require.NoError(t, err)
 	require.NotNil(t, b)
-	assert.Equal(t, "a-B", b.AgentID)
+	assert.Equal(t, "a-A", b.AgentID)
 	assert.Equal(t, "", b.TrustDomain, "A's pin must not land on B")
 	assert.True(t, b.ExpiresAt.IsZero(), "A's ceiling must not land on B")
 }
@@ -477,8 +477,8 @@ func TestActivationDoesNotReportSuccessIfThePendingSlotMovedDuringTheExchange(t 
 	const spiffeID = "spiffe://platform.example.com/tenant/t-1/agent/a-A"
 	a := AgentCredential{TenantID: "t-1", AgentID: "a-A", RefreshCredential: "a-secret"}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		// Another ceremony delivers B while A's exchange is in flight.
-		require.NoError(t, SavePendingAgent(AgentCredential{PlatformURL: a.PlatformURL, TenantID: "t-1", AgentID: "a-B", RefreshCredential: "b-secret"}))
+		// Another ceremony rotates A while A's exchange is in flight.
+		require.NoError(t, SavePendingAgent(AgentCredential{PlatformURL: a.PlatformURL, TenantID: "t-1", AgentID: "a-A", RefreshCredential: "b-secret"}))
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{"token": jwtWithSubject(t, spiffeID), "token_type": "oidc", "spiffe_id": spiffeID})
 	}))
@@ -492,7 +492,7 @@ func TestActivationDoesNotReportSuccessIfThePendingSlotMovedDuringTheExchange(t 
 	b, err := LookupPendingAgent(srv.URL)
 	require.NoError(t, err)
 	require.NotNil(t, b)
-	assert.Equal(t, "a-B", b.AgentID, "the other ceremony's credential is left as it was")
+	assert.Equal(t, "a-A", b.AgentID, "the other ceremony's credential is left as it was")
 	active, err := LookupAgent(srv.URL)
 	require.NoError(t, err)
 	assert.Nil(t, active, "and nothing was promoted: B was never redeemed")

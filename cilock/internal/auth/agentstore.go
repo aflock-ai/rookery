@@ -32,11 +32,13 @@ import (
 // NOT secret — they are SPIFFE path segments that appear in every certificate
 // this credential buys — and are shown freely.
 
-// AgentCredential is the enrolled agent principal for one platform: the two
+// AgentCredential is one enrolled agent principal for a platform: the two
 // SPIFFE path segments that name it plus the opaque refresh credential the
 // platform issued at enrollment.
 type AgentCredential struct {
-	PlatformURL string `json:"platform_url"`
+	// EnrolledAt orders local enrollments; migrated credentials retain zero.
+	EnrolledAt  time.Time `json:"enrolled_at,omitzero"`
+	PlatformURL string    `json:"platform_url"`
 	// TenantID and AgentID are the `tenant/<id>/agent/<id>` segments of the
 	// SPIFFE ID this principal signs under. Not secret.
 	TenantID string `json:"tenant_id"`
@@ -129,22 +131,44 @@ func (c AgentCredential) String() string {
 		c.PlatformURL, c.TenantID, c.AgentID)
 }
 
-// agentFileStore is the on-disk shape: agent credentials keyed by normalized
-// platform URL. There is no active-platform pointer — an agent is enrolled
-// against a specific platform and is selected by the URL the run targets.
+// agentFileStore keys each slot by the JSON tuple [normalized platform, agent
+// ID] in memory. Tuple encoding avoids delimiter collisions. Pending redemption
+// and active signing credentials remain separate.
 //
-// TWO SLOTS PER PLATFORM. Agents holds the credential this machine SIGNS
-// WITH: redeemed by the platform at least once. Pending holds a credential a
-// ceremony DELIVERED that the platform has not yet redeemed. They are kept
-// apart because redemption can fail transiently (the signer down, a proxy
-// in the way), and a delivery that overwrote the active slot turned that
-// outage into a lost identity: the new credential unredeemable once its
-// window closed, the old one gone. A pending credential is promoted into
-// the active slot by the exchange that redeems it, discarded by the
-// platform's own refusal, and otherwise left for the next run to try again.
+// The on-disk format is never changed implicitly: version 1 (no "version",
+// platform-keyed slots) is what older cilock binaries read, git's signer
+// included, and a plain read rewriting it as v2 cut them all off on
+// 2026-09-30. Writers keep the format they found; only MigrateAgentStore
+// produces version 2.
 type agentFileStore struct {
+	Agents  map[string]AgentCredential
+	Pending map[string]AgentCredential
+	format  int
+}
+
+// agentFileStoreV1 is the version 1 encoding: no version field at all, so an
+// older binary reads it exactly as it always has.
+type agentFileStoreV1 struct {
 	Agents  map[string]AgentCredential `json:"agents"`
 	Pending map[string]AgentCredential `json:"pending,omitempty"`
+}
+
+// agentFileStoreV2 stores slots as LISTS: a version 1 binary decodes slots
+// as platform-keyed maps without checking the version, so a map would read as
+// "no agent" and sign as the human. A list fails that decode, closed.
+type agentFileStoreV2 struct {
+	Version int               `json:"version"`
+	Agents  []AgentCredential `json:"agents"`
+	Pending []AgentCredential `json:"pending,omitempty"`
+}
+
+// ErrAgentStoreNeedsMigration refuses a write a version 1 store cannot hold
+// without evicting a live agent.
+var ErrAgentStoreNeedsMigration = errors.New("this machine's agent credential store is version 1, which holds one agent per platform")
+
+func agentKey(platform, id string) string {
+	key, _ := json.Marshal([2]string{NormalizeURL(platform), id})
+	return string(key)
 }
 
 // AgentStorePath is cilock's agent-credential file, a sibling of StorePath in
@@ -158,25 +182,104 @@ func AgentStorePath() (string, error) {
 	return filepath.Join(dir, "agent-credentials.json"), nil
 }
 
-func loadAgents() (*agentFileStore, error) {
+func loadAgents() (*agentFileStore, error) { return readAgents() }
+
+// loadAgentsLocked is loadAgents for a read-modify-write under the store lock.
+func loadAgentsLocked() (*agentFileStore, error) { return readAgents() }
+
+// readAgents never writes: it reports the store and the format it found. A
+// missing file is an empty version 1 store.
+func readAgents() (*agentFileStore, error) {
 	path, err := AgentStorePath()
 	if err != nil {
 		return nil, err
 	}
-	var s agentFileStore
-	if err := readStoreFile(path, "agent credential store", &s); err != nil {
+	var raw struct {
+		Version int             `json:"version"`
+		Agents  json.RawMessage `json:"agents"`
+		Pending json.RawMessage `json:"pending"`
+	}
+	if err := readStoreFile(path, "agent credential store", &raw); err != nil {
 		return nil, err
 	}
-	// A store file that exists but carries a null map, and a store file that does
-	// not exist at all, both arrive here as the zero value — so the nil-map fill
-	// covers both and there is no "missing file" branch to get wrong.
-	if s.Agents == nil {
-		s.Agents = map[string]AgentCredential{}
+	if raw.Version != 0 && raw.Version != 1 && raw.Version != 2 {
+		return nil, fmt.Errorf("unsupported agent credential store version %d; upgrade all local Cilock callers", raw.Version)
 	}
-	if s.Pending == nil {
-		s.Pending = map[string]AgentCredential{}
+	s := agentFileStore{format: 1}
+	if raw.Version == 2 {
+		s.format = 2
+	}
+	if s.Agents, err = decodeAgentSlot(raw.Agents, s.format); err != nil {
+		return nil, err
+	}
+	if s.Pending, err = decodeAgentSlot(raw.Pending, s.format); err != nil {
+		return nil, err
 	}
 	return &s, nil
+}
+
+// decodeAgentSlot reads one slot in the given format and keys it by
+// (platform, agent ID). A v1 key must name its entry's platform; a v2 list
+// must not hold the same identity twice.
+func decodeAgentSlot(raw json.RawMessage, format int) (map[string]AgentCredential, error) {
+	stored, err := slotEntries(raw, format)
+	if err != nil {
+		return nil, err
+	}
+	entries := map[string]AgentCredential{}
+	for _, c := range stored {
+		c, err = normalizeStoredAgent(c)
+		if err != nil {
+			return nil, fmt.Errorf("invalid stored agent identity: %w", err)
+		}
+		key := agentKey(c.PlatformURL, c.AgentID)
+		if _, dup := entries[key]; dup {
+			return nil, fmt.Errorf("agent credential store holds agent %s twice", c.AgentID)
+		}
+		entries[key] = c
+	}
+	return entries, nil
+}
+
+func slotEntries(raw json.RawMessage, format int) ([]AgentCredential, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if format == 2 {
+		var stored []AgentCredential
+		if err := json.Unmarshal(raw, &stored); err != nil {
+			return nil, fmt.Errorf("parse agent credential store: %w", err)
+		}
+		return stored, nil
+	}
+	var keyed map[string]AgentCredential
+	if err := json.Unmarshal(raw, &keyed); err != nil {
+		return nil, fmt.Errorf("parse agent credential store: %w", err)
+	}
+	stored := make([]AgentCredential, 0, len(keyed))
+	for key, c := range keyed {
+		if NormalizeURL(key) != NormalizeURL(c.PlatformURL) {
+			return nil, fmt.Errorf("agent credential store key does not match its identity")
+		}
+		stored = append(stored, c)
+	}
+	return stored, nil
+}
+
+// sortedAgents lists a slot in (platform, agent ID) order, so a save writes
+// the same bytes for the same store.
+func sortedAgents(slot map[string]AgentCredential) []AgentCredential {
+	out := make([]AgentCredential, 0, len(slot))
+	for _, c := range slot {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].PlatformURL != out[j].PlatformURL {
+			return out[i].PlatformURL < out[j].PlatformURL
+		}
+		return out[i].AgentID < out[j].AgentID
+	})
+	return out
 }
 
 func saveAgents(s *agentFileStore) error {
@@ -187,11 +290,39 @@ func saveAgents(s *agentFileStore) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("create config dir: %w", err)
 	}
-	data, err := json.MarshalIndent(s, "", "  ")
+	var doc any
+	if s.format == 2 {
+		v2 := agentFileStoreV2{Version: 2, Agents: sortedAgents(s.Agents)}
+		if len(s.Pending) > 0 {
+			v2.Pending = sortedAgents(s.Pending)
+		}
+		doc = v2
+	} else {
+		v1, err := encodeV1(s)
+		if err != nil {
+			return err
+		}
+		doc = v1
+	}
+	data, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return err
 	}
 	return writeStoreFile0600(path, data)
+}
+
+// encodeV1 writes one entry per platform per slot, as version 1 readers expect.
+func encodeV1(s *agentFileStore) (agentFileStoreV1, error) {
+	v1 := agentFileStoreV1{Agents: map[string]AgentCredential{}, Pending: map[string]AgentCredential{}}
+	for _, pair := range []struct{ from, to map[string]AgentCredential }{{s.Agents, v1.Agents}, {s.Pending, v1.Pending}} {
+		for _, c := range pair.from {
+			if _, dup := pair.to[c.PlatformURL]; dup {
+				return v1, ErrAgentStoreNeedsMigration
+			}
+			pair.to[c.PlatformURL] = c
+		}
+	}
+	return v1, nil
 }
 
 func normalizeStoredAgent(c AgentCredential) (AgentCredential, error) {
@@ -202,23 +333,63 @@ func normalizeStoredAgent(c AgentCredential) (AgentCredential, error) {
 	return c, nil
 }
 
-// SaveAgent stores (or replaces) the ACTIVE agent credential for its platform
-// URL — the one this machine signs with. `cilock agent login` (a credential
-// minted elsewhere and handed over) lands here; a ceremony's delivery does
-// not (SavePendingAgent), and a redeemed pending credential is moved here by
-// PromotePendingAgentIf.
-//
-// An explicit active write SUPERSEDES anything pending for the platform, in
-// the same locked write. The operator choosing an identity now is a later
-// decision than a ceremony that delivered earlier and never redeemed; left
-// in place, that older credential would be promoted over the login by the
-// next run, and a promotion racing the login would find its slot still
-// there. Clearing it here makes both impossible: the promotion's
-// compare-and-swap finds the slot gone and refuses.
+// admitV1 makes room for c in a version 1 slot (one agent per platform). A
+// different live agent in the active slot is refused, never evicted (the
+// 2026-09-30 14:31Z outage); an expired or pending one is replaced.
+func (s *agentFileStore) admitV1(c AgentCredential, slot map[string]AgentCredential) error {
+	if s.format == 2 {
+		return nil
+	}
+	for _, other := range s.Agents {
+		if other.PlatformURL == c.PlatformURL && other.AgentID != c.AgentID && !other.Expired(time.Now()) {
+			return fmt.Errorf("%w, and agent %s is still live there. To keep both, run `cilock agent migrate` "+
+				"after upgrading every local cilock caller (installed cilock, git signing, jade, mint workers); "+
+				"to replace it, run `cilock agent remove %s` first: %w",
+				ErrAgentStoreNeedsMigration, other.AgentID, other.AgentID, errAgentStoreUnchanged)
+		}
+	}
+	for key, other := range slot {
+		if other.PlatformURL == c.PlatformURL && other.AgentID != c.AgentID {
+			delete(slot, key)
+		}
+	}
+	return nil
+}
+
+var errAgentStoreUnchanged = errors.New("the store was not changed")
+
+// MigrateAgentStore explicitly rewrites the store as version 2 and reports a
+// change; v2 is left alone. Older binaries cannot read the result.
+func MigrateAgentStore() (bool, error) {
+	path, err := AgentStorePath()
+	if err != nil {
+		return false, err
+	}
+	var migrated bool
+	err = withStoreLock(path, func() error {
+		s, err := loadAgentsLocked()
+		if err != nil {
+			return err
+		}
+		if s.format == 2 {
+			return nil
+		}
+		s.format = 2
+		migrated = true
+		return saveAgents(s)
+	})
+	return migrated, err
+}
+
+// SaveAgent adds an active identity or replaces only that ID. An explicit
+// login supersedes a pending credential only for the same ID under this platform.
 func SaveAgent(c AgentCredential) error {
 	c, err := normalizeStoredAgent(c)
 	if err != nil {
 		return err
+	}
+	if c.EnrolledAt.IsZero() {
+		c.EnrolledAt = time.Now().UTC()
 	}
 	path, err := AgentStorePath()
 	if err != nil {
@@ -229,18 +400,29 @@ func SaveAgent(c AgentCredential) error {
 	// store from a snapshot taken before the logout, resurrecting a credential
 	// the operator just removed.
 	return withStoreLock(path, func() error {
-		s, err := loadAgents()
+		s, err := loadAgentsLocked()
 		if err != nil {
 			return err
 		}
-		s.Agents[c.PlatformURL] = c
-		delete(s.Pending, c.PlatformURL)
+		if err := s.admitV1(c, s.Agents); err != nil {
+			return err
+		}
+		s.Agents[agentKey(c.PlatformURL, c.AgentID)] = c
+		delete(s.Pending, agentKey(c.PlatformURL, c.AgentID))
+		if s.format != 2 {
+			// v1: supersede every pending credential, or an old cilock promotes it.
+			for key, p := range s.Pending {
+				if p.PlatformURL == c.PlatformURL {
+					delete(s.Pending, key)
+				}
+			}
+		}
 		return saveAgents(s)
 	})
 }
 
 // SavePendingAgent stores (or replaces) the PENDING credential for its
-// platform URL: delivered by a ceremony, not yet redeemed. The active slot is
+// platform and agent ID: delivered by a ceremony, not yet redeemed. The active slot is
 // untouched — until the platform has answered for this credential, the
 // identity this machine signs with is whatever it was.
 func SavePendingAgent(c AgentCredential) error {
@@ -248,16 +430,22 @@ func SavePendingAgent(c AgentCredential) error {
 	if err != nil {
 		return err
 	}
+	if c.EnrolledAt.IsZero() {
+		c.EnrolledAt = time.Now().UTC()
+	}
 	path, err := AgentStorePath()
 	if err != nil {
 		return err
 	}
 	return withStoreLock(path, func() error {
-		s, err := loadAgents()
+		s, err := loadAgentsLocked()
 		if err != nil {
 			return err
 		}
-		s.Pending[c.PlatformURL] = c
+		if err := s.admitV1(c, s.Pending); err != nil {
+			return err
+		}
+		s.Pending[agentKey(c.PlatformURL, c.AgentID)] = c
 		return saveAgents(s)
 	})
 }
@@ -269,11 +457,7 @@ func LookupPendingAgent(platformURL string) (*AgentCredential, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, ok := s.Pending[NormalizeURL(platformURL)]
-	if !ok {
-		return nil, nil
-	}
-	return &c, nil
+	return newestAgent(s.Pending, platformURL), nil
 }
 
 // PromotePendingAgentIf moves the pending credential for expect's platform
@@ -288,14 +472,20 @@ func PromotePendingAgentIf(expect AgentCredential) error {
 		return err
 	}
 	return withStoreLock(path, func() error {
-		s, err := loadAgents()
+		s, err := loadAgentsLocked()
 		if err != nil {
 			return err
 		}
-		key := NormalizeURL(expect.PlatformURL)
+		key := agentKey(expect.PlatformURL, expect.AgentID)
 		c, ok := s.Pending[key]
 		if !ok || !c.sameIdentity(expect) {
 			return ErrAgentCredentialReplaced
+		}
+		if err := s.admitV1(c, s.Agents); err != nil {
+			return err
+		}
+		if c.EnrolledAt.IsZero() { // a legacy entry: promotion makes it the newest
+			c.EnrolledAt = time.Now().UTC()
 		}
 		s.Agents[key] = c
 		delete(s.Pending, key)
@@ -313,11 +503,11 @@ func DeletePendingAgentIf(expect AgentCredential) (bool, error) {
 	}
 	var removed bool
 	err = withStoreLock(path, func() error {
-		s, lerr := loadAgents()
+		s, lerr := loadAgentsLocked()
 		if lerr != nil {
 			return lerr
 		}
-		key := NormalizeURL(expect.PlatformURL)
+		key := agentKey(expect.PlatformURL, expect.AgentID)
 		c, ok := s.Pending[key]
 		if !ok || !c.sameIdentity(expect) {
 			return nil
@@ -354,13 +544,15 @@ func EnrolledAgentPlatforms() ([]string, error) {
 	}
 	seen := map[string]struct{}{}
 	var urls []string
-	for u := range s.Agents {
+	for _, c := range s.Agents {
+		u := c.PlatformURL
 		if _, ok := seen[u]; !ok {
 			seen[u] = struct{}{}
 			urls = append(urls, u)
 		}
 	}
-	for u := range s.Pending {
+	for _, c := range s.Pending {
+		u := c.PlatformURL
 		if _, ok := seen[u]; !ok {
 			seen[u] = struct{}{}
 			urls = append(urls, u)
@@ -375,11 +567,7 @@ func LookupAgent(platformURL string) (*AgentCredential, error) {
 	if err != nil {
 		return nil, err
 	}
-	c, ok := s.Agents[NormalizeURL(platformURL)]
-	if !ok {
-		return nil, nil
-	}
-	return &c, nil
+	return newestAgent(s.Agents, platformURL), nil
 }
 
 // sameIdentity reports whether two stored credentials are THE SAME
@@ -412,11 +600,11 @@ func updateAgentIf(expect AgentCredential, fn func(c *AgentCredential) (changed 
 		return err
 	}
 	return withStoreLock(path, func() error {
-		s, err := loadAgents()
+		s, err := loadAgentsLocked()
 		if err != nil {
 			return err
 		}
-		key := NormalizeURL(expect.PlatformURL)
+		key := agentKey(expect.PlatformURL, expect.AgentID)
 		for _, slot := range []map[string]AgentCredential{s.Agents, s.Pending} {
 			c, ok := slot[key]
 			if !ok || !c.sameIdentity(expect) {
@@ -449,11 +637,11 @@ func DeleteAgentIf(expect AgentCredential) (bool, error) {
 	}
 	var removed bool
 	err = withStoreLock(path, func() error {
-		s, lerr := loadAgents()
+		s, lerr := loadAgentsLocked()
 		if lerr != nil {
 			return lerr
 		}
-		key := NormalizeURL(expect.PlatformURL)
+		key := agentKey(expect.PlatformURL, expect.AgentID)
 		c, ok := s.Agents[key]
 		if !ok {
 			return nil
@@ -536,11 +724,11 @@ func PinAgentTrustBundle(expect AgentCredential, spki string) (persisted bool, e
 		return false, err
 	}
 	err = withStoreLock(path, func() error {
-		s, lerr := loadAgents()
+		s, lerr := loadAgentsLocked()
 		if lerr != nil {
 			return lerr
 		}
-		key := NormalizeURL(expect.PlatformURL)
+		key := agentKey(expect.PlatformURL, expect.AgentID)
 		for _, slot := range []map[string]AgentCredential{s.Agents, s.Pending} {
 			c, ok := slot[key]
 			if !ok || !c.sameIdentity(expect) {
@@ -603,7 +791,7 @@ func RecordAgentScope(expect AgentCredential, scope *AgentScope) error {
 	})
 }
 
-// DeleteAgent removes the agent credential for a platform URL and reports
+// DeleteAgent removes ALL local agent credentials for a platform URL and reports
 // whether one existed. It removes only this machine's copy; the principal on
 // the platform stays valid until a human revokes it there.
 func DeleteAgent(platformURL string) (bool, error) {
@@ -613,20 +801,76 @@ func DeleteAgent(platformURL string) (bool, error) {
 	}
 	var existed bool
 	err = withStoreLock(path, func() error {
-		s, lerr := loadAgents()
+		s, lerr := loadAgentsLocked()
 		if lerr != nil {
 			return lerr
 		}
-		key := NormalizeURL(platformURL)
-		_, active := s.Agents[key]
-		_, pending := s.Pending[key]
-		if !active && !pending {
+		for _, slot := range []map[string]AgentCredential{s.Agents, s.Pending} {
+			for key, c := range slot {
+				if c.PlatformURL == NormalizeURL(platformURL) {
+					delete(slot, key)
+					existed = true
+				}
+			}
+		}
+		if !existed {
 			return nil
 		}
-		delete(s.Agents, key)
-		delete(s.Pending, key)
-		existed = true
 		return saveAgents(s)
 	})
 	return existed, err
+}
+
+// Compatibility lookup until repository-aware selection is wired into signing.
+// Map iteration must never choose an identity.
+func newestAgent(slot map[string]AgentCredential, platform string) *AgentCredential {
+	var best *AgentCredential
+	for _, c := range slot {
+		if c.PlatformURL != NormalizeURL(platform) {
+			continue
+		}
+		if best == nil || c.EnrolledAt.After(best.EnrolledAt) || (c.EnrolledAt.Equal(best.EnrolledAt) && c.AgentID < best.AgentID) {
+			copy := c
+			best = &copy
+		}
+	}
+	return best
+}
+
+// ListAgents returns active or pending credentials for one platform in stable
+// ID order. Callers must never serialize these bearer-bearing values for output.
+func ListAgents(platform string, pending bool) ([]AgentCredential, error) {
+	s, err := loadAgents()
+	if err != nil {
+		return nil, err
+	}
+	slot := s.Agents
+	if pending {
+		slot = s.Pending
+	}
+	var out []AgentCredential
+	for _, c := range slot {
+		if c.PlatformURL == NormalizeURL(platform) {
+			out = append(out, c)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].AgentID < out[j].AgentID })
+	return out, nil
+}
+
+// LookupAgentID binds management and enrollment readback to exactly one ID.
+func LookupAgentID(platform, id string, pending bool) (*AgentCredential, error) {
+	s, err := loadAgents()
+	if err != nil {
+		return nil, err
+	}
+	slot := s.Agents
+	if pending {
+		slot = s.Pending
+	}
+	c, ok := slot[agentKey(platform, id)]
+	if !ok {
+		return nil, nil
+	}
+	return &c, nil
 }

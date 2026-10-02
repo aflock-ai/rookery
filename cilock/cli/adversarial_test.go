@@ -1042,6 +1042,7 @@ func TestRunDebugSignerNoKeyFile(t *testing.T) {
 }
 
 func TestRunDebugSignerWithFileSignerConflict(t *testing.T) {
+	isolateStores(t)
 	dir := t.TempDir()
 	keyPath := generateTestKey(t, dir)
 

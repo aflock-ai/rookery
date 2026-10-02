@@ -22,7 +22,7 @@ import (
 const pendingSecret = "pending-secret-must-not-print"
 
 func TestSavePendingAgentLeavesTheActiveCredentialAlone(t *testing.T) {
-	isolateConfig(t)
+	useV2Store(t)
 	active := AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-active", RefreshCredential: "active-secret", TrustDomain: "p.example.com"}
 	require.NoError(t, SaveAgent(active))
 	pending := AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-new", RefreshCredential: pendingSecret}
@@ -39,7 +39,7 @@ func TestSavePendingAgentLeavesTheActiveCredentialAlone(t *testing.T) {
 }
 
 func TestPromotePendingAgentIfMovesItWholeIntoTheActiveSlot(t *testing.T) {
-	isolateConfig(t)
+	useV2Store(t)
 	require.NoError(t, SaveAgent(AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-active", RefreshCredential: "active-secret"}))
 	pending := AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-new", RefreshCredential: pendingSecret}
 	require.NoError(t, SavePendingAgent(pending))
@@ -61,9 +61,9 @@ func TestPromotePendingAgentIfMovesItWholeIntoTheActiveSlot(t *testing.T) {
 }
 
 func TestPromoteAndDeletePendingAreCompareAndSwap(t *testing.T) {
-	isolateConfig(t)
+	useV2Store(t)
 	first := AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-1", RefreshCredential: "s-1"}
-	second := AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-2", RefreshCredential: "s-2"}
+	second := AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-1", RefreshCredential: "s-2"}
 	require.NoError(t, SavePendingAgent(first))
 	require.NoError(t, SavePendingAgent(second)) // a later ceremony replaced it
 
@@ -74,7 +74,7 @@ func TestPromoteAndDeletePendingAreCompareAndSwap(t *testing.T) {
 	p, err := LookupPendingAgent("https://p.example.com")
 	require.NoError(t, err)
 	require.NotNil(t, p)
-	assert.Equal(t, "a-2", p.AgentID)
+	assert.Equal(t, "a-1", p.AgentID)
 
 	removed, err = DeletePendingAgentIf(second)
 	require.NoError(t, err)
@@ -85,7 +85,7 @@ func TestExchangeDerivedWritesLandOnAPendingCredentialToo(t *testing.T) {
 	// The pin and the ceiling belong to the credential that was exchanged,
 	// whichever slot it is in: a pending credential is exchanged at
 	// redemption, and its answers must stick to it.
-	isolateConfig(t)
+	useV2Store(t)
 	pending := AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-new", RefreshCredential: pendingSecret}
 	require.NoError(t, SavePendingAgent(pending))
 	require.NoError(t, PinAgentTrustDomain(pending, "p.example.com"))
@@ -99,7 +99,7 @@ func TestExchangeDerivedWritesLandOnAPendingCredentialToo(t *testing.T) {
 }
 
 func TestDeleteAgentClearsBothSlots(t *testing.T) {
-	isolateConfig(t)
+	useV2Store(t)
 	require.NoError(t, SaveAgent(AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-active", RefreshCredential: "s"}))
 	require.NoError(t, SavePendingAgent(AgentCredential{PlatformURL: "https://p.example.com", TenantID: "t-1", AgentID: "a-new", RefreshCredential: pendingSecret}))
 	existed, err := DeleteAgent("https://p.example.com")
@@ -118,7 +118,7 @@ func TestActivationOutageKeepsThePreviousCredentialSigning(t *testing.T) {
 	// ceremony delivers; the platform answers 503 at activation. The active
 	// credential must still be the one this machine signs with, and the new
 	// one must still be pending for the next run to redeem — neither lost.
-	isolateConfig(t)
+	useV2Store(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}))
@@ -144,7 +144,7 @@ func TestActivationOutageKeepsThePreviousCredentialSigning(t *testing.T) {
 }
 
 func TestActivationRefusalDropsOnlyThePendingCredential(t *testing.T) {
-	isolateConfig(t)
+	useV2Store(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 		_, _ = w.Write([]byte(`{"error":"agent_credential_rejected","remediation":"run cilock enroll agent"}`))
@@ -168,7 +168,7 @@ func TestActivationRefusalDropsOnlyThePendingCredential(t *testing.T) {
 }
 
 func TestActivationSuccessPromotesThePendingCredential(t *testing.T) {
-	isolateConfig(t)
+	useV2Store(t)
 	const spiffeID = "spiffe://platform.example.com/tenant/t-1/agent/a-new"
 	var body []byte
 	srv := agentExchangeStub(t, spiffeID, &body)
@@ -192,7 +192,7 @@ func TestActivationSuccessPromotesThePendingCredential(t *testing.T) {
 // --- The run path redeems what is pending -------------------------------
 
 func TestRedeemPendingAgentPromotesOnSuccessAndIsQuietWhenNothingIsPending(t *testing.T) {
-	isolateConfig(t)
+	useV2Store(t)
 	const spiffeID = "spiffe://platform.example.com/tenant/t-1/agent/a-new"
 	var body []byte
 	srv := agentExchangeStub(t, spiffeID, &body)
@@ -208,7 +208,7 @@ func TestRedeemPendingAgentPromotesOnSuccessAndIsQuietWhenNothingIsPending(t *te
 }
 
 func TestRedeemPendingAgentDropsARefusedCredentialAndKeepsSigningWithTheActiveOne(t *testing.T) {
-	isolateConfig(t)
+	useV2Store(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
 		_, _ = w.Write([]byte(`{"error":"agent_credential_rejected"}`))
@@ -228,7 +228,7 @@ func TestRedeemPendingAgentDropsARefusedCredentialAndKeepsSigningWithTheActiveOn
 }
 
 func TestRedeemPendingAgentKeepsBothOnAnOutage(t *testing.T) {
-	isolateConfig(t)
+	useV2Store(t)
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
@@ -256,7 +256,7 @@ func TestOnlyTheStructuredRefusalCountsAsRejected(t *testing.T) {
 	// layer never examined the credential. Discarding on those would turn a
 	// misconfigured proxy into a lost identity. The platform's own refusal is
 	// the constant body it writes: {"error":"agent_credential_rejected", …}.
-	isolateConfig(t)
+	useV2Store(t)
 	for _, tc := range []struct {
 		name     string
 		status   int
@@ -287,19 +287,19 @@ func TestOnlyTheStructuredRefusalCountsAsRejected(t *testing.T) {
 
 // An explicit `cilock agent login` is the operator choosing the identity NOW.
 // A credential a ceremony delivered earlier and never redeemed must not be
-// able to overrule it on the next run: saving an active credential clears
+// able to overrule it on the next run for the same ID: saving it clears
 // the pending slot in the same write, so there is nothing left to promote —
 // and a promotion that lost the race to a login finds the slot gone.
 func TestSavingAnActiveCredentialInvalidatesAPendingOne(t *testing.T) {
-	isolateConfig(t)
+	useV2Store(t)
 	const spiffeID = "spiffe://platform.example.com/tenant/t-1/agent/a-old"
 	var body []byte
 	srv := agentExchangeStub(t, spiffeID, &body)
 	old := AgentCredential{PlatformURL: srv.URL, TenantID: "t-1", AgentID: "a-old", RefreshCredential: pendingSecret}
 	require.NoError(t, SavePendingAgent(old))
 
-	// The operator logs in with a different, newer identity.
-	login := AgentCredential{PlatformURL: srv.URL, TenantID: "t-1", AgentID: "a-login", RefreshCredential: "login-secret"}
+	// The operator replaces the credential for the same identity.
+	login := AgentCredential{PlatformURL: srv.URL, TenantID: "t-1", AgentID: "a-old", RefreshCredential: "login-secret"}
 	require.NoError(t, SaveAgent(login))
 
 	p, err := LookupPendingAgent(srv.URL)
@@ -312,11 +312,11 @@ func TestSavingAnActiveCredentialInvalidatesAPendingOne(t *testing.T) {
 	got, err := LookupAgent(srv.URL)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, "a-login", got.AgentID)
+	assert.Equal(t, "a-old", got.AgentID)
 
 	// And a promotion that had the old credential in hand — its exchange
 	// already answered when the login landed — finds the slot gone.
 	assert.ErrorIs(t, PromotePendingAgentIf(old), ErrAgentCredentialReplaced)
 	got, _ = LookupAgent(srv.URL)
-	assert.Equal(t, "a-login", got.AgentID, "the login is never overwritten by a stale promotion")
+	assert.Equal(t, "a-old", got.AgentID, "the login is never overwritten by a stale promotion")
 }

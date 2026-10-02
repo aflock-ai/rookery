@@ -297,12 +297,12 @@ func parseCallbackExpiry(raw string) (time.Time, error) {
 // returned is the one the platform actually answered with, which the
 // exchange has already checked names the same tenant and agent.
 func ActivateEnrolledAgent(platformURL string, expected AgentCredential) (AgentSigningIdentity, error) {
-	cred, err := LookupPendingAgent(platformURL)
+	cred, err := LookupAgentID(platformURL, expected.AgentID, true)
 	if err != nil {
 		return AgentSigningIdentity{}, err
 	}
 	if cred == nil {
-		return AgentSigningIdentity{}, fmt.Errorf("no delivered agent credential is pending for %s to activate", NormalizeURL(platformURL))
+		return AgentSigningIdentity{}, fmt.Errorf("no delivered agent credential is pending for %s / agent %s to activate", NormalizeURL(platformURL), expected.AgentID)
 	}
 	if cred.TenantID != expected.TenantID || cred.AgentID != expected.AgentID {
 		return AgentSigningIdentity{}, fmt.Errorf("the pending agent credential for %s (tenant %s, agent %s) is not the one this ceremony minted (tenant %s, agent %s) — another enrollment replaced it; nothing was activated, run `cilock enroll agent` again",

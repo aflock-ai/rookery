@@ -178,7 +178,7 @@ func TestScopeAnsweredForAReplacedCredentialNeverLands(t *testing.T) {
 	warnings := captureAgentWarnings(t)
 	var platform string
 	srv := scopeExchangeStub(t, scopeSPIFFEID, `{"mode":"all"}`, func() {
-		assert.NoError(t, SaveAgent(AgentCredential{PlatformURL: platform, TenantID: "t-1", AgentID: "a-other", RefreshCredential: "other-secret", TrustDomain: "platform.example.com"}))
+		assert.NoError(t, SaveAgent(AgentCredential{PlatformURL: platform, TenantID: "t-1", AgentID: "a-1", RefreshCredential: "other-secret", TrustDomain: "platform.example.com"}))
 	})
 	platform = srv.URL
 	cred := scopeCred(srv.URL)
@@ -190,7 +190,7 @@ func TestScopeAnsweredForAReplacedCredentialNeverLands(t *testing.T) {
 	got, err := LookupAgent(srv.URL)
 	require.NoError(t, err)
 	require.NotNil(t, got)
-	assert.Equal(t, "a-other", got.AgentID)
+	assert.Equal(t, "other-secret", got.RefreshCredential)
 	assert.Nil(t, got.Scope, "the replacement's record is left alone")
 	assert.Contains(t, warnings.String(), "could not record the repository scope")
 }
