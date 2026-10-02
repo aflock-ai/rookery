@@ -308,6 +308,10 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 		return result, fmt.Errorf("failed to run attestors: %w", err)
 	}
 
+	if err := checkBeforeSigning(runCtx); err != nil {
+		return result, err
+	}
+
 	// Compute the parent-subject pool ONCE: the union of subjects from
 	// every non-exported attestor (git, material, product, …) plus the
 	// user-supplied additional subjects. This is the same anchor set the
@@ -488,6 +492,26 @@ func run(stepName string, opts []RunOption) ([]RunResult, error) { //nolint:goco
 	result = append(result, collectionResult)
 
 	return result, attestorErr
+}
+
+// checkBeforeSigning asks every attestor that can go stale whether what it
+// measured still holds, before anything is signed (see
+// attestation.SigningGuard). It runs on the insecure path too: an unsigned
+// collection naming a stale commit is the same false claim.
+func checkBeforeSigning(runCtx *attestation.AttestationContext) error {
+	for _, completed := range runCtx.CompletedAttestors() {
+		if completed.Error != nil {
+			continue
+		}
+		guard, ok := completed.Attestor.(attestation.SigningGuard)
+		if !ok {
+			continue
+		}
+		if err := guard.CheckBeforeSigning(); err != nil {
+			return fmt.Errorf("refusing to sign: attestor %s: %w", completed.Attestor.Name(), err)
+		}
+	}
+	return nil
 }
 
 // collectParentSubjects walks the completed attestors and assembles

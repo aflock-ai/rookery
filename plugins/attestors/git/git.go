@@ -17,6 +17,7 @@ package git
 import (
 	"crypto"
 	_ "embed"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -184,6 +185,13 @@ type Attestor struct {
 	// false: a subdirectory mint fails fast (the early check; verifiers stay
 	// authoritative).
 	allowSubdirectory bool
+
+	// observedDir and observedHead are this process's own observation, kept
+	// for CheckBeforeSigning and never serialized: a predicate decoded from a
+	// signed envelope has no observation to re-check. observedHead is "" when
+	// the repository was unborn at Attest.
+	observedDir  string
+	observedHead string
 }
 
 // allowSubdirectoryOption is the config option (flag
@@ -1492,6 +1500,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 
 		// The one benign case: a repository that has genuinely never had a
 		// commit. Nothing was observed because there is nothing to observe.
+		a.observedDir, a.observedHead = ctx.WorkingDir(), ""
 		return nil
 	}
 
@@ -1511,6 +1520,7 @@ func (a *Attestor) Attest(ctx *attestation.AttestationContext) error { //nolint:
 			GitOID: false,
 		}: verifiedHash,
 	}
+	a.observedDir, a.observedHead = ctx.WorkingDir(), verifiedHash
 
 	remotes, err := repo.Remotes()
 	if err != nil {
@@ -1723,6 +1733,45 @@ func addCommitSubject(subjects map[string]cryptoutil.DigestSet, prefix, sha stri
 			GitOID: false,
 		}: sha,
 	}
+}
+
+// CheckBeforeSigning re-reads HEAD and refuses if it is not the commit Attest
+// recorded (attestation.SigningGuard, testifysec/judge#9359). The git
+// attestor runs before the wrapped command, so a command that commits, or a
+// second shell running `git checkout` in the same worktree, would otherwise
+// get its tests signed against a commit whose tree they never ran on.
+//
+// A switch to another ref at the same commit passes: the attested tree still
+// holds. Working-tree and index changes during the run are NOT checked here.
+func (a *Attestor) CheckBeforeSigning() error {
+	if a.observedDir == "" {
+		return nil
+	}
+	now := ""
+	repo, err := OpenRepository(a.observedDir)
+	if err != nil {
+		return fmt.Errorf("could not re-read HEAD before signing (%w); refusing to sign a commit that can no longer be confirmed", err)
+	}
+	head, err := repo.Head()
+	switch {
+	case err == nil:
+		now = head.Hash().String()
+	case errors.Is(err, plumbing.ErrReferenceNotFound) && a.observedHead == "":
+		// Still unborn: nothing was attested and nothing moved.
+	default:
+		return fmt.Errorf("could not re-read HEAD before signing (%w); refusing to sign a commit that can no longer be confirmed", err)
+	}
+	if now != a.observedHead {
+		return fmt.Errorf("the worktree %s moved during the run: HEAD was %s when the git attestor ran and is %s now, so the wrapped command did not run against the attested commit; refusing to sign. Was another process using this worktree?", a.observedDir, orUnborn(a.observedHead), orUnborn(now))
+	}
+	return nil
+}
+
+func orUnborn(hash string) string {
+	if hash == "" {
+		return "(unborn)"
+	}
+	return hash
 }
 
 // anchorRemotes picks the remotes whose URLs are recorded (testifysec/judge#9233).

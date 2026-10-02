@@ -118,6 +118,18 @@ type CompanionTyper interface {
 	CompanionTypes() []string
 }
 
+// SigningGuard is implemented by an attestor whose measurement can go stale
+// between Attest and signing. The git attestor reads HEAD before the wrapped
+// command runs, and the command can move it; signing then binds the tests to a
+// commit whose tree was never tested (testifysec/judge#9359).
+//
+// The workflow calls CheckBeforeSigning on every attestor that completed
+// without error, after all attestors have run and before ANY envelope is
+// signed. A non-nil error refuses the whole run: no collection, no sidecar.
+type SigningGuard interface {
+	CheckBeforeSigning() error
+}
+
 // BackReffer allows attestors to indicate which of their subjects are good candidates
 // to find related attestations.  For example the git attestor's commit hash subject
 // is a good candidate to find all attestation collections that also refer to a specific
