@@ -17,11 +17,15 @@ package cli
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/aflock-ai/rookery/attestation"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/sbom"
+	_ "github.com/aflock-ai/rookery/plugins/attestors/slsa"
 	"github.com/stretchr/testify/require"
 )
 
@@ -202,4 +206,90 @@ func TestClosestNamesStopsAtTheEditLimit(t *testing.T) {
 	require.Equal(t, []string{"ac"}, closestNames("ab", []string{"ac", "cd"}), "one edit on a short name")
 	require.Empty(t, closestNames("secrets", []string{"secxxxs"}), "three edits on a long name is past the two-edit limit")
 	require.Equal(t, []string{"secrxts"}, closestNames("secrets", []string{"secrxts", "secxxxs"}), "two edits on a long name")
+}
+
+// Step names: `_tmp` uses only the listed characters and was still refused,
+// because the first character must be a letter or digit. The message now
+// states the whole rule and a name that passes it.
+func TestStepNameRefusalStatesTheWholeRuleAndAValidName(t *testing.T) {
+	sandboxCredentials(t, true)
+	draft := filepath.Join(t.TempDir(), "p.json")
+	_, err := templateCmd(t, "--goal", "tests", "-o", draft)
+	require.NoError(t, err)
+	_, err = templateCmd(t, "-p", draft, "--add-step", "_tmp", "--attestor", "command-run")
+	require.Error(t, err)
+	msg := err.Error()
+	require.Contains(t, msg, `step name "_tmp"`)
+	require.Contains(t, msg, "start with a letter or digit")
+	require.Contains(t, msg, "Next: use --add-step tmp")
+}
+
+func TestSuggestStepNameAlwaysPassesTheRule(t *testing.T) {
+	for in, want := range map[string]string{
+		"_tmp":       "tmp",
+		"-x":         "x",
+		".hidden":    "hidden",
+		"a b":        "a-b",
+		"my/step":    "my-step",
+		"___":        "step",
+		"":           "step",
+		"ok-name":    "ok-name",
+		"tést":       "t-st",
+		"__a__b":     "a__b",
+		"build step": "build-step",
+	} {
+		got := suggestStepName(in, nil)
+		require.Equalf(t, want, got, "suggestStepName(%q)", in)
+		require.Truef(t, stepNameRE.MatchString(got), "suggestion %q for %q fails the rule", got, in)
+	}
+	require.Equal(t, "tmp-2", suggestStepName("_tmp", map[string]bool{"tmp": true}))
+}
+
+func TestRunStepNameWarningAgreesWithTheTemplateRule(t *testing.T) {
+	require.Empty(t, stepNameWarning("provenance"))
+	require.Empty(t, stepNameWarning("tests.unit_2"))
+	w := stepNameWarning("_tmp")
+	require.Contains(t, w, `step name "_tmp"`)
+	require.Contains(t, w, "start with a letter or digit")
+	require.Contains(t, w, "--step tmp")
+	// Every name the template refuses, run warns about, and vice versa.
+	for _, name := range []string{"_tmp", "a b", "-x", ".h", "ok", "A.b-c_d", "é"} {
+		require.Equalf(t, !stepNameRE.MatchString(name), stepNameWarning(name) != "", "name %q", name)
+	}
+}
+
+// --attestor-slsa-export without --outfile: the refusal names the flag that
+// asked for the second attestation and the corrected command.
+func TestExportWithoutOutfileNamesTheFlagAndTheCommand(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	err := exportNeedsOutfileError("provenance", []string{"slsa"})
+	msg := err.Error()
+	require.True(t, strings.HasPrefix(msg, "--outfile is required when attestors export multiple attestations"), msg)
+	require.Contains(t, msg, "--attestor-slsa-export")
+	require.Contains(t, msg, "Next: add -o provenance.json")
+
+	// A taken name is not suggested; the suggestion logic is the outfile one.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "provenance.json"), []byte("x"), 0o600))
+	msg = exportNeedsOutfileError("provenance", []string{"slsa"}).Error()
+	require.Contains(t, msg, "-o provenance-2.json")
+
+	// The exported companion is part of the set: provenance-2.json-slsa.json taken skips -2.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "provenance-2.json-slsa.json"), []byte("x"), 0o600))
+	msg = exportNeedsOutfileError("provenance", []string{"slsa"}).Error()
+	require.Contains(t, msg, "-o provenance-3.json")
+}
+
+func TestSBOMExportWithoutOutfileNamesTheSBOMFlag(t *testing.T) {
+	t.Chdir(t.TempDir())
+	msg := exportNeedsOutfileError("sbom", []string{"sbom"}).Error()
+	require.Contains(t, msg, "--attestor-sbom-export")
+	require.Contains(t, msg, "Next: add -o sbom.json")
+}
+
+// A step name that is not a safe file name still yields a usable outfile.
+func TestExportOutfileSuggestionForAnUnsafeStepName(t *testing.T) {
+	t.Chdir(t.TempDir())
+	msg := exportNeedsOutfileError("../x y", []string{"slsa"}).Error()
+	require.Regexp(t, regexp.MustCompile(`-o x-y\.json`), msg)
 }

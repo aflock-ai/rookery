@@ -847,6 +847,9 @@ func runRun(ctx context.Context, ro options.RunOptions, args []string, userSetFl
 	if len(signers) == 0 {
 		return fmt.Errorf("no signers found")
 	}
+	if w := stepNameWarning(ro.StepName); w != "" {
+		log.Warnf("%s", w)
+	}
 
 	timestampers := []timestamp.Timestamper{}
 	for _, url := range ro.TimestampServers {
@@ -1237,6 +1240,12 @@ func takenEvidencePathError(path, outFile string) error {
 // or "" when none is, or when the name holds a character a terminal would
 // act on (it is shown to be pasted).
 func suggestFreshOutfile(outFile string) string {
+	return suggestFreshOutfileWith(outFile, companionPaths)
+}
+
+// suggestFreshOutfileWith is suggestFreshOutfile over a caller's companion
+// set: an exporting run also writes <outfile>-<attestor>.json.
+func suggestFreshOutfileWith(outFile string, companions func(string) []string) string {
 	for _, r := range outFile {
 		if !unicode.IsPrint(r) {
 			return ""
@@ -1247,7 +1256,7 @@ func suggestFreshOutfile(outFile string) string {
 	for n := 2; n <= maxOutfileSuggestions+1; n++ {
 		candidate := fmt.Sprintf("%s-%d%s", stem, n, ext)
 		free := true
-		for _, p := range append([]string{candidate}, companionPaths(candidate)...) {
+		for _, p := range append([]string{candidate}, companions(candidate)...) {
 			if _, err := os.Lstat(p); !os.IsNotExist(err) {
 				free = false
 				break
@@ -1293,13 +1302,15 @@ func persistRunResults(ctx context.Context, ro *options.RunOptions, results []wo
 	summary.OutFile = ""
 	statements := make([]intoto.Statement, len(results))
 	inventories := make(map[int]int) // result index -> unsigned summary entry
-	hasExported := false
+	var exported []string
 	for i, result := range results {
 		if err := json.Unmarshal(result.SignedEnvelope.Payload, &statements[i]); err != nil {
 			return fmt.Errorf("decode signed run statement: %w", err)
 		}
 		if statements[i].PredicateType != fileinventory.Type {
-			hasExported = hasExported || result.AttestorName != ""
+			if result.AttestorName != "" {
+				exported = append(exported, result.AttestorName)
+			}
 			continue
 		}
 		var payload struct {
@@ -1342,8 +1353,8 @@ func persistRunResults(ctx context.Context, ro *options.RunOptions, results []wo
 			return fmt.Errorf("missing signed %s inventory companion", inv.Kind)
 		}
 	}
-	if ro.OutFilePath == "" && len(inventories) == 0 && hasExported {
-		return fmt.Errorf("--outfile is required when attestors export multiple attestations")
+	if ro.OutFilePath == "" && len(inventories) == 0 && len(exported) > 0 {
+		return exportNeedsOutfileError(ro.StepName, exported)
 	}
 	if ro.OutFilePath == "" && len(inventories) > 0 {
 		runDir, err := newRunEvidenceDir()

@@ -17,10 +17,12 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
 	"github.com/aflock-ai/rookery/attestation"
+	"github.com/aflock-ai/rookery/attestation/registry"
 )
 
 // Refusals a coding agent meets while wiring cilock into a repository, each
@@ -321,4 +323,117 @@ func templateUnknownAttestorError(name string) error {
 		next += fmt.Sprintf(" (or --goal %s for the goal's whole step: its attestations and seeded rules)", goal)
 	}
 	return errors.New(msg + next)
+}
+
+// stepNameRule states the whole rule stepNameRE enforces.
+const stepNameRule = "a step name must start with a letter or digit and then use only letters, digits, '.', '_' and '-'"
+
+// suggestStepName derives a name that passes stepNameRE from one that does
+// not: each character outside the rule becomes '-', leading punctuation is
+// dropped, and a name taken in the draft gets the first free -<n>.
+func suggestStepName(name string, taken map[string]bool) string {
+	var b strings.Builder
+	for _, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	s := strings.TrimLeft(b.String(), "._-")
+	if s == "" {
+		s = "step"
+	}
+	if !taken[s] {
+		return s
+	}
+	for n := 2; ; n++ {
+		if c := fmt.Sprintf("%s-%d", s, n); !taken[c] {
+			return c
+		}
+	}
+}
+
+// stepNameError is template's refusal of a step name, with the whole rule and
+// a name that passes it. It does not rewrite the agent's command line.
+func stepNameError(name string, steps map[string]any) error {
+	taken := make(map[string]bool, len(steps))
+	for s := range steps {
+		taken[s] = true
+	}
+	fixed := suggestStepName(name, taken)
+	return fmt.Errorf("step name %q: %s (it is the --step you pass to cilock run). Next: use --add-step %s", name, stepNameRule, shellQuoteArgv([]string{fixed}))
+}
+
+// stepNameWarning is what `cilock run --step` says about a name template
+// would refuse. run still accepts it (a hand-written policy may name any
+// step); the warning makes the two commands state one rule.
+func stepNameWarning(name string) string {
+	if name == "" || stepNameRE.MatchString(name) {
+		return ""
+	}
+	return fmt.Sprintf("step name %q: %s, so `cilock policy template --add-step` refuses it, and a policy step must equal this --step. Next: use --step %s",
+		name, stepNameRule, shellQuoteArgv([]string{suggestStepName(name, nil)}))
+}
+
+// exportNeedsOutfileError is the refusal for an exporting attestor with no
+// --outfile. It names the flag that asked for the extra attestation and a free
+// -o <step>.json to add. It does not rewrite the agent's command line.
+func exportNeedsOutfileError(step string, exported []string) error {
+	var names []string
+	for _, e := range exported {
+		name, _, _ := strings.Cut(e, "/")
+		names = appendUnique(names, name)
+	}
+	var asked []string
+	for _, n := range names {
+		if flag := exportFlag(n); flag != "" {
+			asked = append(asked, "--"+flag)
+		} else {
+			asked = append(asked, "the "+n+" attestor")
+		}
+	}
+	companions := func(candidate string) []string {
+		out := companionPaths(candidate)
+		for _, e := range exported {
+			out = append(out, candidate+"-"+strings.ReplaceAll(e, "/", "-")+".json")
+		}
+		return out
+	}
+	outfile := suggestStepName(step, nil) + ".json"
+	if !pathsAbsent(append([]string{outfile}, companions(outfile)...)) {
+		outfile = suggestFreshOutfileWith(outfile, companions)
+	}
+	msg := fmt.Sprintf("--outfile is required when attestors export multiple attestations: %s writes its own attestation beside the step's, as <outfile>-<attestor>.json, so the run needs an --outfile to name them. "+
+		"The wrapped command already ran; rerun it with one", joinAnd(asked))
+	if outfile == "" {
+		return errors.New(msg + ". Next: add -o <file that does not exist yet>")
+	}
+	return errors.New(msg + ". Next: add -o " + shellQuoteArgv([]string{outfile}))
+}
+
+// exportFlag is the flag that turns on an attestor's export, or "" when the
+// attestor has no export option (its extra attestations are companions).
+func exportFlag(attestor string) string {
+	for _, e := range attestation.RegistrationEntries() {
+		if e.Name != attestor {
+			continue
+		}
+		for _, o := range e.Options {
+			if o.Name() == "export" {
+				return registry.AttestorFlagName(attestor, "export")
+			}
+		}
+	}
+	return ""
+}
+
+func pathsAbsent(paths []string) bool {
+	for _, p := range paths {
+		if _, err := os.Lstat(p); !os.IsNotExist(err) {
+			return false
+		}
+	}
+	return true
 }

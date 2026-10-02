@@ -3030,11 +3030,46 @@ func (r *CommandRun) exitOutcome(code int, cause error) error {
 	if r.ignoreExitCode {
 		return nil
 	}
-	verdict := attestation.NewDetectionError(fmt.Sprintf("command exited with status %d", code))
+	verdict := attestation.NewDetectionError(fmt.Sprintf("command %sexited with status %d", commandForMessage(r.Cmd), code))
 	if cause == nil {
 		return verdict
 	}
 	return fmt.Errorf("%w (%w)", verdict, cause)
+}
+
+// maxCommandInMessage bounds the command an exit message quotes: an inline
+// script can run to kilobytes, and the message is one log line.
+const maxCommandInMessage = 120
+
+// commandForMessage renders argv for the exit message as a backquoted,
+// shell-quoted command followed by a space, or "" when there is none. The
+// message is logged and printed, so the argv is masked the way the signed
+// predicate's cmd is (redactArgv), on a copy: r.Cmd is redacted for the
+// marshal later, in one place.
+func commandForMessage(argv []string) string {
+	if len(argv) == 0 {
+		return ""
+	}
+	masked := append([]string(nil), argv...)
+	redactArgv(masked)
+	parts := make([]string, len(masked))
+	for i, a := range masked {
+		parts[i] = shellWordForMessage(a)
+	}
+	s := strings.Join(parts, " ")
+	if r := []rune(s); len(r) > maxCommandInMessage {
+		s = string(r[:maxCommandInMessage]) + "..."
+	}
+	return "`" + s + "` "
+}
+
+func shellWordForMessage(a string) string {
+	if a != "" && strings.IndexFunc(a, func(c rune) bool {
+		return !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.ContainsRune("_./:=@%+,-", c))
+	}) < 0 {
+		return a
+	}
+	return "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
 }
 
 // resolvedWorkdir returns the directory the wrapped command should run in,

@@ -343,7 +343,7 @@ func addGoalSteps(doc draftDoc, id enrolledIdentity, stepName, goalID string, o 
 // it does not have.
 func checkNewStep(doc draftDoc, steps map[string]any, stepName string, o templateOptions) error {
 	if !stepNameRE.MatchString(stepName) {
-		return fmt.Errorf("step name %q: use letters, digits, '.', '_' and '-' (it is the --step you pass to cilock run)", stepName)
+		return stepNameError(stepName, steps)
 	}
 	if _, dup := steps[stepName]; dup {
 		return fmt.Errorf("the draft already has a step named %s; step names are unique and equal the --step cilock run records. Next: choose another name with --add-step <name>", stepName)
