@@ -1,6 +1,6 @@
 {
   "generatedFrom": "cilock tools show --format json",
-  "count": 149,
+  "count": 153,
   "withDoc": 61,
   "emittedBy": {
     "sbom": [
@@ -9,7 +9,8 @@
       "cdxgen",
       "melange",
       "npm-sbom",
-      "syft"
+      "syft",
+      "uv-sbom"
     ],
     "sarif": [
       "biome",
@@ -25,6 +26,7 @@
       "kubescape",
       "nuclei",
       "osv-scanner",
+      "ruff",
       "semgrep",
       "staticcheck",
       "terrascan",
@@ -1600,6 +1602,21 @@
       "hasDoc": false
     },
     {
+      "name": "ruff",
+      "source": "catalog-only",
+      "categories": [
+        "lint"
+      ],
+      "primaryCategory": "lint",
+      "description": "Ruff: Python linter and formatter (pyflakes, pycodestyle, isort, bugbear and more rules).",
+      "emitsFormats": [
+        "sarif"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
       "name": "safety",
       "source": "catalog-only",
       "categories": [
@@ -1910,6 +1927,47 @@
       ],
       "primaryCategory": "build",
       "description": "tsc: the TypeScript compiler.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "uv-build",
+      "source": "catalog-only",
+      "categories": [
+        "build"
+      ],
+      "primaryCategory": "build",
+      "description": "uv build: builds a Python project's sdist and wheel through its PEP 517 build backend.",
+      "emitsFormats": [],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "uv-sbom",
+      "source": "catalog-only",
+      "categories": [
+        "sbom-generate"
+      ],
+      "primaryCategory": "sbom-generate",
+      "description": "uv export --format cyclonedx1.5: a CycloneDX 1.5 SBOM of a Python project's uv.lock.",
+      "emitsFormats": [
+        "sbom"
+      ],
+      "predicateType": null,
+      "runType": null,
+      "hasDoc": false
+    },
+    {
+      "name": "uv-sync",
+      "source": "catalog-only",
+      "categories": [
+        "dependency-resolve"
+      ],
+      "primaryCategory": "dependency-resolve",
+      "description": "uv sync: installs a Python project's environment exactly as its uv.lock pins it.",
       "emitsFormats": [],
       "predicateType": null,
       "runType": null,

@@ -836,6 +836,43 @@ ENTRIES: list[tuple[str, dict]] = [
         match=dict(argv_prefix=["ctest"]),
         on_match="CTest observed. --output-junit junit.xml (relative to the build directory) writes one JUnit testcase per CTest test, captured by test-results. A test CTest could not run (missing executable, missing REQUIRED_FILES, failed fixture) is written as skipped; test-results counts it as an error."
     )),
+    ("uv-sync", dict(
+        desc="uv sync: installs a Python project's environment exactly as its uv.lock pins it.",
+        categories=["dependency-resolve"],
+        upstream=dict(name="uv", source="https://github.com/astral-sh/uv",
+                      license="Apache-2.0 OR MIT", vendor="Astral"),
+        match=dict(argv_prefix=["uv", "sync"]),
+        recommended_trace="light",
+        on_match="uv sync observed. The lockfiles attestor captures uv.lock; pass --locked (or --frozen) so the install cannot re-resolve past the lock."
+    )),
+    ("uv-build", dict(
+        desc="uv build: builds a Python project's sdist and wheel through its PEP 517 build backend.",
+        categories=["build"],
+        upstream=dict(name="uv", source="https://github.com/astral-sh/uv",
+                      license="Apache-2.0 OR MIT", vendor="Astral"),
+        match=dict(argv_prefix=["uv", "build"]),
+        recommended_trace="light",
+        on_match="uv build observed. The sdist and wheel in dist/ are recorded by the product attestor. The build backend (build-system.requires) is not in uv.lock; pin it with --build-constraint to make the build reproducible."
+    )),
+    ("uv-sbom", dict(
+        desc="uv export --format cyclonedx1.5: a CycloneDX 1.5 SBOM of a Python project's uv.lock.",
+        categories=["sbom-generate"],
+        upstream=dict(name="uv", source="https://docs.astral.sh/uv/reference/cli/#uv-export",
+                      license="Apache-2.0 OR MIT", vendor="Astral"),
+        emits_formats=["sbom"],
+        match=dict(argv_prefix=["uv", "export"]),
+        on_match="uv export observed. Only --format cyclonedx1.5 (a preview feature: --preview-features sbom-export) writes an SBOM; write it to sbom.cdx.json with -o so the sbom attestor captures it. The default format is requirements.txt, which is not an SBOM."
+    )),
+    ("ruff", dict(
+        desc="Ruff: Python linter and formatter (pyflakes, pycodestyle, isort, bugbear and more rules).",
+        categories=["lint"],
+        upstream=dict(name="Ruff", source="https://github.com/astral-sh/ruff",
+                      license="MIT", vendor="Astral"),
+        emits_formats=["sarif"],
+        match=dict(argv_prefix=["ruff"]),
+        exits_nonzero_on_findings=True,
+        on_match="ruff observed. `ruff check --output-format=sarif --output-file=ruff.sarif` is captured by the sarif attestor. Add --no-fix when the project sets `fix = true`, or the gated run rewrites sources."
+    )),
     ("gotestsum", dict(
         desc="gotestsum: runs go test -json and writes JUnit XML.",
         categories=["unit-test"],

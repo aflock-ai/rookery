@@ -206,12 +206,6 @@ def make_chart(fix: Path):
     make_k8s_manifest(tpl)
 
 
-def make_pytest(fix: Path):
-    (fix / "test_basic.py").write_text(
-        "def test_truth():\n    assert True\n"
-    )
-
-
 def make_jest_pkg(fix: Path):
     (fix / "package.json").write_text(json.dumps({
         "name": "jest-cat", "version": "0.0.1",
@@ -271,6 +265,44 @@ def make_npm_empty_pkg(fix: Path):
     (fix / "package.json").write_text(json.dumps({
         "name": "npm-sbom-cat", "version": "0.0.1"
     }, indent=2))
+
+
+def make_pytest_outcomes(fix: Path):
+    # A failing case and a skip: test-results must count both, not only
+    # prove that pytest ran.
+    (fix / "test_outcomes.py").write_text(
+        "import pytest\n"
+        "def test_passes():\n    assert True\n"
+        "def test_fails():\n    assert 1 == 2\n"
+        "@pytest.mark.skip(reason='on purpose')\n"
+        "def test_skipped():\n    pass\n"
+    )
+
+
+def make_uv_project(fix: Path):
+    # No dependencies, so `uv lock` resolves without an index. The
+    # build-system table uses flit_core, as pallets/click does.
+    (fix / "pyproject.toml").write_text(
+        '[project]\nname = "uvcat"\nversion = "0.0.1"\n'
+        'description = "catalog fixture"\nrequires-python = ">=3.10"\n\n'
+        '[build-system]\nrequires = ["flit_core>=3.11,<4"]\n'
+        'build-backend = "flit_core.buildapi"\n'
+    )
+    (fix / "uvcat.py").write_text('"""catalog fixture"""\n')
+    (fix / "README.md").write_text("uvcat\n")
+
+
+def make_uv_locked_project(fix: Path):
+    # The lock exists before the wrapped command, as it does in a real
+    # repository: lockfiles is a pre-material attestor, so a uv.lock written
+    # by the command itself is never captured.
+    make_uv_project(fix)
+    subprocess.run(["uv", "lock"], cwd=fix, check=True, capture_output=True)
+
+
+def make_ruff_finding(fix: Path):
+    # One unused import (F401): ruff exits 1 and the SARIF has a result.
+    (fix / "mod.py").write_text("import os\n")
 
 
 def make_clang_tidy(fix: Path):
@@ -625,9 +657,30 @@ RECIPES: list[Recipe] = [
 
     # --- Test runners ---
     Recipe(name="pytest", need="pytest", category="artifact-scan",
-           fixture=make_pytest, expect_uris=[URI_COMMANDRUN],
-           allow_nonzero=True,
+           fixture=make_pytest_outcomes, expect_uris=[URI_COMMANDRUN, URI_TEST],
+           attestors=["test-results"], allow_nonzero=True,
            invoke=args_only(["pytest", "--junitxml=junit.xml", "."])),
+    # uv (Python). `uv build` needs its build backend: offline, point
+    # UV_FIND_LINKS at a directory holding the flit_core wheel.
+    Recipe(name="uv-sync", need="uv", category="build",
+           fixture=make_uv_locked_project, expect_uris=[URI_COMMANDRUN, URI_LOCKFILES],
+           attestors=["lockfiles"],
+           invoke=args_only(["uv", "sync", "--locked", "--no-install-project"])),
+    Recipe(name="uv-build", need="uv", category="build",
+           fixture=make_uv_project, expect_uris=[URI_COMMANDRUN, URI_PRODUCT],
+           invoke=args_only(["uv", "build"])),
+    Recipe(name="uv-sbom", need="uv", category="artifact-scan",
+           fixture=make_uv_project,
+           expect_uris=[URI_COMMANDRUN, URI_SBOM_CYCLONEDX],
+           attestors=["sbom"],
+           invoke=args_only(["sh", "-c",
+                             "uv lock && uv export --frozen --format cyclonedx1.5 "
+                             "--preview-features sbom-export -o sbom.cdx.json"])),
+    Recipe(name="ruff", need="ruff", category="artifact-scan",
+           fixture=make_ruff_finding, expect_uris=[URI_COMMANDRUN, URI_SARIF],
+           attestors=["sarif"], allow_nonzero=True,
+           invoke=args_only(["ruff", "check", "--no-fix", "--output-format=sarif",
+                             "--output-file=ruff.sarif", "."])),
     Recipe(name="go-test", need="go", category="artifact-scan",
            fixture=make_go_mod, expect_uris=[URI_COMMANDRUN],
            allow_nonzero=True,

@@ -40,6 +40,7 @@
     "kubescape",
     "nuclei",
     "osv-scanner",
+    "ruff",
     "semgrep",
     "staticcheck",
     "terrascan",

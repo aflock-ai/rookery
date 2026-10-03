@@ -1,0 +1,44 @@
+{
+  "name": "uv-sync",
+  "source": "catalog-only",
+  "description": "uv sync: installs a Python project's environment exactly as its uv.lock pins it.",
+  "title": "uv-sync",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "dependency-resolve"
+  ],
+  "primaryCategory": "dependency-resolve",
+  "upstream": {
+    "name": "uv",
+    "source": "https://github.com/astral-sh/uv",
+    "license": "Apache-2.0 OR MIT",
+    "vendor": "Astral"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "light",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "uv sync"
+    }
+  ],
+  "emitsFormats": [],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "uv sync observed. The lockfiles attestor captures uv.lock; pass --locked (or --frozen) so the install cannot re-resolve past the lock."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- uv sync .",
+  "detectionCommand": "cilock plan --format=json -- uv sync [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"uv sync\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}

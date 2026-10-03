@@ -65,7 +65,8 @@
     "cdxgen",
     "melange",
     "npm-sbom",
-    "syft"
+    "syft",
+    "uv-sbom"
   ],
   "warnings": [],
   "llmHints": {

@@ -1,6 +1,6 @@
 {
   "generated_from": "registry+detector.yaml",
-  "attestor_count": 150,
+  "attestor_count": 154,
   "attestors": [
     {
       "name": "alps-evidence",
@@ -4271,6 +4271,34 @@
       }
     },
     {
+      "name": "ruff",
+      "category": [
+        "lint"
+      ],
+      "upstream": {
+        "name": "Ruff",
+        "source": "https://github.com/astral-sh/ruff",
+        "license": "MIT",
+        "vendor": "Astral"
+      },
+      "emits_formats": [
+        "sarif"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[ruff]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "ruff"
+          ]
+        }
+      }
+    },
+    {
       "name": "safety",
       "category": [
         "vulnerability-scan"
@@ -4620,6 +4648,87 @@
                 "tsc"
               ]
             }
+          ]
+        }
+      }
+    },
+    {
+      "name": "uv-build",
+      "category": [
+        "build"
+      ],
+      "upstream": {
+        "name": "uv",
+        "source": "https://github.com/astral-sh/uv",
+        "license": "Apache-2.0 OR MIT",
+        "vendor": "Astral"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[uv build]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "uv",
+            "build"
+          ]
+        }
+      }
+    },
+    {
+      "name": "uv-sbom",
+      "category": [
+        "sbom-generate"
+      ],
+      "upstream": {
+        "name": "uv",
+        "source": "https://docs.astral.sh/uv/reference/cli/#uv-export",
+        "license": "Apache-2.0 OR MIT",
+        "vendor": "Astral"
+      },
+      "emits_formats": [
+        "sbom"
+      ],
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[uv export]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "uv",
+            "export"
+          ]
+        }
+      }
+    },
+    {
+      "name": "uv-sync",
+      "category": [
+        "dependency-resolve"
+      ],
+      "upstream": {
+        "name": "uv",
+        "source": "https://github.com/astral-sh/uv",
+        "license": "Apache-2.0 OR MIT",
+        "vendor": "Astral"
+      },
+      "detection_only": true,
+      "registered": false,
+      "has_contract": false,
+      "applies_when": {
+        "pre": "argv_prefix:[uv sync]"
+      },
+      "detection": {
+        "pre": {
+          "argv_prefix": [
+            "uv",
+            "sync"
           ]
         }
       }

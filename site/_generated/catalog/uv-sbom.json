@@ -1,0 +1,46 @@
+{
+  "name": "uv-sbom",
+  "source": "catalog-only",
+  "description": "uv export --format cyclonedx1.5: a CycloneDX 1.5 SBOM of a Python project's uv.lock.",
+  "title": "uv-sbom",
+  "sidebarPosition": null,
+  "examplesRepo": null,
+  "categories": [
+    "sbom-generate"
+  ],
+  "primaryCategory": "sbom-generate",
+  "upstream": {
+    "name": "uv",
+    "source": "https://docs.astral.sh/uv/reference/cli/#uv-export",
+    "license": "Apache-2.0 OR MIT",
+    "vendor": "Astral"
+  },
+  "gates": [
+    "pre"
+  ],
+  "recommendedTrace": "off",
+  "triggers": [
+    {
+      "gate": "pre",
+      "kind": "argv_prefix",
+      "value": "uv export"
+    }
+  ],
+  "emitsFormats": [
+    "sbom"
+  ],
+  "emittedBy": [],
+  "warnings": [],
+  "llmHints": {
+    "on_match": "uv export observed. Only --format cyclonedx1.5 (a preview feature: --preview-features sbom-export) writes an SBOM; write it to sbom.cdx.json with -o so the sbom attestor captures it. The default format is requirements.txt, which is not an SBOM."
+  },
+  "predicateType": null,
+  "runType": null,
+  "defaultOn": false,
+  "runExample": "cilock run -- uv export .",
+  "detectionCommand": "cilock plan --format=json -- uv export [...]",
+  "positiveSetup": "Invoke cilock with argv starting \"uv export\"",
+  "negativeSetup": "Invoke cilock with unrelated argv (e.g. `echo unrelated`)",
+  "docSections": [],
+  "hasDoc": false
+}
