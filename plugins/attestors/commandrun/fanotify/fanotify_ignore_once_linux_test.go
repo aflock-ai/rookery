@@ -18,19 +18,40 @@ import (
 	"time"
 )
 
-// catTwice runs `/bin/cat target` once, snapshots EventsHashed, runs it
-// again, and returns (hashedAfterFirst, deltaOnSecond). Each cat opens the
-// target plus its own shared libs; both runs touch the same set.
-func catTwice(t *testing.T, h *Handler, target string) (uint64, uint64) {
+// buildGroup starts a long-lived process-group leader and scopes the
+// handler to that group, the way a real run scopes it to the wrapped build.
+// The marks cover the whole filesystem holding the workspace, so without
+// the scope every other process opening a fresh file there (a parallel test
+// binary, the Go build cache) lands in EventsHashed and the measurement
+// stops being about the cat runs.
+func buildGroup(t *testing.T, h *Handler) int {
+	t.Helper()
+	leader := exec.Command("/bin/sleep", "600")
+	leader.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := leader.Start(); err != nil {
+		t.Fatalf("start group leader: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = leader.Process.Kill()
+		_ = leader.Wait()
+	})
+	h.SetBuildPgid(leader.Process.Pid)
+	return leader.Process.Pid
+}
+
+// catTwice runs `/bin/cat target` once inside process group pgid,
+// snapshots EventsHashed, runs it again, and returns (hashedAfterFirst,
+// deltaOnSecond). Each cat opens the target plus its own shared libs; both
+// runs touch the same set.
+func catTwice(t *testing.T, h *Handler, target string, pgid int) (uint64, uint64) {
 	t.Helper()
 	run := func() {
 		cmd := exec.Command("/bin/cat", target)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: pgid}
 		if sudoUid := os.Getenv("SUDO_UID"); sudoUid != "" {
 			uid, _ := strconv.Atoi(sudoUid)
 			gid, _ := strconv.Atoi(os.Getenv("SUDO_GID"))
-			cmd.SysProcAttr = &syscall.SysProcAttr{
-				Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), NoSetGroups: true},
-			}
+			cmd.SysProcAttr.Credential = &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid), NoSetGroups: true}
 		}
 		if err := cmd.Run(); err != nil {
 			t.Fatalf("cat %s: %v", target, err)
@@ -84,7 +105,7 @@ func TestIgnoreOnce_SuppressesRepeatOpenPerm(t *testing.T) {
 	go func() { defer wg.Done(); _ = h.Run(ctx) }()
 	time.Sleep(50 * time.Millisecond)
 
-	first, delta := catTwice(t, h, target)
+	first, delta := catTwice(t, h, target, buildGroup(t, h))
 
 	stats := h.GetStats()
 	if first == 0 {
@@ -135,7 +156,7 @@ func TestIgnoreOnce_DisabledStillRehashes(t *testing.T) {
 	go func() { defer wg.Done(); _ = h.Run(ctx) }()
 	time.Sleep(50 * time.Millisecond)
 
-	_, delta := catTwice(t, h, target)
+	_, delta := catTwice(t, h, target, buildGroup(t, h))
 	if delta == 0 {
 		t.Errorf("control failed: second run hashed 0 new events without ignore-once — the measurement is masked by another dedup, so the suppression test is not meaningful")
 	}

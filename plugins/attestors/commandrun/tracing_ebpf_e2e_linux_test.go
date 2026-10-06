@@ -365,6 +365,14 @@ func runUnderEBPF(t *testing.T, argv []string) []ProcessInfo {
 		attestation.WithContext(ctx),
 		attestation.WithWorkingDir(t.TempDir()),
 		attestation.WithHashes(defaultHashes()),
+		// Every fixture these tests open lives under t.TempDir(), and the
+		// default cache patterns classify /tmp/** as build scratch that
+		// the tracer skips at capture time. The tests assert that the
+		// fixture itself is captured, so they classify nothing as cache.
+		attestation.WithCachePatternOptions(attestation.CachePatternOptions{
+			DisableDefaults:    true,
+			DisableSystemQuery: true,
+		}),
 	)
 	if err != nil {
 		t.Fatalf("ctx: %v", err)

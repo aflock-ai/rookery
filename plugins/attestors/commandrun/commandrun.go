@@ -2788,7 +2788,7 @@ func (r *CommandRun) runCmd(ctx *attestation.AttestationContext) error {
 
 	// Held from the fork until the trace is over (see pinTracerThread).
 	defer pinTracerThread(c)()
-	if err := c.Start(); err != nil {
+	if err := startWithoutCollector(c, r.fanotifySession != nil); err != nil {
 		// If eBPF was pre-opened but Start failed, release the consumer.
 		if r.ebpfConsumer != nil {
 			_ = r.ebpfConsumer.Close()
