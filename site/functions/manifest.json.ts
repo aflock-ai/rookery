@@ -6,7 +6,7 @@
  * Shape: see Manifest in functions/_lib/dist.ts. Short cache (publishing rewrites it).
  */
 
-import { type Env, loadManifest } from './_lib/dist';
+import { type Env, loadManifest, manifestResponse } from './_lib/dist';
 
 export const onRequest: PagesFunction<Env> = async (context) => {
   const { request, env } = context;
@@ -15,9 +15,5 @@ export const onRequest: PagesFunction<Env> = async (context) => {
   }
   const manifest = await loadManifest(env);
   if (!manifest) return new Response('Not Found', { status: 404 });
-  const body = request.method === 'HEAD' ? null : JSON.stringify(manifest);
-  return new Response(body, {
-    status: 200,
-    headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=60' },
-  });
+  return manifestResponse(manifest, request.method);
 };

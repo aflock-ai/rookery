@@ -128,6 +128,26 @@ export async function loadManifest(env: Env): Promise<Manifest | null> {
 }
 
 /**
+ * The manifest response served at both /manifest.json and /dl/manifest.json.
+ *
+ * Cross-origin readable (`Access-Control-Allow-Origin: *`): the platform's
+ * "Download cilock" page fetches it from another origin, and without the
+ * header the browser blocks the read, so the page always reported the
+ * manifest unreachable (judge#6005). The manifest is public and the request
+ * carries no credential, so a wildcard exposes nothing a plain GET does not.
+ */
+export function manifestResponse(manifest: Manifest, method: string): Response {
+  return new Response(method === 'HEAD' ? null : JSON.stringify(manifest), {
+    status: 200,
+    headers: {
+      'content-type': 'application/json',
+      'cache-control': 'public, max-age=60',
+      'access-control-allow-origin': '*',
+    },
+  });
+}
+
+/**
  * Resolve a request path's tail into a concrete R2 key.
  *   resolveKey("v1.2.0/cilock-...tar.gz")  -> "v1.2.0/cilock-...tar.gz"
  *   resolveKey("latest/cilock-...tar.gz")  -> "<manifest.latest>/cilock-...tar.gz"

@@ -21,6 +21,7 @@ import {
   contentTypeFor,
   loadManifest,
   logDownload,
+  manifestResponse,
   r2Response,
   resolveKey,
   versionFromKey,
@@ -42,10 +43,7 @@ export const onRequest: PagesFunction<Env> = async (context) => {
   if (tail === 'manifest.json') {
     const manifest = await loadManifest(env);
     if (!manifest) return new Response('Not Found', { status: 404 });
-    return new Response(JSON.stringify(manifest), {
-      status: 200,
-      headers: { 'content-type': 'application/json', 'cache-control': 'public, max-age=60' },
-    });
+    return manifestResponse(manifest, request.method);
   }
 
   const isLatest = tail.startsWith('latest/');
