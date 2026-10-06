@@ -44,7 +44,7 @@ func AttestorsCmd() *cobra.Command {
 func ListCmd() *cobra.Command {
 	var format string
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   listCommandName,
 		Short: "List all available attestors",
 		Long:  "Lists all the available attestors in CIlock with supporting information",
 		Example: `  # List every attestor, as a table

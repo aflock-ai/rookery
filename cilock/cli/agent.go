@@ -20,6 +20,9 @@ import (
 // spell: the same thing, from two directions.
 const agentCommandName = "agent"
 
+// listCommandName is the `list` subcommand under agent, attestors and tools.
+const listCommandName = "list"
+
 // AgentCmd groups the enrolled-agent principal commands. An agent principal is
 // a tenant-scoped, revocable identity a human enrolled at AAL2 on the platform;
 // it signs under its own SPIFFE ID and is stored apart from `cilock login`, so
@@ -36,6 +39,8 @@ func AgentCmd() *cobra.Command {
 	cmd.AddCommand(AgentStatusCmd())
 	cmd.AddCommand(AgentLogoutCmd())
 	cmd.AddCommand(AgentMigrateCmd())
+	cmd.AddCommand(AgentListCmd())
+	cmd.AddCommand(AgentRemoveCmd())
 	return cmd
 }
 
@@ -348,9 +353,10 @@ func AgentLogoutCmd() *cobra.Command {
 			"\n" +
 			"  # ... for another platform (pass the same URL the agent enrolled with)\n" +
 			"  cilock agent logout --platform-url https://platform.example.com\n",
-		Long: "Remove this machine's copy of the agent credential.\n\n" +
+		Long: "Remove all local agent credentials for the platform, active and pending.\n\n" +
 			"This is a local delete, not a revocation: the principal stays valid on the\n" +
-			"platform until a human revokes it there.",
+			"platform until a human revokes it there. To remove one agent and keep the\n" +
+			"others, use `cilock agent remove <agent-id>`.",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -406,4 +412,108 @@ func AgentMigrateCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+// AgentListCmd prints every local agent for one platform, never a bearer.
+func AgentListCmd() *cobra.Command {
+	var platformURL string
+	cmd := &cobra.Command{
+		Use:   listCommandName,
+		Short: "List this machine's enrolled and pending agents for a platform",
+		Long: "List every local agent credential for the platform: id, tenant, whether it is\n" +
+			"active or pending, its recorded repository scope and expiry. Local records\n" +
+			"only: the platform is not checked, so a revoked principal still appears.",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			url := platformURL
+			if url == "" {
+				url = config.DefaultPlatformURL
+			}
+			out := cmd.OutOrStdout()
+			var rows []string
+			now := time.Now()
+			for _, pending := range []bool{false, true} {
+				agents, err := auth.ListAgents(url, pending)
+				if err != nil {
+					return err
+				}
+				for _, c := range agents {
+					rows = append(rows, agentListRow(c, pending, now))
+				}
+			}
+			if len(rows) == 0 {
+				_, _ = fmt.Fprintf(out, "No local agent credentials for %s.\n", auth.NormalizeURL(url))
+				return nil
+			}
+			_, _ = fmt.Fprintf(out, "Local agents for %s (platform not checked; revocation is decided there):\n", auth.NormalizeURL(url))
+			for _, r := range rows {
+				_, _ = fmt.Fprintln(out, r)
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&platformURL, "platform-url", "", "TestifySec platform URL (default "+config.DefaultPlatformURL+")")
+	return cmd
+}
+
+func agentListRow(c auth.AgentCredential, pending bool, now time.Time) string {
+	state := "active"
+	if pending {
+		state = "pending (not yet redeemed)"
+	}
+	scope := "scope unknown"
+	if c.Scope != nil {
+		if c.Scope.Mode == auth.AgentScopeAll {
+			scope = "scope all repositories"
+		} else {
+			scope = fmt.Sprintf("scope %d repositories", len(c.Scope.Repositories))
+		}
+		if !c.Scope.AnsweredAt.IsZero() {
+			scope += " (answered " + c.Scope.AnsweredAt.UTC().Format("2006-01-02 15:04 MST") + ")"
+		}
+	}
+	expiry := "expiry not recorded"
+	switch {
+	case c.Expired(now):
+		expiry = "expired " + c.ExpiresAt.UTC().Format("2006-01-02 15:04 MST")
+	case !c.ExpiresAt.IsZero():
+		expiry = "expires " + c.ExpiresAt.UTC().Format("2006-01-02 15:04 MST")
+	}
+	return fmt.Sprintf("  %s  tenant %s  %s  %s  %s", c.AgentID, c.TenantID, state, scope, expiry)
+}
+
+// AgentRemoveCmd deletes one agent's local active and pending entries.
+func AgentRemoveCmd() *cobra.Command {
+	var platformURL string
+	cmd := &cobra.Command{
+		Use:   "remove <agent-id>",
+		Short: "Remove one agent's local credential, keeping every other agent",
+		Long: "Remove one agent's local credentials (active and pending) for the platform.\n" +
+			"Every other agent stays. This is a local delete: the principal is not revoked\n" +
+			"and stays valid on the platform until a human revokes it there.",
+		Args:          cobra.ExactArgs(1),
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			url := platformURL
+			if url == "" {
+				url = config.DefaultPlatformURL
+			}
+			removed, err := auth.RemoveAgent(url, args[0])
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if !removed {
+				_, _ = fmt.Fprintf(out, "No local agent %s for %s.\n", args[0], auth.NormalizeURL(url))
+				return nil
+			}
+			_, _ = fmt.Fprintf(out, "Removed the local credential for agent %s on %s. The principal is not revoked; revoke it on the platform to end its authority.\n", args[0], auth.NormalizeURL(url))
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&platformURL, "platform-url", "", "TestifySec platform URL (default "+config.DefaultPlatformURL+")")
+	return cmd
 }

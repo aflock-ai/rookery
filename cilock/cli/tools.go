@@ -147,7 +147,7 @@ func toolsListCmd() *cobra.Command {
 		category string
 	)
 	cmd := &cobra.Command{
-		Use:   "list",
+		Use:   listCommandName,
 		Short: "List every detector cilock knows how to auto-fire",
 		Example: `  # List every detector, as a table
   cilock tools list

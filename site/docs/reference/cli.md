@@ -22,7 +22,7 @@ CI/lock attestation types use the `https://aflock.ai/attestations/<name>/v0.1` n
 | `cilock whoami` | Show the current platform session (tenant, product, expiry). |
 | `cilock logout` | Remove the stored platform session credential. |
 | `cilock enroll agent` | Enroll this machine's agent principal in one ceremony: a human approves in the browser with a fresh passkey step-up, cilock stores and redeems the credential. |
-| `cilock agent login` / `logout` / `status` | Manage this machine's enrolled agent principal (signs in place of the human session when present). |
+| `cilock agent login` / `logout` / `status` / `list` / `remove` / `migrate` | Manage this machine's enrolled agent principals (sign in place of the human session when present). |
 | `cilock trust [provider] [owner/repo]` | Register an OIDC identity the platform trusts for keyless upload (CI). |
 | `cilock doctor` | Read-only preflight: is the environment sane to attest + upload against the platform? |
 | `cilock git configure` | Configure Git commit and tag signing through CI/lock's standard X.509 signing protocol. |
@@ -187,7 +187,7 @@ cilock agent login --platform-url https://platform.example.com \
 
 ### `cilock agent logout`
 
-Remove this machine's copy of the agent credential. This is a **local delete, not a revocation**: the principal stays valid on the platform until a human revokes it there. The credential is keyed by platform, and `logout` does not look up which platform you enrolled with — it removes the credential for `--platform-url`, defaulting to the public platform. Pass the same `--platform-url` you gave `cilock agent login`, or a non-default enrollment stays on disk while the command prints `No agent credential stored for …` and exits 0.
+Remove **all** of this machine's local agent credentials for the platform, active and pending. To remove one agent and keep the others, use `cilock agent remove <agent-id>`. This is a **local delete, not a revocation**: the principal stays valid on the platform until a human revokes it there. The credential is keyed by platform, and `logout` does not look up which platform you enrolled with — it removes the credential for `--platform-url`, defaulting to the public platform. Pass the same `--platform-url` you gave `cilock agent login`, or a non-default enrollment stays on disk while the command prints `No agent credential stored for …` and exits 0.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -219,6 +219,30 @@ Upgrade every local cilock first (the installed binary git signs with, jade, min
 
 ```bash
 cilock agent migrate
+```
+
+### `cilock agent list`
+
+List every local agent credential for one platform: agent id, tenant, whether it is active or pending (delivered, not yet redeemed), its recorded repository scope with the time the platform answered it, and its expiry. Bearers are never printed. These are local records only: the platform is not checked, so a revoked principal still appears.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform whose local agents to list. |
+
+```bash
+cilock agent list --platform-url https://platform.example.com
+```
+
+### `cilock agent remove`
+
+Remove one agent's local credentials, active and pending, for the platform. Every other agent stays. This is a **local delete, not a revocation**: the principal stays valid on the platform until a human revokes it there. On a version 1 store it is how you make room to enroll a different agent.
+
+| Flag | Default | Description |
+|---|---|---|
+| `--platform-url <url>` | `https://platform.testifysec.com` | Platform the agent is enrolled with. |
+
+```bash
+cilock agent remove 22222222-2222-2222-2222-222222222222
 ```
 
 ### `cilock trust`
