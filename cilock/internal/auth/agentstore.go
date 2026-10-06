@@ -358,6 +358,18 @@ func (s *agentFileStore) admitV1(c AgentCredential, slot map[string]AgentCredent
 
 var errAgentStoreUnchanged = errors.New("the store was not changed")
 
+// AgentStoreAdmitsNewAgent is enrollment's preflight: on a version 1 store
+// that holds a live agent for platform, a ceremony would mint a principal the
+// store then refuses to hold, so it is refused before any browser opens.
+func AgentStoreAdmitsNewAgent(platform string) error {
+	s, err := loadAgents()
+	if err != nil {
+		return err
+	}
+	probe := AgentCredential{PlatformURL: NormalizeURL(platform)}
+	return s.admitV1(probe, map[string]AgentCredential{})
+}
+
 // MigrateAgentStore explicitly rewrites the store as version 2 and reports a
 // change; v2 is left alone. Older binaries cannot read the result.
 func MigrateAgentStore() (bool, error) {
@@ -873,4 +885,32 @@ func LookupAgentID(platform, id string, pending bool) (*AgentCredential, error) 
 		return nil, nil
 	}
 	return &c, nil
+}
+
+// RemoveAgent deletes one ID's local active and pending entries, not its
+// platform registration. Other identities under the same platform survive.
+func RemoveAgent(platform, id string) (bool, error) {
+	path, err := AgentStorePath()
+	if err != nil {
+		return false, err
+	}
+	var removed bool
+	err = withStoreLock(path, func() error {
+		s, err := loadAgentsLocked()
+		if err != nil {
+			return err
+		}
+		key := agentKey(platform, id)
+		for _, slot := range []map[string]AgentCredential{s.Agents, s.Pending} {
+			if _, ok := slot[key]; ok {
+				delete(slot, key)
+				removed = true
+			}
+		}
+		if !removed {
+			return nil
+		}
+		return saveAgents(s)
+	})
+	return removed, err
 }

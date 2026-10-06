@@ -57,6 +57,9 @@ type EnrollParams struct {
 // from the platform's POST into SaveAgent's 0600 store.
 func BrowserEnroll(judgeURL string, params EnrollParams) (*AgentCredential, error) {
 	judgeURL = NormalizeURL(judgeURL)
+	if err := AgentStoreAdmitsNewAgent(judgeURL); err != nil {
+		return nil, err
+	}
 	state, err := newState()
 	if err != nil {
 		return nil, err

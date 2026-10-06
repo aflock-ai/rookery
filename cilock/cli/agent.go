@@ -35,6 +35,7 @@ func AgentCmd() *cobra.Command {
 	cmd.AddCommand(AgentLoginCmd())
 	cmd.AddCommand(AgentStatusCmd())
 	cmd.AddCommand(AgentLogoutCmd())
+	cmd.AddCommand(AgentMigrateCmd())
 	return cmd
 }
 
@@ -372,4 +373,37 @@ func AgentLogoutCmd() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&platformURL, "platform-url", "", "TestifySec platform URL (default "+config.DefaultPlatformURL+")")
 	return cmd
+}
+
+// AgentMigrateCmd explicitly moves the local agent store to version 2. Nothing
+// else changes the format: an older cilock (git's signing program, jade, a mint
+// worker) cannot read version 2 and refuses to sign until it is upgraded.
+func AgentMigrateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "migrate",
+		Short: "Move the local agent store to version 2, which holds several agents per platform",
+		Long: "Rewrite this machine's agent credential store as version 2.\n\n" +
+			"Version 1 holds one agent per platform, and enrolling a second agent while the\n" +
+			"first is live is refused there. Version 2 holds any number, and enrolling adds\n" +
+			"an agent without evicting another. Every older cilock on this machine (the\n" +
+			"installed binary git signs with, jade, mint workers) cannot read version 2 and\n" +
+			"refuses to sign until upgraded, so upgrade them all first. No credential is\n" +
+			"changed, and running it again does nothing.",
+		Args:          cobra.NoArgs,
+		SilenceErrors: true,
+		SilenceUsage:  true,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			migrated, err := auth.MigrateAgentStore()
+			if err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			if !migrated {
+				_, _ = fmt.Fprintln(out, "The agent store is already version 2.")
+				return nil
+			}
+			_, _ = fmt.Fprintln(out, "Migrated the agent store to version 2. An older cilock on this machine can no longer read it and refuses to sign until upgraded.")
+			return nil
+		},
+	}
 }

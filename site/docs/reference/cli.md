@@ -211,6 +211,16 @@ An **expired** credential prints `EXPIRED` and **exits non-zero**, so a script c
 cilock agent status --platform-url https://platform.example.com
 ```
 
+### `cilock agent migrate`
+
+Rewrite this machine's agent credential store as version 2, which holds several agents per platform. Version 1 holds one: enrolling a different agent while the first is live is refused there (`cilock agent remove <id>` the old one, or migrate). No other command changes the format. Reads never rewrite the file, and a new store is created as version 1.
+
+Upgrade every local cilock first (the installed binary git signs with, jade, mint workers). An older cilock cannot read version 2 and refuses to sign; it never falls back to your human session. No credential changes, and running it again does nothing.
+
+```bash
+cilock agent migrate
+```
+
 ### `cilock trust`
 
 Register an OIDC **federated** identity the platform will trust for keyless attestation upload — the CI complement to [`cilock run`](#cilock-run-cmd). It creates an OIDC credential only; cilock never mints a long-lived API-token secret. Run it as a tenant admin after `cilock login --allow-trust` (the `oidc:write` scope is opt-in). The audience defaults to the same `${platform}/archivista` that `cilock run` uploads to, and the subject is templated from the provider's claim convention, so trust and run can't drift. Providers: `github`, `gitlab` (or `--issuer` + `--subject` for any other); on-prem GHES / self-hosted GitLab add `--host`.
