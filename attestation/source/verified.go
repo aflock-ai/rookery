@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"os"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation"
@@ -69,6 +71,50 @@ func payloadMatchesSubjects(payload []byte, subjectDigests []string) (bool, erro
 		return false, fmt.Errorf("decode signed payload for subject check: %w", err)
 	}
 	return subjectsMatchDigests(scope, subjects, subjectDigests), nil
+}
+
+// signedSubjectSampleMax bounds how many subjects a rejection message lists.
+const signedSubjectSampleMax = 5
+
+// signedSubjectSample renders the subjects of a signature-verified payload for
+// an operator-facing rejection message: "algo:digest ("name")", sorted by
+// algorithm, at most signedSubjectSampleMax of them, then how many were left
+// out. It is OUTPUT ONLY and decides nothing. Names are signed but still
+// author-chosen text, so they are quoted (no raw newline or escape reaches the
+// verdict) and cut to a bounded length.
+func signedSubjectSample(payload []byte) string {
+	var doc struct {
+		Subject []intoto.Subject `json:"subject"`
+	}
+	if err := json.Unmarshal(payload, &doc); err != nil {
+		return "(unreadable)"
+	}
+	if len(doc.Subject) == 0 {
+		return "(none)"
+	}
+	const maxName = 80
+	// bare is strconv.Quote without the surrounding quotes: escapes only.
+	bare := func(s string) string { q := strconv.Quote(s); return q[1 : len(q)-1] }
+	var parts []string
+	for _, s := range doc.Subject[:min(len(doc.Subject), signedSubjectSampleMax)] {
+		algos := make([]string, 0, len(s.Digest))
+		for algo := range s.Digest {
+			algos = append(algos, algo)
+		}
+		slices.Sort(algos)
+		name := s.Name
+		if len(name) > maxName {
+			name = name[:maxName]
+		}
+		for _, algo := range algos {
+			parts = append(parts, fmt.Sprintf("%s:%s (%s)", bare(algo), bare(s.Digest[algo]), strconv.Quote(name)))
+		}
+	}
+	out := strings.Join(parts, ", ")
+	if extra := len(doc.Subject) - signedSubjectSampleMax; extra > 0 {
+		out += fmt.Sprintf(", and %d more", extra)
+	}
+	return out
 }
 
 // decodeSignedSubjectScope decodes the subject list and the git-attested scope
@@ -564,7 +610,13 @@ func (s *VerifiedSource) verifyCandidate(toVerify CollectionEnvelope, subjectDig
 		// source-populated Statement field (which can differ from what was
 		// signed). Fail closed on a malformed payload.
 		fmt.Fprintf(os.Stderr, "[verified-source] envelope %s REJECTED: signed subject does not match requested artifact digest(s) (artifact-substitution guard)\n", truncLogField(toVerify.Reference))
-		Errors = append(Errors, fmt.Errorf("collection subject does not match requested artifact digest(s): artifact-substitution guard"))
+		// The prefix is matched by callers (judge-api nocommitevidence); the
+		// rest is for the operator (#7710): which digests this signed
+		// collection DOES attest, and the remedy when a step deliberately
+		// attests a different file than the artifact (an SBOM, a scan output).
+		Errors = append(Errors, fmt.Errorf("collection subject does not match requested artifact digest(s): artifact-substitution guard. "+
+			"Its signed subjects are %s. If this step attests a different file than the artifact being verified, "+
+			"pass that file's digest as well with --subjects sha256:<digest>", signedSubjectSample(toVerify.Envelope.Payload)))
 		passedVerifiers = nil
 		timestampsByKeyID = nil
 	} else if decoded, derr := EnvelopeToCollectionEnvelope(toVerify.Reference, toVerify.Envelope); derr != nil {

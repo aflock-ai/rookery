@@ -25,7 +25,7 @@
   -- cite: attestation/policy/policy.go:606-662 sha256:d3d162656defee17a14273bb468cef2b2f65146073be5f3915fd09469454410e
   -- cite: cilock/internal/policy/validate.go:354-357 sha256:16297b0f0b687d9a6ecf5d5b872937a20dd90d2d3c4077e1a1edfeaf55b0ac90
   -- cite: attestation/policy/policy.go:499 sha256:5839f38abbb0838072bd486680ea33d28649db7abff272bc900592e4c49a76a6
-  -- cite: attestation/source/verified.go:508-600 sha256:a13a4227b6ca1db9e3e3cbafaf749d89a6ba8b18e465bb3fbdfc845f5e8c75b9
+  -- cite: attestation/source/verified.go:554-652 sha256:84d0dc156f758dce85275bd42c904677571fdf7d38d720764f265529b950e835
 -/
 import CilockPolicy.Trust
 
@@ -155,7 +155,7 @@ def gate (rego : Rego) (o : Options) (s : Step) (ctx : Ctx) (c : Collection) : B
     filter (`policy.go`), DSSE + the signed-subject guard
     (`verified.go`) and functionary triage.
     -- cite: attestation/policy/policy.go:1320 sha256:48fc7d8f69112af5d78747179bd96e7fba9d32bda32b7bf300bb8db09e22a94f
-    -- cite: attestation/source/verified.go:508-600 sha256:a13a4227b6ca1db9e3e3cbafaf749d89a6ba8b18e465bb3fbdfc845f5e8c75b9
+    -- cite: attestation/source/verified.go:554-652 sha256:84d0dc156f758dce85275bd42c904677571fdf7d38d720764f265529b950e835
     -/
 def authorized (h : Hardening) (p : Policy) (o : Options) (s : Step) (e : Envelope) : Bool :=
   e.payload.name == s.name && anchored o.seeds e.payload && triage h p o s e
