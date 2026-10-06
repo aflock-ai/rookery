@@ -166,10 +166,6 @@ func EnvelopeToCollectionEnvelope(reference string, env dsse.Envelope) (Collecti
 		return CollectionEnvelope{}, err
 	}
 
-	if statement.PredicateType == "" {
-		return CollectionEnvelope{}, fmt.Errorf("envelope %s: statement has empty predicateType (payload length %d)", reference, len(env.Payload))
-	}
-
 	collection := attestation.Collection{}
 	if err := json.Unmarshal(statement.Predicate, &collection); err != nil {
 		return CollectionEnvelope{}, fmt.Errorf("envelope %s: failed to unmarshal collection: %w", reference, err)
@@ -231,6 +227,23 @@ func decodeInTotoStatement(reference string, env dsse.Envelope) (intoto.Statemen
 	if !isInTotoStatementType(statement.Type) {
 		return intoto.Statement{}, fmt.Errorf("envelope %s: _type %q is not an in-toto Statement (%s or %s)",
 			reference, statement.Type, inTotoStatementTypeV1, intoto.StatementType)
+	}
+	// statement.md: predicateType is a required TypeURI, and every subject
+	// "MUST have digest set". The read-side mirror of intoto.newStatement
+	// (#10068). An empty subject list stays readable: cilock signs one for a
+	// step that produces no artifact.
+	if statement.PredicateType == "" {
+		return intoto.Statement{}, fmt.Errorf("envelope %s: statement has empty predicateType", reference)
+	}
+	for i, subject := range statement.Subject {
+		if len(subject.Digest) == 0 {
+			return intoto.Statement{}, fmt.Errorf("envelope %s: subject %d (%q) has no digest", reference, i, subject.Name)
+		}
+		for algorithm, value := range subject.Digest {
+			if algorithm == "" || value == "" {
+				return intoto.Statement{}, fmt.Errorf("envelope %s: subject %d (%q) has an empty digest entry (%q: %q)", reference, i, subject.Name, algorithm, value)
+			}
+		}
 	}
 	return statement, nil
 }

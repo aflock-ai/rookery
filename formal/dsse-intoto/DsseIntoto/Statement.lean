@@ -236,10 +236,14 @@ def toCollection (e : RawEnv) : Option Decoded :=
   | some d => if d.predicateType = "" then none else if d.collection then some d else none
 
 /-- The same, as it must be, and as built since #10060
-    (`decodeInTotoStatement`, then the empty-predicateType check and the
-    collection decode). -/
--- cite: attestation/source/source.go:163-184 sha256:6c70f6103630870b
--- cite: attestation/source/source.go:192-236 sha256:cc290c1819826543
+    (`decodeInTotoStatement`, which since #10068 also holds the
+    empty-predicateType check, then the collection decode). Since #10068 the
+    decoder also refuses a subject with no digest. `Decoded` does not model
+    subjects, so this definition admits a superset of what the code admits;
+    the theorems below say only that what is admitted is read as the spec
+    reads it, which a stricter reader preserves. -/
+-- cite: attestation/source/source.go:163-180 sha256:ed812c115760ab10d421f8371ccb80c539a92550d23e1c825cd3ee35c6f48ece
+-- cite: attestation/source/source.go:188-249 sha256:d1b7dee0b27e59f1a9ff4fef74ab30f882260b830dc9beac3636f4691fda4c53
 def toCollectionReq (e : RawEnv) : Option Decoded :=
   if supportedPayloadType e.payloadType = false then none
   else match e.payload with
@@ -294,12 +298,15 @@ def externalRead (x : External) : Option Decoded :=
     and hand on that decode, not the source's. The artifact-substitution
     guard runs first on the same signed bytes (`matchSignedExternalSubjects`,
     both inside `adoptSignedExternal` since #10168);
-    the model takes its subject match as given, as the differential does. -/
+    the model takes its subject match as given, as the differential does.
+    Since #10068 the decoder also refuses an empty predicateType and a
+    digest-less subject even when the search asked for them, so here too the
+    model admits a superset of what the code admits. -/
 -- cite: attestation/source/verified.go:616-626 sha256:ad934402e8b55a3f
 -- cite: attestation/source/verified.go:640-667 sha256:f82b27affca1964fbbc1744dd334ae34e7acdff8f07108136722f5b190492710
 -- cite: attestation/source/verified.go:684-713 sha256:6d4c58f0e8917e9c
 -- cite: attestation/source/declared_commit_subject.go:125-148 sha256:9c08d16a936fd03f
--- cite: attestation/source/source.go:192-236 sha256:cc290c1819826543
+-- cite: attestation/source/source.go:188-249 sha256:d1b7dee0b27e59f1a9ff4fef74ab30f882260b830dc9beac3636f4691fda4c53
 def externalReadReq (x : External) : Option Decoded :=
   if supportedPayloadType x.env.payloadType = false then none
   else match x.env.payload with
