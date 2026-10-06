@@ -656,24 +656,65 @@ func validateRunOpts(ro runOptions) error {
 // intoto.NewStatementV1WithLeadingSubjects). maxStatementBytes is checked on the exact statement bytes handed to
 // dsse.Sign, so an oversized statement is refused before any signature or
 // timestamp exists for it (zero disables the check).
+//
+// An oversized statement gets one chance to fit: every attestor in it that
+// implements attestation.SizeReducer is asked to bound its evidence, and the
+// statement is rebuilt and measured again. Still over is refused as before.
 func createAndSignEnvelope(predicate interface{}, predType string, subjects map[string]cryptoutil.DigestSet, leading []string, maxStatementBytes int, opts ...dsse.SignOption) (dsse.Envelope, error) {
-	data, err := json.Marshal(&predicate)
-	if err != nil {
-		return dsse.Envelope{}, err
-	}
-
-	stmt, err := intoto.NewStatementV1WithLeadingSubjects(predType, data, subjects, leading)
-	if err != nil {
-		return dsse.Envelope{}, err
-	}
-
-	stmtJSON, err := json.Marshal(&stmt)
+	stmtJSON, err := marshalStatement(predicate, predType, subjects, leading)
 	if err != nil {
 		return dsse.Envelope{}, err
 	}
 	if err := CheckStatementSize(stmtJSON, predType, maxStatementBytes); err != nil {
-		return dsse.Envelope{}, err
+		if !reduceForSize(predicate) {
+			return dsse.Envelope{}, err
+		}
+		if stmtJSON, err = marshalStatement(predicate, predType, subjects, leading); err != nil {
+			return dsse.Envelope{}, err
+		}
+		if err := CheckStatementSize(stmtJSON, predType, maxStatementBytes); err != nil {
+			return dsse.Envelope{}, err
+		}
 	}
 
 	return dsse.Sign(intoto.PayloadType, bytes.NewReader(stmtJSON), opts...)
+}
+
+func marshalStatement(predicate interface{}, predType string, subjects map[string]cryptoutil.DigestSet, leading []string) ([]byte, error) {
+	data, err := json.Marshal(&predicate)
+	if err != nil {
+		return nil, err
+	}
+	stmt, err := intoto.NewStatementV1WithLeadingSubjects(predType, data, subjects, leading)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(&stmt)
+}
+
+// reduceForSize asks every attestation.SizeReducer inside predicate (the
+// predicate itself, or each entry of a collection) to bound its evidence, and
+// reports whether any of them changed. Every reducer is asked, not just the
+// first, so one call is all a statement gets.
+func reduceForSize(predicate interface{}) bool {
+	var attestors []interface{}
+	switch p := predicate.(type) {
+	case attestation.Collection:
+		for _, a := range p.Attestations {
+			attestors = append(attestors, a.Attestation)
+		}
+	case *attestation.Collection:
+		for _, a := range p.Attestations {
+			attestors = append(attestors, a.Attestation)
+		}
+	default:
+		attestors = append(attestors, predicate)
+	}
+	changed := false
+	for _, a := range attestors {
+		if r, ok := a.(attestation.SizeReducer); ok && r.ReduceForSize() {
+			changed = true
+		}
+	}
+	return changed
 }

@@ -130,6 +130,22 @@ type SigningGuard interface {
 	CheckBeforeSigning() error
 }
 
+// SizeReducer is implemented by an attestor that can record a bounded form of
+// its evidence when the statement carrying it would otherwise be refused by the
+// signing size limit (workflow.RunWithMaxStatementBytes). command-run is the
+// one implementer: it cuts an oversized stdout/stderr to a head and a tail and
+// states what it dropped in the predicate (testifysec/judge#9380).
+//
+// The workflow calls ReduceForSize only after a statement has been measured
+// over the limit, once, and re-measures afterwards: a statement that still does
+// not fit is refused exactly as before. A statement that fits never reaches it,
+// so the reduced form appears only where the alternative was no attestation at
+// all. ReduceForSize reports whether it changed anything; the reduced predicate
+// must say inside itself what was dropped, never leave it to be inferred.
+type SizeReducer interface {
+	ReduceForSize() bool
+}
+
 // BackReffer allows attestors to indicate which of their subjects are good candidates
 // to find related attestations.  For example the git attestor's commit hash subject
 // is a good candidate to find all attestation collections that also refer to a specific
