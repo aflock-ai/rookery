@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/aflock-ai/rookery/attestation/cryptoutil"
@@ -106,6 +107,10 @@ func newSignCmd() (*cobra.Command, *options.SignOptions) {
 			signers, err := loadSigners(cmd.Context(), so.SignerOptions, so.KMSSignerProviderOptions, providersFromFlags("signer", cmd.Flags()))
 			if err != nil {
 				return fmt.Errorf("failed to load signer: %w", err)
+			}
+
+			if len(signers) == 1 {
+				warnEmailSignedPolicy(cmd.ErrOrStderr(), data, so.DataType, signers[0])
 			}
 
 			return signBytes(cmd.Context(), *so, data, signers...)
@@ -226,6 +231,28 @@ func isWitnessPolicyInput(data []byte, payloadType string) bool {
 	_, hasSteps := document["steps"]
 	_, hasExpires := document["expires"]
 	return hasSteps && hasExpires
+}
+
+// warnEmailSignedPolicy tells the operator, at sign time, that a policy signed
+// by a human (email SAN, no URI SAN) will not verify under the default embedded
+// signer trust, which matches a workflow URI. Without it the sign, push and bind
+// all succeed and the gap only shows at verify. It never refuses: --policy-emails
+// is a valid trust choice.
+func warnEmailSignedPolicy(w io.Writer, data []byte, dataType string, signer cryptoutil.Signer) {
+	if !isWitnessPolicyInput(data, dataType) {
+		return
+	}
+	bundler, ok := signer.(cryptoutil.TrustBundler)
+	if !ok {
+		return
+	}
+	cert := bundler.Certificate()
+	if cert == nil || len(cert.EmailAddresses) == 0 || len(cert.URIs) > 0 {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "warning: this policy is signed by the email identity %s (an interactive login), not a CI workflow identity. "+
+		"`cilock verify` under default trust will reject it; verify with --policy-emails %s.\n",
+		cert.EmailAddresses[0], cert.EmailAddresses[0])
 }
 
 // runSign reads the input file and signs it. Callers that have already read

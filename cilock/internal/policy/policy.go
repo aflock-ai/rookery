@@ -17,8 +17,12 @@ package policy
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/dsse"
@@ -33,6 +37,12 @@ func LoadPolicy(ctx context.Context, policyPath string, ac *archivista.Client) (
 
 	filePolicy, err := os.Open(policyPath) //nolint:gosec // G304: policyPath is from CLI flags
 	if err != nil {
+		// A path-shaped argument is a file the operator named, never a gitoid.
+		// Asking Archivista for it turns "file not found" into a 404 that hides
+		// the real cause. Gitoids carry no path separator.
+		if errors.Is(err, fs.ErrNotExist) && pathShaped(policyPath) {
+			return policyEnvelope, fmt.Errorf("policy file not found: %s", policyPath)
+		}
 		if ac != nil {
 			log.Infof("failed to open policy file, attempting to load from archivista: %v", err)
 			return ac.Download(ctx, policyPath)
@@ -52,4 +62,8 @@ func LoadPolicy(ctx context.Context, policyPath string, ac *archivista.Client) (
 	}
 
 	return policyEnvelope, nil
+}
+
+func pathShaped(arg string) bool {
+	return strings.ContainsRune(arg, '/') || strings.ContainsRune(arg, filepath.Separator)
 }

@@ -31,6 +31,7 @@ import (
 
 	"github.com/aflock-ai/rookery/attestation/archivista"
 	"github.com/aflock-ai/rookery/attestation/dsse"
+	"github.com/aflock-ai/rookery/attestation/fileinventory"
 	"github.com/aflock-ai/rookery/attestation/policy"
 	"github.com/aflock-ai/rookery/attestation/source"
 	gitattestor "github.com/aflock-ai/rookery/plugins/attestors/git"
@@ -376,6 +377,8 @@ func derivePolicyFromCommit(ctx context.Context, stderr io.Writer, o policyFromC
 		summaries = append(summaries, s)
 	}
 
+	summaries = collapseDuplicateSteps(stderr, summaries)
+
 	pol, err := buildStarterPolicy(stderr, summaries, map[string][]byte{}, o.expiresIn)
 	if err != nil {
 		return nil, 0, err
@@ -384,6 +387,39 @@ func derivePolicyFromCommit(ctx context.Context, stderr io.Writer, o policyFromC
 		return nil, 0, err
 	}
 	return pol, len(pol.Steps) + len(pol.ExternalAttestations), nil
+}
+
+// collapseDuplicateSteps keeps ONE collection per step name. Re-attesting a
+// step (a CI retry, running twice) leaves several collections for one commit,
+// and from-commit has no --step-prefix, so buildStarterPolicy's duplicate
+// refusal could never be followed. Merging would union every signer who ever
+// attested the step into the functionaries, so the policy keeps a single
+// identity instead: the collection carrying the most attestor types, ties to the
+// first gitoid (summaries arrive sorted). Each dropped gitoid is named on stderr
+// so the author can pick another with from-bundles. Inventory companions are
+// not steps and pass through.
+func collapseDuplicateSteps(stderr io.Writer, summaries []bundleSummary) []bundleSummary {
+	best := make(map[string]int, len(summaries))
+	for i, s := range summaries {
+		if s.outerPredicateType == fileinventory.Type {
+			continue
+		}
+		j, seen := best[s.stepName]
+		if !seen || len(s.predicateTypes) > len(summaries[j].predicateTypes) {
+			best[s.stepName] = i
+		}
+	}
+	out := make([]bundleSummary, 0, len(summaries))
+	for i, s := range summaries {
+		if s.outerPredicateType != fileinventory.Type && best[s.stepName] != i {
+			kept := summaries[best[s.stepName]]
+			_, _ = fmt.Fprintf(stderr, "warning: step %q has more than one collection for this commit; using %s and ignoring %s\n",
+				s.stepName, shortID(kept.path), shortID(s.path))
+			continue
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // writeAuthoredPolicy marshals the policy to JSON and writes it to outputPath
