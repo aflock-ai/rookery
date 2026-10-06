@@ -9,7 +9,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	neturl "net/url"
 	"os"
+	"strings"
+	"sync"
 
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	"github.com/aflock-ai/rookery/cilock/internal/config"
@@ -66,7 +69,8 @@ func LoginCmd() *cobra.Command {
 			if err := config.RequireSecurePlatformURL(url); err != nil {
 				return err
 			}
-			cred, err := resolveLoginCredential(cmd, url, token, tenant, product, interactive, workflowIdentity, allowTrust, noBrowser)
+			pushgateOrigin := pushgateOriginLookup(url)
+			cred, err := resolveLoginCredential(cmd, url, token, tenant, product, interactive, workflowIdentity, allowTrust, noBrowser, pushgateOrigin)
 			if err != nil {
 				return err
 			}
@@ -84,7 +88,7 @@ func LoginCmd() *cobra.Command {
 			if err := auth.Save(*cred); err != nil {
 				return err
 			}
-			printLoginResult(cmd.OutOrStdout(), url, cred)
+			printLoginResult(cmd.OutOrStdout(), url, nextStepPushgateOrigin(cred, pushgateOrigin), cred)
 			return nil
 		},
 	}
@@ -101,6 +105,22 @@ func LoginCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noBrowser, noBrowserFlag, false, "Never open a browser: fail with the headless options instead (a browser never opens in CI either)")
 	cmd.Flags().BoolVar(&allowTrust, "allow-trust", false, "Also grant the narrow oidc:write scope so this session can register CI trust with `cilock trust` (off by default)")
 	return cmd
+}
+
+// pushgateOriginLookup returns the Pushgate origin platform discovery
+// advertises for url, fetched at most once and only when first asked: a
+// browser login asks, CI logins never do.
+func pushgateOriginLookup(url string) func() string {
+	return sync.OnceValue(func() string { return publishNextStepPushgateOrigin(url) })
+}
+
+// nextStepPushgateOrigin is the Pushgate origin the login output names as the
+// human's next step: only after a browser login, never for CI identities.
+func nextStepPushgateOrigin(cred *auth.Credential, lookup func() string) string {
+	if cred.AuthMode != auth.AuthModeBrowser {
+		return ""
+	}
+	return lookup()
 }
 
 // loginTier is the resolved login method (see decideLoginTier).
@@ -224,7 +244,10 @@ func loginTierInputFromEnv(url, token string, interactive, workflowIdentity bool
 }
 
 // resolveLoginCredential obtains a session credential per decideLoginTierCI.
-func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product string, interactive, workflowIdentity, allowTrust, noBrowser bool) (*auth.Credential, error) {
+//
+// pushgateOrigin, when non-nil, supplies the Pushgate origin the browser
+// success page names as the next step.
+func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product string, interactive, workflowIdentity, allowTrust, noBrowser bool, pushgateOrigin func() string) (*auth.Credential, error) {
 	tier, err := decideLoginTierCI(loginTierInputFromEnv(url, token, interactive, workflowIdentity))
 	if err != nil {
 		return nil, err
@@ -243,19 +266,24 @@ func resolveLoginCredential(cmd *cobra.Command, url, token, tenant, product stri
 				"Without a browser: pipe a JWT with `--token -` plus --tenant-id and --product-id, or use the\n"+
 					"ambient CI identity (--workflow-identity).")
 		}
-		return auth.BrowserLogin(url, auth.LoginParams{
+		params := auth.LoginParams{
 			Tenant:     tenant,
 			Product:    product,
 			Purpose:    "cilock CLI",
 			AllowTrust: allowTrust,
-		})
+		}
+		if pushgateOrigin != nil {
+			params.PushgateOrigin = pushgateOrigin()
+		}
+		return auth.BrowserLogin(url, params)
 	}
 }
 
 // printLoginResult reports the stored session after a successful login: the
 // workflow-identity marker, or the logged-in tenant + bound product (nudging to
-// `cilock use` when no product is bound).
-func printLoginResult(out io.Writer, url string, cred *auth.Credential) {
+// `cilock use` when no product is bound). A non-empty pushgateOrigin makes
+// Pushgate the next step, with `cilock run` as the direct alternative.
+func printLoginResult(out io.Writer, url, pushgateOrigin string, cred *auth.Credential) {
 	if cred.AuthMode == auth.AuthModeWorkflowOIDC {
 		_, _ = fmt.Fprintf(out, "✓ workflow identity active for %s (%s)\n", auth.NormalizeURL(url), workflowIdentityLabel())
 		if cred.TenantName != "" || cred.TenantID != "" {
@@ -275,6 +303,28 @@ func printLoginResult(out io.Writer, url string, cred *auth.Credential) {
 	} else {
 		_, _ = fmt.Fprintf(out, "  ⚠ no working product bound — set one with `cilock use`\n")
 	}
+	if pushgateOrigin != "" {
+		_, _ = fmt.Fprintf(out, "\n%s\nThen paste this prompt into your coding agent (Claude Code, Codex, or similar):\n\n%s\n",
+			auth.PushgateConnectLine(pushgateOrigin), auth.PushgateAgentPrompt(pushgateOrigin))
+	}
+	if cred.ProductID != "" {
+		lead := "Next, wrap your build so cilock records its first attestation:"
+		if pushgateOrigin != "" {
+			lead = "Or attest a build directly:"
+		}
+		_, _ = fmt.Fprintf(out, "\n%s\n  %s\n", lead, auth.FirstRunCommand)
+		_, _ = fmt.Fprintf(out, "Evidence appears at %s\n", evidenceURL(url, cred.TenantID, cred.ProductID))
+	}
+}
+
+// evidenceURL is the product's Evidence tab on the platform, where a
+// `cilock run` against this session's binding shows up.
+func evidenceURL(platformURL, tenantID, productID string) string {
+	q := neturl.Values{"tab": {"test-evidence"}}
+	if tenantID != "" {
+		q.Set("tenant", tenantID)
+	}
+	return strings.TrimRight(auth.NormalizeURL(platformURL), "/") + "/products/" + neturl.PathEscape(productID) + "?" + q.Encode()
 }
 
 // applyScopeFlags binds an explicit --tenant-id/--product-id (and their name

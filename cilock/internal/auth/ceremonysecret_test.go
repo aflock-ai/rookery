@@ -168,7 +168,7 @@ func TestRedactCeremonyURLKeepsEveryNonAuthorizingParameter(t *testing.T) {
 func newLoginHandler(t *testing.T, state string) (http.HandlerFunc, chan *Credential) {
 	t.Helper()
 	resultCh := make(chan *Credential, 4)
-	h := loginCallbackHandler("https://platform.example.com", state, resultCh)
+	h := loginCallbackHandler("https://platform.example.com", state, "", resultCh)
 	return h, resultCh
 }
 

@@ -22,7 +22,7 @@ func newQuietCmd() *cobra.Command {
 }
 
 func TestResolveLoginCredentialFromToken(t *testing.T) {
-	cred, err := resolveLoginCredential(newQuietCmd(), "https://platform.example.com", "tok-123", "", "", false, false, false, false)
+	cred, err := resolveLoginCredential(newQuietCmd(), "https://platform.example.com", "tok-123", "", "", false, false, false, false, nil)
 	if err != nil {
 		t.Fatalf("resolveLoginCredential: %v", err)
 	}
@@ -37,7 +37,7 @@ func TestResolveLoginCredentialFromToken(t *testing.T) {
 func TestResolveLoginCredentialFromStdin(t *testing.T) {
 	cmd := newQuietCmd()
 	cmd.SetIn(strings.NewReader("  stdin-token\n"))
-	cred, err := resolveLoginCredential(cmd, "https://platform.example.com", "-", "", "", false, false, false, false)
+	cred, err := resolveLoginCredential(cmd, "https://platform.example.com", "-", "", "", false, false, false, false, nil)
 	if err != nil {
 		t.Fatalf("resolveLoginCredential: %v", err)
 	}
@@ -47,7 +47,7 @@ func TestResolveLoginCredentialFromStdin(t *testing.T) {
 }
 
 func TestResolveLoginCredentialEmptyTokenErrors(t *testing.T) {
-	if _, err := resolveLoginCredential(newQuietCmd(), "https://platform.example.com", "   ", "", "", false, false, false, false); err == nil {
+	if _, err := resolveLoginCredential(newQuietCmd(), "https://platform.example.com", "   ", "", "", false, false, false, false, nil); err == nil {
 		t.Fatal("expected an error for an all-whitespace token, got nil")
 	}
 }

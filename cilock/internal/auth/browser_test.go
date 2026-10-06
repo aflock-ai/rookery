@@ -27,7 +27,7 @@ func TestBrowserLoginRefusesInCI(t *testing.T) {
 func TestWriteCallbackPageEscapesTenant(t *testing.T) {
 	const payload = `<script>alert(document.cookie)</script>`
 	var buf bytes.Buffer
-	writeCallbackPage(&buf, payload)
+	writeCallbackPage(&buf, payload, "https://pushgate.example")
 	out := buf.String()
 
 	if strings.Contains(out, payload) {
@@ -40,7 +40,7 @@ func TestWriteCallbackPageEscapesTenant(t *testing.T) {
 
 func TestWriteCallbackPageRendersTenant(t *testing.T) {
 	var buf bytes.Buffer
-	writeCallbackPage(&buf, "acme")
+	writeCallbackPage(&buf, "acme", "")
 	if !strings.Contains(buf.String(), "Tenant: <strong>acme</strong>") {
 		t.Fatalf("expected tenant rendered in page, got:\n%s", buf.String())
 	}

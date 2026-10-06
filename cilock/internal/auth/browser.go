@@ -42,6 +42,10 @@ type LoginParams struct {
 	// later run `cilock trust`. Off by default — registering CI trust is a
 	// privileged action the user must explicitly request at login.
 	AllowTrust bool
+	// PushgateOrigin is the Pushgate origin platform discovery advertises
+	// (scheme://host), or "" for none. The success page then names Pushgate
+	// as the next step.
+	PushgateOrigin string
 }
 
 // BrowserLogin opens the TestifySec platform's /auth/cli page for the user to
@@ -69,7 +73,7 @@ func BrowserLogin(judgeURL string, params LoginParams) (*Credential, error) {
 	mux := http.NewServeMux()
 	srv := newLoopbackServer(mux) // bounded read and drain: loopback.go
 
-	mux.HandleFunc("/callback", loginCallbackHandler(judgeURL, state, resultCh))
+	mux.HandleFunc("/callback", loginCallbackHandler(judgeURL, state, params.PushgateOrigin, resultCh))
 
 	go func() { _ = srv.Serve(listener) }()
 	defer shutdownLoopback(srv)
@@ -111,7 +115,7 @@ func BrowserLogin(judgeURL string, params LoginParams) (*Credential, error) {
 //   - ONE VALID CALLBACK ENDS THE FLOW. There was no single-shot at all here,
 //     so a racing or replayed POST overwrote what the browser had just
 //     delivered. A second callback is refused 409 and examined no further.
-func loginCallbackHandler(judgeURL, state string, resultCh chan<- *Credential) http.HandlerFunc {
+func loginCallbackHandler(judgeURL, state, pushgateOrigin string, resultCh chan<- *Credential) http.HandlerFunc {
 	var consumed atomic.Bool
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -149,7 +153,7 @@ func loginCallbackHandler(judgeURL, state string, resultCh chan<- *Credential) h
 			"email":      r.FormValue("email"),
 		})
 		w.Header().Set("Content-Type", "text/html")
-		writeCallbackPage(w, r.FormValue("tenant"))
+		writeCallbackPage(w, r.FormValue("tenant"), pushgateOrigin)
 	}
 }
 
@@ -290,12 +294,17 @@ func newBrowserCredential(judgeURL, token string, form map[string]string) *Crede
 // HTML-escaped because a crafted `tenant` form value on the callback could
 // otherwise inject script into the page, and the loopback listener is reachable
 // by any other local process — so the value is escaped to neutralize XSS.
-func writeCallbackPage(w io.Writer, tenant string) {
-	writeCilockCallbackPage(w, callbackPage{
+func writeCallbackPage(w io.Writer, tenant, pushgateOrigin string) {
+	page := callbackPage{
 		Title: "Cilock authorized", Heading: "Cilock authorized",
 		Label: "Tenant", Value: tenant,
 		Message: "The platform sent your sign-in credential to Cilock. Return to your terminal to continue.",
-	})
+		Next:    FirstRunCommand,
+	}
+	if pushgateOrigin != "" {
+		page.Connect, page.PushgateURL, page.Prompt = PushgateConnectLine(pushgateOrigin), pushgateOrigin+"/", PushgateAgentPrompt(pushgateOrigin)
+	}
+	writeCilockCallbackPage(w, page)
 }
 
 // cliAuthURL builds the /auth/cli URL. client=cilock scopes/brands the page;
