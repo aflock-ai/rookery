@@ -19,7 +19,8 @@ import (
 // A change to the next-step text must change the model, or this fails.
 func TestFirstRunTerminalGuidanceMatchesModel(t *testing.T) {
 	var out bytes.Buffer
-	printLoginResult(&out, "https://platform.testifysec.com", &auth.Credential{
+	// The hosted platform's discovery advertises Pushgate at this origin.
+	printLoginResult(&out, "https://platform.testifysec.com", "https://pushgate.dev", &auth.Credential{
 		TenantID: "t-1", TenantName: "acme", ProductID: "p-1", ProductName: "api",
 	})
 	text := out.String()

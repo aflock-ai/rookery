@@ -19,7 +19,7 @@ import (
 // the stylesheet and the script are dropped before the needles are applied.
 func TestFirstRunCallbackGuidanceMatchesModel(t *testing.T) {
 	var out bytes.Buffer
-	writeCallbackPage(&out, "acme")
+	writeCallbackPage(&out, "acme", "https://pushgate.dev")
 	page := out.String()
 	if !strings.Contains(page, "Cilock authorized") || !strings.Contains(page, "<strong>acme</strong>") {
 		t.Fatalf("writeCallbackPage did not render the login receipt:\n%s", page)
