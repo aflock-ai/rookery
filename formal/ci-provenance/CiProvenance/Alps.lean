@@ -207,7 +207,7 @@ def emit (d : Deployment) (tb : TrustBase) (adv : Adversary) (t : Facts) : Evide
 identity with the platform TSA, and nothing else. The `alps-evidence`
 predicate has no boundary field, and cilockd is not built.
 -- see (monorepo, outside this tree): docs/design/alps-2-boundary-attestation.md:44-51
--- cite: plugins/attestors/alps-evidence/alps_evidence.go:146-178 sha256:b54167d00e7d6da11179c49cc99aee2005c47069c0d233120d5dce733a8a29f5
+-- cite: plugins/attestors/alps-evidence/alps_evidence.go:146-183 sha256:eb2ec75925c1fade1ac933c7fe84c8b966239c99f36932557c48214b3094345c
 -- see (monorepo, outside this tree): docs/architecture/pushgate-agent-policy-contract.md:1327-1327 -/
 def asBuilt : Deployment :=
   { keyless := true, humanSession := false, tsa := true, sandbox := false, observer := false,

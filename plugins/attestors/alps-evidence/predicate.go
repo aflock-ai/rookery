@@ -70,23 +70,13 @@ func (a *Attestor) capStrings() {
 	capObs(a.Model)
 	capObs(a.Session)
 	if a.Invoker != nil {
-		capObs(a.Invoker.Version)
-		capTo(&a.Invoker.Vendor)
-		capTo(&a.Invoker.Product)
-		capTo(&a.Invoker.Fingerprint)
-		capTo(&a.Invoker.DetectionMethod)
-		capTo(&a.Invoker.Process.StartTime)
-		capTo(&a.Invoker.Process.Executable)
-		capTo(&a.Invoker.Process.ExecutableResolved)
-		capTo(&a.Invoker.Process.Comm)
-		capTo(&a.Invoker.Process.DigestSkipped)
-		capTo(&a.Invoker.Process.DigestBinding)
-		capTo(&a.Invoker.Process.ArgvProgram)
-		for k, v := range a.Invoker.Process.ArgvFields {
-			capped, cut := capString(v)
-			a.Invoker.Process.ArgvFields[k] = capped
-			truncated = truncated || cut
-		}
+		capInvoker(a.Invoker, capTo, capObs)
+	}
+	if a.EnvironmentClaim != nil {
+		capObs(a.EnvironmentClaim.Version)
+		capTo(&a.EnvironmentClaim.Vendor)
+		capTo(&a.EnvironmentClaim.Product)
+		capTo(&a.EnvironmentClaim.Fingerprint)
 	}
 	for i := range a.Settings {
 		capTo(&a.Settings[i].Key)
@@ -116,6 +106,27 @@ func (a *Attestor) capStrings() {
 	if truncated {
 		a.Warnings = append(a.Warnings,
 			"alps-evidence: one or more recorded values exceeded the per-value size cap and were truncated; truncated values end in "+truncationMarker+".")
+	}
+}
+
+// capInvoker applies capTo to every string the invoker carries. It is split
+// out of capStrings only to keep that function within the statement budget.
+func capInvoker(inv *AgentIdentity, capTo func(*string), capObs func(*Observation)) {
+	capObs(inv.Version)
+	capTo(&inv.Vendor)
+	capTo(&inv.Product)
+	capTo(&inv.Fingerprint)
+	capTo(&inv.DetectionMethod)
+	capTo(&inv.Process.StartTime)
+	capTo(&inv.Process.Executable)
+	capTo(&inv.Process.ExecutableResolved)
+	capTo(&inv.Process.Comm)
+	capTo(&inv.Process.DigestSkipped)
+	capTo(&inv.Process.DigestBinding)
+	capTo(&inv.Process.ArgvProgram)
+	for k, v := range inv.Process.ArgvFields {
+		capTo(&v)
+		inv.Process.ArgvFields[k] = v
 	}
 }
 
@@ -353,6 +364,34 @@ type AgentIdentity struct {
 	// DetectionMethod is constant for this attestor but is written explicitly
 	// so a future mode is distinguishable in stored attestations.
 	DetectionMethod string `json:"detection_method"`
+}
+
+// EnvironmentClaim is the agent cilock's OWN inherited environment names, when
+// the ancestry walk found no agent process at all.
+//
+// It exists for the detached launch (#9550): `nohup cilock … &` from an agent
+// session reparents to init/launchd, so the walk never meets the agent, yet
+// the agent's environment markers (Claude Code's CLAUDECODE=1) survive the
+// reparent. It is a separate field rather than an Invoker because Invoker
+// means "a process the walk matched" and carries that process; here there is
+// none. It never changes Status.
+//
+// It is the weakest identification this predicate carries: any process, and
+// the user, can export the marker, and an inner agent launched by the named
+// one inherits it. Assurance is always environment-observed. Design:
+// docs/design/alps-evidence-environment-claim.md.
+type EnvironmentClaim struct {
+	Vendor  string `json:"vendor"`
+	Product string `json:"product"`
+
+	// Version is absent unless an environment value carried a parseable path.
+	Version *Observation `json:"version,omitempty"`
+
+	// Fingerprint names the variable that made the claim, in the same
+	// source vocabulary the Session observation uses.
+	Fingerprint string `json:"fingerprint"`
+
+	Assurance Assurance `json:"assurance"`
 }
 
 // AssuranceStatement is the standing, machine-readable disclaimer about what

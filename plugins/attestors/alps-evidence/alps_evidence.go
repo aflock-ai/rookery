@@ -154,6 +154,11 @@ type Attestor struct {
 	// Invoker is the identified agent, absent when nothing was identified.
 	Invoker *AgentIdentity `json:"invoker,omitempty"`
 
+	// EnvironmentClaim is present only when the walk ended not-detected or
+	// incomplete with no process matched, and cilock's own environment named
+	// an agent. It is not an Invoker and does not change Status.
+	EnvironmentClaim *EnvironmentClaim `json:"environment_claim,omitempty"`
+
 	// Model is the strongest model observation available, and its Assurance
 	// says how it was obtained: process-observed came from the command line,
 	// environment-observed from a variable that was actually read, and
@@ -317,6 +322,12 @@ func (a *Attestor) observe(ctx *attestation.AttestationContext) error {
 	a.Warnings = append(a.Warnings, detection.Warnings...)
 
 	if detection.Status != StatusDetected || detection.Provider == nil {
+		if detection.EnvironmentClaim != nil {
+			a.EnvironmentClaim = detection.EnvironmentClaim
+			a.Session = detection.EnvironmentInspection.Session
+			a.Environment = detection.EnvironmentInspection.Environment
+			a.Warnings = append(a.Warnings, detection.EnvironmentInspection.Warnings...)
+		}
 		a.capStrings()
 		return nil
 	}

@@ -87,6 +87,44 @@ type Detection struct {
 
 	Inspection Inspection
 	Warnings   []string
+
+	// EnvironmentClaim and EnvironmentInspection are set only when no
+	// provider matched any process and the walk ended not-detected or
+	// incomplete; see claimFromEnvironment. Inspection above stays the
+	// matched process's, so the two can never be read as one record.
+	EnvironmentClaim      *EnvironmentClaim
+	EnvironmentInspection Inspection
+}
+
+// environmentClaimer is implemented by a provider whose product marks the
+// environment of everything it launches, so cilock can name it when the walk
+// could not reach it. Unexported: the claim is built from an envScope, which
+// only this package can produce.
+type environmentClaimer interface {
+	Provider
+	claimFromEnvironment(self envScope, observed []EnvObservation) (*EnvironmentClaim, Inspection)
+}
+
+// claimFromEnvironment asks each claiming provider, in registration order,
+// whether cilock's own environment names it. The read is the same self-scope
+// read Inspect performs: the provider's allowlist, the credential backstop
+// and the run-wide redaction policy all apply.
+func (d *Detector) claimFromEnvironment(self ProcessInfo) (*EnvironmentClaim, Inspection) {
+	for _, p := range d.Providers {
+		claimer, ok := p.(environmentClaimer)
+		if !ok {
+			continue
+		}
+		observed, scope := collectEnv(InspectRequest{Source: d.Source, Self: self, EnvValueKeep: d.EnvValueKeep},
+			EnvScopeSelf, claimer.EnvAllowlist())
+		if !scope.read {
+			continue
+		}
+		if claim, inspection := claimer.claimFromEnvironment(scope, observed); claim != nil {
+			return claim, inspection
+		}
+	}
+	return nil, Inspection{}
 }
 
 // Detect walks from selfPID's parent outwards and stops at the first process a
@@ -217,7 +255,19 @@ func (d *Detector) Detect(ctx context.Context, selfPID int, repoRoot string) (De
 	// The single exit. Every verdict in this package is produced here.
 	out.Status = coverage.verdict()
 	out.Warnings = append(out.Warnings, coverage.explain()...)
+	d.applyEnvironmentClaim(&out, self)
 	return out, nil
+}
+
+// applyEnvironmentClaim lets cilock's own environment name an agent, but only
+// when no process matched anywhere the walk reached: a match, even one that
+// degraded the verdict, means the walk saw an agent nearer than wherever an
+// inherited variable came from (#9550,
+// docs/design/alps-evidence-environment-claim.md).
+func (d *Detector) applyEnvironmentClaim(out *Detection, self ProcessInfo) {
+	if out.Provider == nil && (out.Status == StatusIncomplete || out.Status == StatusNotDetected) {
+		out.EnvironmentClaim, out.EnvironmentInspection = d.claimFromEnvironment(self)
+	}
 }
 
 // recordMatch marks the walk's positive identification in the coverage record

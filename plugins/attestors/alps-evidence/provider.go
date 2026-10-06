@@ -89,6 +89,10 @@ const (
 // uniformly.
 const sourceArgvModelFlag = "process.argv:--model"
 
+// sourceCilockEnvironment prefixes a Source (or an EnvironmentClaim
+// fingerprint) naming a variable read from cilock's OWN inherited environment.
+const sourceCilockEnvironment = string(EnvScopeSelf) + ".environment:"
+
 // Config-layer scope names recorded in Inspection.Configuration[].Scope. This
 // is ONE vocabulary shared by every provider, so a policy can select "whatever
 // the user-scope config said" without knowing which agent produced the

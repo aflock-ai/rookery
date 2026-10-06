@@ -46,6 +46,12 @@ include `alps-evidence` yourself when you want it in a manual set.
 - `assurance`: the fixed non-enforcing mode and caveat.
 - `invoker`: observed vendor/product, bounded version, process reference, and
   the exact fingerprint basis that matched.
+- `environment_claim`: only when the walk ended `not-detected` or `incomplete`
+  with no process matched, and cilock's own environment carries an agent's
+  marker (Claude Code's `CLAUDECODE=1`). This is the detached-launch case,
+  where `nohup` reparents cilock away from the agent. It never changes
+  `status`, carries no process or model, and is always graded
+  `environment-observed`: any process can export the variable.
 - `model`, `session`, and `settings`: only when a provider can name the source;
   each value carries its own observation assurance.
 - `configuration`: bounded, single-read snapshots with digests. A digest proves

@@ -165,6 +165,53 @@ func (c ClaudeCodeProvider) Inspect(_ context.Context, r InspectRequest) Inspect
 	return out
 }
 
+// claudeCodeMarker is the variable Claude Code exports into every process it
+// launches, and its exact value. Compared for equality; nothing else in the
+// environment makes a claim.
+const (
+	claudeCodeMarker      = "CLAUDECODE"
+	claudeCodeMarkerValue = "1"
+)
+
+// claimFromEnvironment names Claude Code from cilock's own inherited
+// environment when the walk matched no process (#9550). See EnvironmentClaim
+// for what this is worth.
+//
+// The model is deliberately NOT resolved here. Claude Code puts no model in
+// its environment; cilock's own ANTHROPIC_MODEL is never promoted (see
+// claudeModelFromArgvOrEnv); and settings files may not answer while the
+// agent's own environment, where an override could sit, was never read.
+func (c ClaudeCodeProvider) claimFromEnvironment(self envScope, observed []EnvObservation) (*EnvironmentClaim, Inspection) {
+	if v, blocked := resolveEnvValue(claudeCodeMarker, self); blocked || v != claudeCodeMarkerValue {
+		return nil, Inspection{}
+	}
+	claim := &EnvironmentClaim{
+		Vendor:      c.Vendor(),
+		Product:     c.Product(),
+		Fingerprint: sourceCilockEnvironment + claudeCodeMarker,
+		Assurance:   AssuranceEnvironmentObserved,
+	}
+	if execPath, _ := resolveEnvValue("CLAUDE_CODE_EXECPATH", self); execPath != "" {
+		if v := claudeVersionFromPath(execPath); v != "" {
+			claim.Version = &Observation{Value: v, Source: sourceCilockEnvironment + "CLAUDE_CODE_EXECPATH", Assurance: AssuranceInferred}
+		}
+	}
+	out := Inspection{Environment: observed}
+	if sessionID, _ := resolveEnvValue("CLAUDE_CODE_SESSION_ID", self); sessionID != "" {
+		out.Session = &Observation{
+			Value:     sessionID,
+			Source:    sourceCilockEnvironment + "CLAUDE_CODE_SESSION_ID",
+			Assurance: AssuranceEnvironmentObserved,
+		}
+	}
+	out.Warnings = append(out.Warnings,
+		"claude-code: no agent process was found in cilock's ancestry (a detached launch reparents to init), but cilock's own environment carries "+
+			claudeCodeMarker+"="+claudeCodeMarkerValue+", so it is recorded as environment_claim with environment-observed assurance. "+
+			"Any process can export this variable, and an agent launched by Claude Code inherits it. The model is not recorded: "+
+			"Claude Code does not publish it in the environment. Launch cilock as a child of the agent to record the process and its model.")
+	return claim, out
+}
+
 // resolveVersion tries every source that can carry an installed version, in
 // descending order of directness.
 //

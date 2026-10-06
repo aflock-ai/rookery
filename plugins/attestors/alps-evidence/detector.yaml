@@ -44,7 +44,7 @@ contract:
       depth-truncated walk reports incomplete), the assurance statement is
       emitted on every run, and every config file's sha256 is computed from
       the exact bytes its values were parsed from.
-    volatile_fields: ["captured_at", "invoker", "model", "session", "settings", "configuration", "environment", "ancestry", "warnings"]
+    volatile_fields: ["captured_at", "invoker", "environment_claim", "model", "session", "settings", "configuration", "environment", "ancestry", "warnings"]
   # Deliberately NO subjects, backrefs, materials, products, or exports:
   # every field in this predicate is chosen by the process being described, so
   # it must never contribute to what a policy resolves or verifies. The
