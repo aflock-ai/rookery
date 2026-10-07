@@ -1442,7 +1442,8 @@ func persistRunResults(ctx context.Context, ro *options.RunOptions, results []wo
 		}
 		client, err := ro.ArchivistaOptions.Client()
 		if err != nil {
-			return fmt.Errorf("create archivista client: %w", err)
+			return retainedEvidenceError(fmt.Errorf("create archivista client: %w", err),
+				retainUnstoredEnvelope(paths[i], result.SignedEnvelope), ro.ArchivistaOptions.Url)
 		}
 		gitoid, err := storeEvidence(ctx, client, result.SignedEnvelope, evidenceRef{
 			Step:     summary.Step,
@@ -1450,7 +1451,8 @@ func persistRunResults(ctx context.Context, ro *options.RunOptions, results []wo
 			Outfile:  paths[i],
 		})
 		if err != nil {
-			return uploadError(ro.PlatformURL, err)
+			return retainedEvidenceError(uploadError(ro.PlatformURL, err),
+				retainUnstoredEnvelope(paths[i], result.SignedEnvelope), ro.ArchivistaOptions.Url)
 		}
 		log.Infof("Stored in archivista as %q", gitoid)
 		if modern {
