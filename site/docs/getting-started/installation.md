@@ -111,7 +111,7 @@ Windows ships as a `.zip` holding `cilock.exe`, and the install script does not 
 ```powershell
 & {
   $ErrorActionPreference = 'Stop'
-  $VERSION = "4.4.0"
+  $VERSION = "4.5.0"
   $ARCHIVE = "cilock-$VERSION-windows-amd64.zip"
   $BASE = "https://cilock.dev/dl/v$VERSION"
   Invoke-WebRequest "$BASE/$ARCHIVE" -OutFile $ARCHIVE -UseBasicParsing
@@ -128,7 +128,7 @@ Windows ships as a `.zip` holding `cilock.exe`, and the install script does not 
 }
 ```
 
-The recipe is one block, so the first failure stops all of it. A pasted line-by-line recipe would carry on past a failed checksum, and `Expand-Archive` does not overwrite a `cilock.exe` that is already there. If a `cilock-4.4.0` directory is left from an earlier run, the recipe refuses to reuse it; delete it and run the recipe again.
+The recipe is one block, so the first failure stops all of it. A pasted line-by-line recipe would carry on past a failed checksum, and `Expand-Archive` does not overwrite a `cilock.exe` that is already there. If a `cilock-4.5.0` directory is left from an earlier run, the recipe refuses to reuse it; delete it and run the recipe again.
 
 `cilock.exe` has no Authenticode signature. Path 2 of [Verify the `cilock` binary](./verify-the-cilock-binary#macos-and-windows-binaries-are-not-os-signed) checks its provenance.
 :::
