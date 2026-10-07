@@ -288,6 +288,7 @@ const config = {
   },
 
   plugins: [catalogAliasPlugin, factorsPlugin],
+  clientModules: [require.resolve('./src/docs-redirect-client.ts')],
 
   presets: [
     [

@@ -4,9 +4,7 @@ import documentationRoutes from '../../docs-redirects.json';
 // public CI/lock subtree can deploy independently of the platform repository.
 const routes: Readonly<Record<string, string>> = documentationRoutes;
 
-export function redirectDocumentation(request: Request): Response | null {
-  if (request.method !== 'GET' && request.method !== 'HEAD') return null;
-  const source = new URL(request.url);
+export function documentationDestination(source: URL): URL | null {
   const path = source.pathname.replace(/\/index(?:\.html)?\/?$/, '')
     .replace(/\.html$/, '').replace(/\/$/, '');
   const target = path === '/docs' ? '/docs' :
@@ -15,6 +13,14 @@ export function redirectDocumentation(request: Request): Response | null {
 
   const destination = new URL(target, 'https://testifysec.com');
   destination.search = source.search;
+  destination.hash = source.hash;
+  return destination;
+}
+
+export function redirectDocumentation(request: Request): Response | null {
+  if (request.method !== 'GET' && request.method !== 'HEAD') return null;
+  const destination = documentationDestination(new URL(request.url));
+  if (!destination) return null;
   // Browsers inherit the source fragment when Location supplies none.
   return new Response(null, {
     status: 301,
