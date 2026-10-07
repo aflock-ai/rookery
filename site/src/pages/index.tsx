@@ -23,10 +23,10 @@ function Hero() {
             and agents already run.
           </p>
           <div className={styles.heroCtas}>
-            <Link to="/getting-started/installation" className={styles.ctaPrimary}>
+            <Link to="https://testifysec.com/docs/cilock/getting-started/installation" className={styles.ctaPrimary}>
               Install CI/lock
             </Link>
-            <Link to="/getting-started/first-attestation" className={styles.ctaSecondary}>
+            <Link to="https://testifysec.com/docs/cilock/getting-started/first-attestation" className={styles.ctaSecondary}>
               Capture your first result
             </Link>
             <Link to="https://github.com/aflock-ai/rookery" className={styles.ctaTertiary}>
@@ -79,19 +79,19 @@ function EvidenceWorkflows() {
     {
       title: "Record a build.",
       body: "Keep a signed record of the inputs, execution, and outputs behind an artifact.",
-      href: "/tutorials/github-actions-pipeline",
+      href: "https://testifysec.com/docs/cilock/tutorials/github-actions-pipeline",
       cta: "Explore build evidence",
     },
     {
       title: "Keep the test result.",
       body: "Capture evidence from your existing checks so reviewers can inspect what ran and what it returned.",
-      href: "/getting-started/first-attestation",
+      href: "https://testifysec.com/docs/cilock/getting-started/first-attestation",
       cta: "Capture your first result",
     },
     {
       title: "Verify against requirements.",
       body: "Evaluate the supplied evidence against a policy. Inspect the result before making a decision.",
-      href: "/concepts/policy-verification",
+      href: "https://testifysec.com/docs/cilock/concepts/policy-verification",
       cta: "Understand verification",
     },
   ];
@@ -142,7 +142,7 @@ function ConnectedProducts() {
               </span>
               <Heading as="h3">{product.job}</Heading>
               <p>{product.description}</p>
-              <Link to={product.id === "cilock" ? "/getting-started/installation" : product.href}>
+              <Link to={product.id === "cilock" ? "https://testifysec.com/docs/cilock/getting-started/installation" : product.href}>
                 {product.id === "cilock" ? "Get started" : product.cta} →
               </Link>
             </article>
@@ -172,7 +172,7 @@ function NextSteps() {
               CI/lock shares Witness’s attestation foundation and adds capabilities and commercial
               support from TestifySec. Compatibility depends on the evidence type.
             </p>
-            <Link to="/ecosystem/witness">Read the compatibility guide →</Link>
+            <Link to="https://testifysec.com/docs/cilock/ecosystem/witness">Read the compatibility guide →</Link>
           </article>
           <article className={styles.familyCard}>
             <Heading as="h3">Understand the boundaries.</Heading>
@@ -180,12 +180,12 @@ function NextSteps() {
               Learn what an attestation establishes, how policy verification works, and where your
               evidence sources matter.
             </p>
-            <Link to="/concepts/attestations">Explore the evidence model →</Link>
+            <Link to="https://testifysec.com/docs/cilock/concepts/attestations">Explore the evidence model →</Link>
           </article>
           <article className={styles.familyCard}>
             <Heading as="h3">Choose your next check.</Heading>
             <p>Find tool support, commands, and setup instructions in the reference.</p>
-            <Link to="/tools/">Browse supported tools →</Link>
+            <Link to="https://testifysec.com/docs/cilock/tools">Browse supported tools →</Link>
           </article>
         </div>
         <p className={styles.familyFootnote}>in-toto is a trademark of The Linux Foundation.</p>

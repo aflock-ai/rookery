@@ -352,7 +352,7 @@ function DownloadInner(): React.ReactElement {
         <CopyCmd cmd={INSTALL_CMD} big onCopy={() => fireConversion('installCopy', 20)} />
         <p className={styles.muted} style={{marginTop: '0.6rem'}}>
           Prefer Homebrew, Docker, or a SHA-pinned GitHub Action?{' '}
-          <Link to="/getting-started/installation">See all install methods →</Link>
+          <Link to="https://testifysec.com/docs/cilock/getting-started/installation">See all install methods →</Link>
         </p>
       </section>
 
@@ -546,7 +546,7 @@ function DownloadInner(): React.ReactElement {
           </ul>
           <p className={styles.muted} style={{marginTop: '0.75rem', marginBottom: 0}}>
             No <code>cilock</code> yet, or want an independent check?{' '}
-            <Link to="/getting-started/verify-the-cilock-binary">
+            <Link to="https://testifysec.com/docs/cilock/getting-started/verify-the-cilock-binary">
               SHA-256 + openssl verification →
             </Link>
           </p>
@@ -590,7 +590,7 @@ function DownloadInner(): React.ReactElement {
             <p className={styles.muted} style={{marginTop: '0.6rem'}}>
               Both the <code>source-git</code> and <code>build</code> envelopes are required — the
               policy has both steps. Full walkthrough:{' '}
-              <Link to="/getting-started/verify-a-release-offline">Verify a release offline →</Link>
+              <Link to="https://testifysec.com/docs/cilock/getting-started/verify-a-release-offline">Verify a release offline →</Link>
             </p>
           </section>
         );
@@ -607,7 +607,7 @@ function DownloadInner(): React.ReactElement {
         </p>
         <CopyCmd cmd={`- uses: aflock-ai/cilock-action@v1\n  with:\n    command: go build ./...`} />
         <p className={styles.muted} style={{marginTop: '0.6rem'}}>
-          <Link to="/tutorials/github-actions-pipeline">GitHub Actions pipeline tutorial →</Link>
+          <Link to="https://testifysec.com/docs/cilock/tutorials/github-actions-pipeline">GitHub Actions pipeline tutorial →</Link>
         </p>
       </section>
 
@@ -622,7 +622,7 @@ function DownloadInner(): React.ReactElement {
             Apache License 2.0
           </a>
           . You can use, modify, and redistribute it — including building your own binary from{' '}
-          <Link to="/ecosystem/rookery">rookery</Link>. The default release ships the{' '}
+          <Link to="https://testifysec.com/docs/cilock/ecosystem/rookery">rookery</Link>. The default release ships the{' '}
           <code>file</code> and <code>fulcio</code> signers; everything else is opt-in.
         </p>
       </section>

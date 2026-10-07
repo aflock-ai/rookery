@@ -342,22 +342,15 @@ const config = {
           srcDark: 'img/logo-dark.svg',
         },
         items: [
+          {href: 'https://testifysec.com/docs', position: 'left', label: 'Docs'},
           {
-            type: 'doc',
-            docId: 'getting-started/installation',
-            position: 'left',
-            label: 'Get Started',
-          },
-          {
-            type: 'doc',
-            docId: 'tools/index',
+            href: 'https://testifysec.com/docs/cilock/tools',
             position: 'left',
             label: 'Supported Tools',
           },
           {href: 'https://testifysec.com/blog', position: 'left', label: 'Blog'},
           {
-            type: 'doc',
-            docId: 'reference/cli',
+            href: 'https://testifysec.com/docs/cilock/reference/cli',
             position: 'left',
             label: 'Reference',
           },
@@ -386,11 +379,11 @@ const config = {
           {
             title: 'Docs',
             items: [
-              {label: 'Intro', to: '/intro'},
-              {label: 'Get Started', to: '/getting-started/installation'},
-              {label: 'Supported Tools', to: '/tools/'},
-              {label: 'CLI Reference', to: '/reference/cli'},
-              {label: 'FAQ', to: '/faq'},
+              {label: 'Intro', href: 'https://testifysec.com/docs/cilock/intro'},
+              {label: 'Get Started', href: 'https://testifysec.com/docs/cilock/getting-started/installation'},
+              {label: 'Supported Tools', href: 'https://testifysec.com/docs/cilock/tools'},
+              {label: 'CLI Reference', href: 'https://testifysec.com/docs/cilock/reference/cli'},
+              {label: 'FAQ', href: 'https://testifysec.com/docs/cilock/faq'},
             ],
           },
           {

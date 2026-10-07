@@ -18,6 +18,7 @@
  * (a transient geo hint, not tracking) is the only thing ever set pre-consent.
  */
 
+import { redirectDocumentation } from './_lib/docs-redirects';
 import { type Cf, classifyNetwork, classifyBot, tlsFp, mayTrack, readCookie } from './_lib/signals';
 
 interface Env {
@@ -26,6 +27,9 @@ interface Env {
 }
 
 export const onRequest: PagesFunction<Env> = async (context) => {
+  const redirect = redirectDocumentation(context.request);
+  if (redirect) return redirect;
+
   const response = await context.next();
 
   const contentType = response.headers.get('content-type') || '';
