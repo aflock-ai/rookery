@@ -349,6 +349,9 @@ func openBrowserURL(rawURL string) bool {
 	if os.Getenv("BROWSER") == "none" {
 		return false
 	}
+	if !openableURL(rawURL) {
+		return false
+	}
 	name, args := openerCommand(runtime.GOOS, rawURL)
 	cmd := exec.Command(name, args...) //nolint:gosec // G204: fixed opener binary per GOOS (openerCommand); only the URL (built by cliAuthURL) varies
 	// Start, not Run: the opener is fire-and-forget. A failure to START (no
@@ -357,6 +360,20 @@ func openBrowserURL(rawURL string) bool {
 	// why the printed text tells the human how to recover rather than
 	// claiming a browser is up.
 	return cmd.Start() == nil
+}
+
+// openableURL admits only an absolute http(s) URL with a host. The openers are
+// not URL-only: rundll32 FileProtocolHandler, macOS `open` and xdg-open all
+// launch a local path, an app bundle or a file: URL they are handed, and an
+// argument beginning with `-` is read as an option. OpenURL takes any string,
+// so this gate sits in front of every platform's opener; a refused value
+// reports "nothing opened" and the caller prints it instead.
+func openableURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return u.Scheme == "http" || u.Scheme == "https"
 }
 
 // openerCommand is the argv that opens rawURL on goos. It is pure so the
