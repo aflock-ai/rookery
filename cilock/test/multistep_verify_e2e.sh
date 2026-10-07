@@ -39,7 +39,7 @@ ls source.att.json
 # --- Carry source's product into the build workdir so it's a MATERIAL there. ---
 mkdir -p build
 cp "$WORK/src/libshared.so" "$WORK/build/libshared.so"
-LIBDIGEST="$(sha256sum "$WORK/build/libshared.so" | awk '{print $1}')"
+LIBDIGEST="$( (sha256sum "$WORK/build/libshared.so" 2>/dev/null || shasum -a 256 "$WORK/build/libshared.so") | awk '{print $1}')"
 echo "consumed material libshared.so sha256=$LIBDIGEST"
 
 # --- Step "binary-build": consume libshared.so, produce judge-api. ---
