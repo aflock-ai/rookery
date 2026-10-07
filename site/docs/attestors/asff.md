@@ -12,7 +12,7 @@ Reads an AWS Security Hub ASFF (AWS Security Finding Format) JSON report from th
 | Name | `asff` |
 | Predicate type | `https://aflock.ai/attestations/asff/v0.1` |
 | Lifecycle | `postproduct` |
-| Default binary? | **No** — builder opt-in only |
+| Default binary? | **Yes** |
 
 ## What it captures
 
@@ -95,5 +95,5 @@ See the constraint summary + reproduction recipe at [https://github.com/aflock-a
 ## See also
 
 - [Catalog row](../reference/attestor-catalog.md)
-- [Build from source](../getting-started/installation.md#4-build-from-source)
+- [Build from source](../getting-started/installation.md#5-build-from-source)
 - [`prowler`](./prowler.mdx), [`aws-config`](./aws-config.md)

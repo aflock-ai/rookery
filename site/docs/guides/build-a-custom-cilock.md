@@ -117,7 +117,7 @@ Explicit `--material-manifest=false` disables material retention. Explicit `--up
 
 A command-only policy can pass without optional inventory details. Artifact-chain checks require complete input data and the relevant product evidence. Omitted, missing, or invalid required inventories fail explicitly. Policy generation also refuses to infer artifact links from unavailable details. Use a `compact-chain` distribution for those workflows. Keep required companions with local evidence, and verify upload before relying on a remote verifier.
 
-See the normative [Cilock compact inventories architecture contract](https://github.com/testifysec/judge/blob/main/docs/architecture/cilock-compact-inventories.md) for the signed schema, retention boundary, and consumer requirements.
+The signed schema, retention boundary, and consumer requirements follow the CI/lock compact-inventories contract.
 
 ### Platform and trust defaults are separate
 

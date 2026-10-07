@@ -19,8 +19,9 @@ and what each guarantee means.
     CILOCK_FANOTIFY: "1"          # require synchronous file capture
     CILOCK_FSVERITY: "auto"       # opportunistic Merkle seal on products
   with:
-    cilock-args: "--capture-mode trace:ebpf"  # require eBPF backend (fail loudly if unavailable)
-    require-zero-drops: "true"     # reject attestation if any drops occurred
+    # --capture-mode trace:ebpf requires the eBPF backend (fails loudly if unavailable);
+    # --require-zero-drops rejects the attestation if any drops occurred.
+    cilock-args: "--capture-mode trace:ebpf --require-zero-drops"
     attestations: "environment git github product sbom command-run"
     command: ./build.sh
 ```

@@ -93,6 +93,6 @@ See the constraint summary + reproduction recipe at [https://github.com/aflock-a
 ## See also
 
 - [Catalog row](../reference/attestor-catalog.md)
-- [Build from source](../getting-started/installation.md#4-build-from-source)
+- [Build from source](../getting-started/installation.md#5-build-from-source)
 - [`command-run`](./command-run.mdx) — pair with `--trace`
 - [Defending against supply-chain attacks](../tutorials/defending-against-supply-chain-attacks.md)

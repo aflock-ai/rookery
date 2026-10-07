@@ -12,7 +12,7 @@ Captures CIS Docker Benchmark results produced by `docker-bench-security --json`
 | Name | `docker-bench` |
 | Predicate type | `https://aflock.ai/attestations/docker-bench/v0.1` |
 | Lifecycle | `postproduct` |
-| Default binary? | **No** — builder opt-in only |
+| Default binary? | **Yes** |
 
 ## What it captures
 
@@ -78,5 +78,5 @@ See the constraint summary + reproduction recipe at [https://github.com/aflock-a
 ## See also
 
 - [Catalog row](../reference/attestor-catalog.md)
-- [Build from source](../getting-started/installation.md#4-build-from-source)
+- [Build from source](../getting-started/installation.md#5-build-from-source)
 - [`kube-bench`](./kube-bench.mdx)

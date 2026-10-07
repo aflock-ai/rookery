@@ -12,7 +12,7 @@ Generic JSON-ingestion attestor: reads a recipe-pointed JSON product, canonicali
 | Name | `structured-data` |
 | Predicate type | `https://aflock.ai/attestations/structured-data/v0.1` |
 | Lifecycle | `postproduct` |
-| Default binary? | **No** — builder opt-in only |
+| Default binary? | **Yes** |
 
 ## What it captures
 
@@ -83,5 +83,5 @@ See the constraint summary + reproduction recipe at [https://github.com/aflock-a
 ## See also
 
 - [Catalog row](../reference/attestor-catalog.md)
-- [Build from source](../getting-started/installation.md#4-build-from-source)
+- [Build from source](../getting-started/installation.md#5-build-from-source)
 - [`sarif`](./sarif.mdx), [`sbom`](./sbom.mdx) — typed equivalents

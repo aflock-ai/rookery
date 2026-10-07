@@ -94,7 +94,7 @@
     {
       "slug": "see-also",
       "title": "See also",
-      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- [Build from source](../getting-started/installation#4-build-from-source)\n- [`docker-bench`](./docker-bench), [`inspec`](./inspec)\n- Upstream: [witness/kube-bench.md](https://github.com/in-toto/witness/blob/main/docs/attestors/kube-bench.md)"
+      "markdown": "## See also\n\n- [Catalog row](../reference/attestor-catalog)\n- [Build from source](../getting-started/installation#5-build-from-source)\n- [`docker-bench`](./docker-bench), [`inspec`](./inspec)\n- Upstream: [witness/kube-bench.md](https://github.com/in-toto/witness/blob/main/docs/attestors/kube-bench.md)"
     }
   ],
   "hasDoc": true

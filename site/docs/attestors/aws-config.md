@@ -12,7 +12,7 @@ Reads an AWS Config `get-compliance-details-by-config-rule` JSON report from the
 | Name | `aws-config` |
 | Predicate type | `https://aflock.ai/attestations/aws-config/v0.1` |
 | Lifecycle | `postproduct` |
-| Default binary? | **No** — builder opt-in only |
+| Default binary? | **Yes** |
 
 ## What it captures
 
@@ -77,5 +77,5 @@ See the constraint summary + reproduction recipe at [https://github.com/aflock-a
 ## See also
 
 - [Catalog row](../reference/attestor-catalog.md)
-- [Build from source](../getting-started/installation.md#4-build-from-source)
+- [Build from source](../getting-started/installation.md#5-build-from-source)
 - [`prowler`](./prowler.mdx), [`asff`](./asff.md)

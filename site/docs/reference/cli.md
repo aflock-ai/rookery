@@ -164,7 +164,7 @@ The identity is **time-bound**: it stops signing at the lifetime the human confi
 
 ```bash
 cilock enroll agent
-cilock enroll agent --name claude-on-coles-mbp --repo testifysec/judge --ttl 4h
+cilock enroll agent --name claude-on-dev-laptop --repo acme/widget --ttl 4h
 ```
 
 `cilock agent enroll` is a hidden alias of the same command.
@@ -251,7 +251,7 @@ Register an OIDC **federated** identity the platform will trust for keyless atte
 
 | Flag | Default | Description |
 |---|---|---|
-| `[provider] [owner/repo]` | auto-detect repo | Positional: e.g. `github testifysec/judge`. With no args (interactive), detects the current repo. |
+| `[provider] [owner/repo]` | auto-detect repo | Positional: e.g. `github acme/widget`. With no args (interactive), detects the current repo. |
 | `--host <host>` | (none) | On-prem instance host for the provider (e.g. `github.acme.com`). |
 | `--issuer <url>` / `--subject <glob>` | (none) | Generic provider escape hatch (use together). |
 | `--audience <aud>` | `${platform-url}/archivista` | OIDC audience (matches `cilock run`). |
@@ -266,7 +266,7 @@ Register an OIDC **federated** identity the platform will trust for keyless atte
 
 ```bash
 # Trust a GitHub repo's Actions to upload (most common)
-cilock trust github testifysec/judge
+cilock trust github acme/widget
 
 # Interactive: auto-detect the current repo and confirm
 cilock trust
@@ -725,7 +725,7 @@ cilock policy from-bundles build.bundle.json -o policy.json --trust-platform-tsa
 
 ## `cilock policy from-commit <commit-sha>`
 
-> Authors a starter Witness policy from the CI attestations the platform already holds for a commit — no local bundle files needed. It resolves the commit, finds every DSSE whose subjects include it, groups them by witness collection name (one step per collection), populates functionaries from each collection's signers (raw keyid or Fulcio keyless cert with the leaf SAN email pinned), leaves `timestampauthorities[]` empty unless `--trust-platform-tsa` anchors the platform's published TSA root (the evidence's own TSA certificates are never trusted), and wires cross-step provenance edges. Author-only by default (write the policy, then `cilock sign` → [`policy push`](#cilock-policy-push---file--definition---tag) → [`policy bind`](#cilock-policy-bind---definition--product)); pass both `--product` and `--tag` for the one-shot derive → sign → push → bind flow. The Archivista query needs a logged-in session; publication needs `policy:publish`, and the optional Product binding additionally needs legacy `policy:write`.
+> Authors a starter Witness policy from the CI attestations the platform already holds for a commit — no local bundle files needed. It resolves the commit, finds every DSSE whose subjects include it, groups them by witness collection name (one step per collection), populates functionaries from each collection's signers (raw keyid or Fulcio keyless cert with the leaf SAN email pinned), leaves `timestampauthorities[]` empty unless `--trust-platform-tsa` anchors the platform's published TSA root (the evidence's own TSA certificates are never trusted), and wires cross-step provenance edges. Author-only by default (write the policy, then `cilock sign` → [`policy push`](#cilock-policy-push---file---definition---tag) → [`policy bind`](#cilock-policy-bind---definition---product)); pass both `--product` and `--tag` for the one-shot derive → sign → push → bind flow. The Archivista query needs a logged-in session; publication needs `policy:publish`, and the optional Product binding additionally needs legacy `policy:write`.
 
 | Flag | Default | Description |
 |---|---|---|
@@ -843,7 +843,7 @@ cilock policy bind --definition supply-chain --tag v1.0.0 --product my-service
 
 ```bash
 cilock policy bind pushgate --release 11111111-1111-4111-8111-111111111111 \
-  --repo github.com/testifysec/judge --mode warn --reason "one-day side by side"
+  --repo github.com/acme/widget --mode warn --reason "one-day side by side"
 ```
 
 ## `cilock keyid show`

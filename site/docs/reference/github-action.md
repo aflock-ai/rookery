@@ -20,7 +20,7 @@ The CI/lock GitHub Action wraps a command (or another GitHub Action) and produce
 
 ## Multi-step chain via `step` names
 
-CI/lock's policy language lets you declare relationships between attested steps. By giving each `cilock-action` invocation a distinct `step:` name and declaring `artifactsFrom` in the verification policy, the verifier enforces that step N's materials match step N-1's products byte-for-byte. This is how CI/lock's own release pipeline chains `vendor-cilock-deps` → `release-build` — see [Verify the `cilock` binary](../getting-started/verify-the-cilock-binary#source-vendor-build-chain).
+CI/lock's policy language lets you declare relationships between attested steps. By giving each `cilock-action` invocation a distinct `step:` name and declaring `artifactsFrom` in the verification policy, the verifier enforces that step N's materials match step N-1's products byte-for-byte. This is how CI/lock's own release pipeline chains `vendor-cilock-deps` → `release-build` — see [Verify the `cilock` binary](../getting-started/verify-the-cilock-binary).
 
 ```yaml
 # Step 1 — vendor

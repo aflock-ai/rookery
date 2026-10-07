@@ -36,7 +36,7 @@ The `Name()` value (what you pass via `--attestations`) uses hyphens (`command-r
 
 Per-attestor field schemas, flags, and gotchas are documented on each attestor's individual page (linked above) — those are the source-of-truth pages, generated from the actual Go struct definitions. The [attestor catalog](../reference/attestor-catalog) is the comparative overview.
 
-The wider [rookery](../ecosystem/rookery) monorepo contains additional attestors that aren't enabled in the default `cilock` binary but can be included via a builder opt-in (see [Build from source](../guides/build-a-custom-cilock)): [`asff`](../attestors/asff), [`aws-config`](../attestors/aws-config), [`docker-bench`](../attestors/docker-bench), [`inspec`](../attestors/inspec), [`kube-bench`](../attestors/kube-bench), [`nessus`](../attestors/nessus), [`oscap`](../attestors/oscap), [`prowler`](../attestors/prowler), [`sinkhole-flows`](../attestors/sinkhole-flows), [`steampipe`](../attestors/steampipe), [`structured-data`](../attestors/structured-data), [`vsa`](../attestors/vsa).
+The wider [rookery](../ecosystem/rookery) monorepo contains additional attestors that aren't enabled in the default `cilock` binary but can be included via a builder opt-in (see [Build from source](../guides/build-a-custom-cilock)): [`sinkhole-flows`](../attestors/sinkhole-flows) and [`vsa`](../attestors/vsa).
 
 ## What to capture
 

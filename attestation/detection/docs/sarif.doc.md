@@ -44,7 +44,7 @@ deny contains msg if {
 }
 ```
 
-A policy written against the raw SARIF schema (`input.runs[_].results[_]`) matches nothing, and since #9820 the verifier refuses that admit with an error naming the missing path.
+A policy written against the raw SARIF schema (`input.runs[_].results[_]`) matches nothing, and the verifier refuses that admit with an error naming the missing path.
 
 ## Flags
 

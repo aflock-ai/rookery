@@ -102,8 +102,8 @@ The on-disk Go package name and the attestor's `Name()` aren't always identical.
 
 ## Available in rookery but not in the default `cilock` binary
 
-These attestors live in [`rookery/plugins/attestors/`](https://github.com/aflock-ai/rookery/tree/main/plugins/attestors) but are not registered in the default `cilock` binary (some are imported but not registered, others aren't imported at all). To include them, add the blank-import to `cilock/cmd/cilock/main.go` and rebuild — see [Build from source](../getting-started/installation#4-build-from-source):
+These attestors live in [`rookery/plugins/attestors/`](https://github.com/aflock-ai/rookery/tree/main/plugins/attestors) but are not registered in the default `cilock` binary (some are imported but not registered, others aren't imported at all). To include them, add the blank-import to `cilock/cmd/cilock/main.go` and rebuild — see [Build from source](../getting-started/installation#5-build-from-source):
 
-`asff`, `aws-config`, `docker-bench`, `nessus`, `sinkhole-flows`, `structured-data`, `vsa`
+`sinkhole-flows`, `vsa`
 
-Confirm against your own binary with `cilock attestors list` — the registered set changes between releases, and several scanner attestors (`oscap`, `inspec`, `kube-bench`, `prowler`, `steampipe`, `pip-install`) that were previously opt-in are now registered by default.
+Confirm against your own binary with `cilock attestors list` — the registered set changes between releases, and several attestors (`oscap`, `inspec`, `kube-bench`, `prowler`, `steampipe`, `pip-install`, `asff`, `aws-config`, `docker-bench`, `structured-data`) that were previously opt-in are now registered by default.

@@ -119,11 +119,11 @@ deny[msg] {
 
 | You wrote | What happens | Write instead |
 |---|---|---|
-| `input.summary.failed > 0` | `input.summary` is undefined; the rule body never matches, and the verifier refuses the step (#9820) instead of evaluating your rule | `input.predicate.summary.failed > 0` |
+| `input.summary.failed > 0` | `input.summary` is undefined; the rule body never matches, and the verifier refuses the step instead of evaluating your rule | `input.predicate.summary.failed > 0` |
 | `input.failedTests[_].name` | undefined, same refusal | `input.predicate.failedTests[_].name` |
-| `input.predicate.summary.errors > 0` | `errors` is omitted when zero, so on a clean run the read is undefined and the verifier refuses the step (#9820) | `object.get(input.predicate.summary, "errors", 0) > 0` |
+| `input.predicate.summary.errors > 0` | `errors` is omitted when zero, so on a clean run the read is undefined and the verifier refuses the step | `object.get(input.predicate.summary, "errors", 0) > 0` |
 
-Rego treats an undefined path in a `deny` body as "this rule does not fire". The flat form used to fail **open** that way; since #9820 the verifier refuses an admit that rests on such a read, with an error naming the missing path. The `not is_number(object.get(...))` rules above still earn their place: they turn a missing count into a deny that says what is wrong, and there should be one **per count the policy depends on**.
+Rego treats an undefined path in a `deny` body as "this rule does not fire". The flat form used to fail **open** that way; the verifier now refuses an admit that rests on such a read, with an error naming the missing path. The `not is_number(object.get(...))` rules above still earn their place: they turn a missing count into a deny that says what is wrong, and there should be one **per count the policy depends on**.
 
 Two details in that guard are load-bearing, and both were wrong in an earlier draft of this page:
 

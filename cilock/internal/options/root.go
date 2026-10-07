@@ -30,5 +30,5 @@ func (ro *RootOptions) AddFlags(cmd *cobra.Command) {
 	cmd.PersistentFlags().StringVar(&ro.CpuProfileFile, "debug-cpu-profile-file", "", "Path to store the CPU profile. Profiling will be enabled if this is non-empty")
 	cmd.PersistentFlags().StringVar(&ro.MemProfileFile, "debug-mem-profile-file", "", "Path to store the Memory profile. Profiling will be enabled if this is non-empty")
 	cmd.PersistentFlags().StringVar(&ro.PolicyHardening, "policy-hardening", "enforce",
-		"Policy-verification hardening mode (#6266). 'enforce' (default) rejects dangerous policy configurations: vacuous empty cert constraints, certConstraint ignored on key-ID match, duplicate rego packages, incoherent step names. 'warn' downgrades them to loud warnings for legacy policies that cannot be re-signed yet. Also settable via CILOCK_POLICY_HARDENING")
+		"Policy-verification hardening mode. 'enforce' (default) rejects dangerous policy configurations: vacuous empty cert constraints, certConstraint ignored on key-ID match, duplicate rego packages, incoherent step names. 'warn' downgrades them to loud warnings for legacy policies that cannot be re-signed yet. Also settable via CILOCK_POLICY_HARDENING")
 }
