@@ -150,6 +150,13 @@ detect_platform() {
   os="$(uname -s | tr '[:upper:]' '[:lower:]')"
   case "$os" in
     linux|darwin) ;;
+    # Git Bash, MSYS2 and Cygwin run this script too. Windows ships as a .zip
+    # holding cilock.exe, which this script does not unpack, so name that path
+    # instead of refusing with nothing to go on.
+    mingw*|msys*|cygwin*) die "unsupported OS: $os (this script installs linux and darwin only)
+Windows ships as cilock-<version>-windows-amd64.zip holding cilock.exe. Download it
+from https://cilock.dev/dl/v<version>/ and check it against its .sha256 sidecar with the
+PowerShell recipe at https://cilock.dev/docs/getting-started/installation";;
     *) die "unsupported OS: $os (supported: linux, darwin)";;
   esac
   arch="$(uname -m)"

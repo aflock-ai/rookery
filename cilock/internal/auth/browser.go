@@ -349,19 +349,31 @@ func openBrowserURL(rawURL string) bool {
 	if os.Getenv("BROWSER") == "none" {
 		return false
 	}
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "linux":
-		cmd = exec.Command("xdg-open", rawURL) //nolint:gosec // G204: fixed opener binary; only the URL (built by cliAuthURL) varies
-	default:
-		cmd = exec.Command("open", rawURL) //nolint:gosec // G204: fixed opener binary; only the URL (built by cliAuthURL) varies
-	}
+	name, args := openerCommand(runtime.GOOS, rawURL)
+	cmd := exec.Command(name, args...) //nolint:gosec // G204: fixed opener binary per GOOS (openerCommand); only the URL (built by cliAuthURL) varies
 	// Start, not Run: the opener is fire-and-forget. A failure to START (no
 	// opener binary on this machine) is the honest "nothing opened" signal;
 	// what the browser does afterwards is not observable from here, which is
 	// why the printed text tells the human how to recover rather than
 	// claiming a browser is up.
 	return cmd.Start() == nil
+}
+
+// openerCommand is the argv that opens rawURL on goos. It is pure so the
+// per-platform choice is testable on any OS without launching anything.
+func openerCommand(goos, rawURL string) (name string, args []string) {
+	switch goos {
+	case "linux":
+		return "xdg-open", []string{rawURL}
+	case "windows":
+		// rundll32 hands the URL to the default protocol handler as one argv
+		// element. `cmd /c start` would not: cmd.exe splits its command line
+		// at `&`, so every query parameter after the first (state, the
+		// verifier) would be cut off the ceremony URL.
+		return "rundll32", []string{"url.dll,FileProtocolHandler", rawURL}
+	default:
+		return "open", []string{rawURL}
+	}
 }
 
 // OpenURL opens a page that carries no secret (a review link) and reports

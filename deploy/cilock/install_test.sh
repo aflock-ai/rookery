@@ -24,6 +24,8 @@
 #   9. print the provenance command with `-s sha1:<commit>` taken from THIS
 #      version's manifest "commit", never from another version's entry, and print a fill-in placeholder, not a guess,
 #      when this version records none or a malformed one;
+#  10. on a Windows shell (uname -s MINGW64_NT/MSYS_NT/CYGWIN_NT), refuse but
+#      name the windows .zip, cilock.exe and the installation page's recipe;
 # and, in every case, pass or fail, remove its staging directory.
 #
 # The docs also print copy-paste recipes for installing by hand, and they
@@ -258,6 +260,29 @@ for sh in "${shells[@]}"; do
       fail "9/$mode/$sh" "no fill-in placeholder for the commit"
     else
       pass "9/$mode/$sh" "no valid commit recorded: printed a placeholder, not a guess"
+    fi
+  done
+
+  # --- 10. Windows shells get the Windows path, not a bare refusal (#11531) -----
+  # Git Bash, MSYS2 and Cygwin all run this script; uname -s names each one.
+  dist="$d/dist10"; bin="$d/bin10"; mkdir -p "$bin" "$work/uname-win"
+  build_dist "$dist" with-manifest-sha
+  for kernel in MINGW64_NT-10.0 MSYS_NT-10.0 CYGWIN_NT-10.0; do
+    # shellcheck disable=SC2016 # $1 expands when the fake uname runs, not here
+    printf '#!/bin/sh\ncase "$1" in -s) echo %s;; -m) echo x86_64;; *) exit 1;; esac\n' "$kernel" > "$work/uname-win/uname"
+    chmod +x "$work/uname-win/uname"
+    rm -rf "$work/stage"; mkdir -p "$work/stage"
+    if cat -- "$INSTALL_SH" | PATH="$work/uname-win:$work/shim:$PATH" INSTALL_TEST_STAGE="$work/stage" \
+      CILOCK_DIST_BASE="file://$dist" CILOCK_BIN_DIR="$bin" "$sh" >/dev/null 2>"$work/err"; then
+      fail "10/$kernel/$sh" "installed on Windows, which ships a .zip this script does not unpack"
+    elif [ -e "$bin/cilock" ]; then
+      fail "10/$kernel/$sh" "left a cilock in the bin dir on Windows"
+    elif ! grep -qF 'cilock-<version>-windows-amd64.zip' "$work/err" \
+      || ! grep -qF 'cilock.exe' "$work/err" \
+      || ! grep -qF 'https://cilock.dev/docs/getting-started/installation' "$work/err"; then
+      fail "10/$kernel/$sh" "refused without naming the windows zip, cilock.exe and the installation docs"
+    else
+      pass "10/$kernel/$sh" "refused, and pointed at the Windows zip and its PowerShell recipe"
     fi
   done
 done
