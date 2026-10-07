@@ -376,11 +376,71 @@ type SearchGitoidVariables struct {
 	ExcludeGitoids []string `json:"excludeGitoids"`
 }
 
+// SearchPageSize is the `first:` every gitoid search asks for per request.
+// It equals the Judge platform's connection cap (judge-api page_clamp.go
+// maxConnectionPageSize), so a search with at most this many matches costs one
+// request, exactly as before pagination existed. It is a page size, never a
+// result cap: searchGitoidPages follows the cursor until the server reports no
+// next page, so a server that clamps lower still yields every match.
+const SearchPageSize = 1000
+
+// searchPage is the relay pagination pair a gitoid search sends. Embedded in
+// each query's variables, its fields are promoted into the same JSON object.
+type searchPage struct {
+	First int     `json:"first"`
+	After *string `json:"after,omitempty"`
+}
+
+// searchGitoidPages runs one gitoid search to exhaustion.
+//
+// Before #11485 the three searches sent no `first` and read no pageInfo. The
+// Judge platform clamps that to its 1000 newest matches (page_clamp.go), so a
+// subject past 1000 candidates silently lost its oldest evidence; a verify
+// would then judge a truncated candidate set as if it were the whole one.
+//
+// A server that claims more pages but gives no cursor, repeats a cursor, or
+// returns an empty page with a next page would loop forever or truncate; each
+// is refused as an error rather than answered with a partial list.
+func (c *Client) searchGitoidPages(ctx context.Context, query string, vars func(searchPage) any) ([]string, error) {
+	var gitoids []string
+	page := searchPage{First: SearchPageSize}
+	cursors := map[string]struct{}{}
+	for {
+		var response searchGitoidResponse
+		if err := c.graphqlQuery(ctx, query, vars(page), &response); err != nil {
+			return nil, err
+		}
+		for _, edge := range response.Dsses.Edges {
+			gitoids = append(gitoids, edge.Node.Gitoid)
+		}
+		info := response.Dsses.PageInfo
+		if !info.HasNextPage {
+			if gitoids == nil {
+				gitoids = []string{}
+			}
+			return gitoids, nil
+		}
+		switch {
+		case info.EndCursor == nil || *info.EndCursor == "":
+			return nil, fmt.Errorf("archivista graphql: page %d reports a next page but no end cursor; refusing a truncated search", len(cursors)+1)
+		case len(response.Dsses.Edges) == 0:
+			return nil, fmt.Errorf("archivista graphql: page %d is empty but reports a next page; refusing a search that cannot progress", len(cursors)+1)
+		}
+		if _, repeated := cursors[*info.EndCursor]; repeated {
+			return nil, fmt.Errorf("archivista graphql: page %d repeats an earlier cursor; refusing a search that cannot progress", len(cursors)+1)
+		}
+		cursors[*info.EndCursor] = struct{}{}
+		page.After = info.EndCursor
+	}
+}
+
 // SearchGitoids queries Archivista's GraphQL API for envelope gitoids
-// matching the given search criteria.
+// matching the given search criteria, following pagination to exhaustion.
 func (c *Client) SearchGitoids(ctx context.Context, vars SearchGitoidVariables) ([]string, error) {
-	const query = `query ($subjectDigests: [String!], $attestations: [String!], $collectionName: String!, $excludeGitoids: [String!]) {
+	const query = `query ($subjectDigests: [String!], $attestations: [String!], $collectionName: String!, $excludeGitoids: [String!], $first: Int, $after: Cursor) {
   dsses(
+    first: $first,
+    after: $after,
     where: {
       gitoidSha256NotIn: $excludeGitoids,
       hasStatementWith: {
@@ -403,19 +463,19 @@ func (c *Client) SearchGitoids(ctx context.Context, vars SearchGitoidVariables) 
         gitoidSha256
       }
     }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
   }
 }`
 
-	var response searchGitoidResponse
-	if err := c.graphqlQuery(ctx, query, vars, &response); err != nil {
-		return nil, err
-	}
-
-	gitoids := make([]string, 0, len(response.Dsses.Edges))
-	for _, edge := range response.Dsses.Edges {
-		gitoids = append(gitoids, edge.Node.Gitoid)
-	}
-	return gitoids, nil
+	return c.searchGitoidPages(ctx, query, func(p searchPage) any {
+		return struct {
+			SearchGitoidVariables
+			searchPage
+		}{vars, p}
+	})
 }
 
 // SearchGitoidsBySubjects queries Archivista's GraphQL API for envelope
@@ -423,8 +483,10 @@ func (c *Client) SearchGitoids(ctx context.Context, vars SearchGitoidVariables) 
 // predicate type or collection name. Used by bundle subject-graph walking
 // where the caller wants everything reachable from a starting subject.
 func (c *Client) SearchGitoidsBySubjects(ctx context.Context, subjectDigests, excludeGitoids []string) ([]string, error) {
-	const query = `query ($subjectDigests: [String!], $excludeGitoids: [String!]) {
+	const query = `query ($subjectDigests: [String!], $excludeGitoids: [String!], $first: Int, $after: Cursor) {
   dsses(
+    first: $first,
+    after: $after,
     where: {
       gitoidSha256NotIn: $excludeGitoids,
       hasStatementWith: {
@@ -441,27 +503,20 @@ func (c *Client) SearchGitoidsBySubjects(ctx context.Context, subjectDigests, ex
         gitoidSha256
       }
     }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
   }
 }`
 
-	vars := struct {
-		SubjectDigests []string `json:"subjectDigests"`
-		ExcludeGitoids []string `json:"excludeGitoids"`
-	}{
-		SubjectDigests: subjectDigests,
-		ExcludeGitoids: excludeGitoids,
-	}
-
-	var response searchGitoidResponse
-	if err := c.graphqlQuery(ctx, query, vars, &response); err != nil {
-		return nil, err
-	}
-
-	gitoids := make([]string, 0, len(response.Dsses.Edges))
-	for _, edge := range response.Dsses.Edges {
-		gitoids = append(gitoids, edge.Node.Gitoid)
-	}
-	return gitoids, nil
+	return c.searchGitoidPages(ctx, query, func(p searchPage) any {
+		return struct {
+			SubjectDigests []string `json:"subjectDigests"`
+			ExcludeGitoids []string `json:"excludeGitoids"`
+			searchPage
+		}{subjectDigests, excludeGitoids, p}
+	})
 }
 
 // SearchGitoidByPredicateVariables are the parameters for a gitoid search
@@ -479,8 +534,10 @@ type SearchGitoidByPredicateVariables struct {
 // gitoids whose statement predicateType is in the given list AND whose
 // subjects intersect subjectDigests. See issue #39.
 func (c *Client) SearchGitoidsByPredicate(ctx context.Context, vars SearchGitoidByPredicateVariables) ([]string, error) {
-	const query = `query ($predicateTypes: [String!]!, $subjectDigests: [String!], $excludeGitoids: [String!]) {
+	const query = `query ($predicateTypes: [String!]!, $subjectDigests: [String!], $excludeGitoids: [String!], $first: Int, $after: Cursor) {
   dsses(
+    first: $first,
+    after: $after,
     where: {
       gitoidSha256NotIn: $excludeGitoids,
       hasStatementWith: {
@@ -498,19 +555,19 @@ func (c *Client) SearchGitoidsByPredicate(ctx context.Context, vars SearchGitoid
         gitoidSha256
       }
     }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
   }
 }`
 
-	var response searchGitoidResponse
-	if err := c.graphqlQuery(ctx, query, vars, &response); err != nil {
-		return nil, err
-	}
-
-	gitoids := make([]string, 0, len(response.Dsses.Edges))
-	for _, edge := range response.Dsses.Edges {
-		gitoids = append(gitoids, edge.Node.Gitoid)
-	}
-	return gitoids, nil
+	return c.searchGitoidPages(ctx, query, func(p searchPage) any {
+		return struct {
+			SearchGitoidByPredicateVariables
+			searchPage
+		}{vars, p}
+	})
 }
 
 // ErrCredentialUnavailable marks a token-source failure as PERMANENT: the grant
@@ -668,6 +725,10 @@ type searchGitoidResponse struct {
 				Gitoid string `json:"gitoidSha256"`
 			} `json:"node"`
 		} `json:"edges"`
+		PageInfo struct {
+			HasNextPage bool    `json:"hasNextPage"`
+			EndCursor   *string `json:"endCursor"`
+		} `json:"pageInfo"`
 	} `json:"dsses"`
 }
 
