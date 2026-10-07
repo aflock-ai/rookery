@@ -102,7 +102,7 @@ The on-disk Go package name and the attestor's `Name()` aren't always identical.
 
 ## Available in rookery but not in the default `cilock` binary
 
-These attestors live in [`rookery/plugins/attestors/`](https://github.com/aflock-ai/rookery/tree/main/plugins/attestors) but are not registered in the default `cilock` binary (some are imported but not registered, others aren't imported at all). To include them, add the blank-import to `cilock/cmd/cilock/main.go` and rebuild — see [Build from source](../getting-started/installation#5-build-from-source):
+These attestors live in [`rookery/plugins/attestors/`](https://github.com/aflock-ai/rookery/tree/main/plugins/attestors) but are not registered in the default `cilock` binary (some are imported but not registered, others aren't imported at all). To include them, add the blank-import to `cilock/cmd/cilock/main.go` and rebuild — see [Build from source](../getting-started/installation#build-from-source):
 
 `sinkhole-flows`, `vsa`
 

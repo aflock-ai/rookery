@@ -51,7 +51,7 @@ jobs:
           if-no-files-found: error
 ```
 
-Adapted from [`cilock-action/examples/github/basic-command.yml`](https://github.com/aflock-ai/cilock-action/blob/main/examples/github/basic-command.yml). Pinning to an exact tag (`@v1.0.4`) is consistent with the SHA-pinning advice in [Layer 1 of the intro](../intro#layer-1-prevention-dont-run-untrusted-code), the floating-tag pattern is what the March 2026 Trivy attack exploited.
+Adapted from [`cilock-action/examples/github/basic-command.yml`](https://github.com/aflock-ai/cilock-action/blob/main/examples/github/basic-command.yml). This example uses a version tag for readability. A tag can move; for an immutable action reference, review and pin the full commit SHA, including for checkout and artifact-upload actions. See [GitHub's guidance](https://docs.github.com/en/actions/reference/security/secure-use#using-third-party-actions).
 
 :::caution why `enable-archivista: false`
 The action's default `enable-archivista: true` pushes attestations to `https://platform.testifysec.com/archivista`, which requires either a TestifySec API key or an OIDC token from an allowlisted org. Without those, the action exits with `archivista store returned 401: Invalid API credential`. The fix above keeps the attestation local, you can wire up a self-hosted Archivista or paid TestifySec credentials later, see [where to go next](#where-to-go-next).

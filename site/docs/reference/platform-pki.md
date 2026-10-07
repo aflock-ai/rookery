@@ -42,8 +42,7 @@ Because derivation is deterministic, every replica of the platform derives the
 other. The hosted platform runs three replicas behind one URL; you never see this,
 but it's why keyless signing is reliable under load.
 
-The practical consequence for you: **you never hard-code roots.** Your `cilock`
-client learns them from the platform.
+Choose an explicit verification trust posture. CI/lock can use operator-supplied roots, policy trust embedded in a particular release, or platform discovery with the applicable pinning rules. Discovery alone is not independent confirmation that a platform is the authority you intended.
 
 ## Discovery: where trust comes from
 
@@ -137,8 +136,7 @@ sequenceDiagram
 
 ## Verifying
 
-Once logged in, `cilock verify` needs **no trust flags** — it pulls the Fulcio roots
-and the policy-signer identity from the discovery document:
+With an appropriate platform session and trust configuration, `cilock verify` can derive policy-signer trust from discovery. Pinnable sessions retain the adopted trust pin; changed roots are refused until a verified rotation is explicitly accepted. A session that cannot retain a pin requires an explicit trust decision or supplied roots. Review the installed release and its configured trust posture before relying on defaults:
 
 ```bash
 cilock verify ./myapp -p policy.json --platform-url "$PLATFORM_URL" --enable-archivista

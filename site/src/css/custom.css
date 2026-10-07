@@ -1,16 +1,19 @@
+@font-face { font-family:'DM Sans';font-style:normal;font-weight:100 1000;font-display:swap;src:url('../../static/fonts/dm-sans-latin-wght-normal.woff2') format('woff2'); }
+@font-face { font-family:'DM Mono';font-style:normal;font-weight:400;font-display:swap;src:url('../../static/fonts/dm-mono-latin-400-normal.woff2') format('woff2'); }
+:root { --ifm-font-family-base:'DM Sans',sans-serif;--ifm-font-family-monospace:'DM Mono',monospace; }
 /**
  * cilock docs theme
- * Tweak these tokens to align with the aflock visual system.
+ * TestifySec brand type and restrained navy colors across product and docs.
  */
 
 :root {
-  --ifm-color-primary: #2e6cdf;
-  --ifm-color-primary-dark: #2961c9;
-  --ifm-color-primary-darker: #275cbe;
-  --ifm-color-primary-darkest: #204c9d;
-  --ifm-color-primary-light: #4881e3;
-  --ifm-color-primary-lighter: #5589e5;
-  --ifm-color-primary-lightest: #7ba4eb;
+  --ifm-color-primary: #000066;
+  --ifm-color-primary-dark: #00005c;
+  --ifm-color-primary-darker: #000057;
+  --ifm-color-primary-darkest: #000047;
+  --ifm-color-primary-light: #191975;
+  --ifm-color-primary-lighter: #333385;
+  --ifm-color-primary-lightest: #6666a3;
   --ifm-code-font-size: 95%;
   --docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
 }

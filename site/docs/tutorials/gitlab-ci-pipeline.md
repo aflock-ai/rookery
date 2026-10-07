@@ -204,7 +204,7 @@ For the full reference, see the [GitLab component reference](../reference/gitlab
 
 ## Differences from the GitHub Actions pipeline
 
-| | GitHub Action | GitLab template |
+| Capability | GitHub Action | GitLab template |
 |---|---|---|
 | Default attestations | `environment git github` | `environment git gitlab` |
 | Default `enable-sigstore` | `true` | `false` |

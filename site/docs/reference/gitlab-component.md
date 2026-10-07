@@ -56,7 +56,7 @@ This is how subsequent stages (e.g. a verify stage) can reference the GitOID or 
 
 ## Differences from the GitHub Action
 
-| | GitHub Action | GitLab template |
+| Capability | GitHub Action | GitLab template |
 |---|---|---|
 | Default attestations | `environment git github` | `environment git gitlab` |
 | Default `enable-sigstore` | `true` | `false` |

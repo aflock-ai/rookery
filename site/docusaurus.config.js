@@ -233,7 +233,7 @@ gtag('config', '${AW_ID}', { send_page_view: false });`,
 const config = {
   title: 'CI/lock',
   tagline:
-    'Signed evidence for every step in your software supply chain — build provenance, signed scan evidence, continuous compliance.',
+    'Enterprise attestation tooling built on the in-toto specification. Record the work. Prove what ran.',
   favicon: '/img/favicon.ico',
 
   url: 'https://cilock.dev',
@@ -342,7 +342,6 @@ const config = {
           srcDark: 'img/logo-dark.svg',
         },
         items: [
-          {to: '/intro', position: 'left', label: 'Intro'},
           {
             type: 'doc',
             docId: 'getting-started/installation',
@@ -351,28 +350,16 @@ const config = {
           },
           {
             type: 'doc',
-            docId: 'concepts/attestations',
-            position: 'left',
-            label: 'Concepts',
-          },
-          {
-            type: 'doc',
             docId: 'tools/index',
             position: 'left',
             label: 'Supported Tools',
           },
-          {to: '/blog', position: 'left', label: 'Blog'},
+          {href: 'https://testifysec.com/blog', position: 'left', label: 'Blog'},
           {
             type: 'doc',
             docId: 'reference/cli',
             position: 'left',
             label: 'Reference',
-          },
-          {
-            to: '/free',
-            position: 'right',
-            label: 'Start for free',
-            className: 'navbar-signup-cta',
           },
           {
             to: '/download',
@@ -381,9 +368,9 @@ const config = {
             className: 'navbar-download-cta',
           },
           {
-            href: 'https://aflock.ai',
+            href: 'https://testifysec.com/product',
             position: 'right',
-            label: 'aflock',
+            label: 'Platform',
           },
           {
             href: 'https://github.com/aflock-ai/rookery',
@@ -409,6 +396,9 @@ const config = {
           {
             title: 'Ecosystem',
             items: [
+              {label: 'TestifySec Platform', href: 'https://testifysec.com/product'},
+              {label: 'Pushgate', href: 'https://pushgate.dev/'},
+              {label: 'All documentation', href: 'https://testifysec.com/docs'},
               {label: 'aflock', href: 'https://aflock.ai'},
               {label: 'Rookery', href: 'https://github.com/aflock-ai/rookery'},
               {label: 'Witness', href: 'https://witness.dev'},

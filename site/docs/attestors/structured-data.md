@@ -83,5 +83,5 @@ See the constraint summary + reproduction recipe at [https://github.com/aflock-a
 ## See also
 
 - [Catalog row](../reference/attestor-catalog.md)
-- [Build from source](../getting-started/installation.md#5-build-from-source)
+- [Build from source](../getting-started/installation.md#build-from-source)
 - [`sarif`](./sarif.mdx), [`sbom`](./sbom.mdx) — typed equivalents

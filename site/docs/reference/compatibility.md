@@ -11,7 +11,7 @@ What CI/lock is built for, tested against, and known to interoperate with.
 
 ## Toolchain
 
-| | Version |
+| Component | Version or configuration |
 |---|---|
 | Go (build) | **1.26.0+** (per `go.mod`) |
 | Build flags | `CGO_ENABLED=0`, `GOWORK=off`, `-trimpath` |
@@ -31,7 +31,7 @@ macOS and Windows binaries are not OS code-signed (no Apple Developer ID or nota
 
 ## Container image
 
-| | |
+| Environment | Support |
 |---|---|
 | Registry | `ghcr.io/aflock-ai/cilock` |
 | Tags | `<version>` (current: `v1.1.0`) and `latest` |

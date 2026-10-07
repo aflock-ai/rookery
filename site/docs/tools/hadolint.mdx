@@ -34,7 +34,7 @@ This is the exact command exercised in [`tool-hadolint-sarif`](https://github.co
 
 That's a different shape from the `bash -c "cp scan.sarif scan-product.sarif"` antipattern other docs (and earlier drafts of this page) used:
 
-| | `sh -c 'hadolint ... > file.sarif'` | `bash -c 'cp scan.sarif scan-product.sarif'` |
+| Evidence property | `sh -c 'hadolint ... > file.sarif'` | `bash -c 'cp scan.sarif scan-product.sarif'` |
 |---|---|---|
 | Recorded `command-run` argv | `["sh","-c","hadolint --no-fail --format sarif Dockerfile > hadolint.sarif"]` | `["bash","-c","cp ..."]` |
 | Process the tracer/spy sees | real `hadolint` | `cp` |

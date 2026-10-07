@@ -195,7 +195,7 @@ Trace adds roughly **36% overhead** on an `npm install` workload (5.1s → 6.9s 
 
 ## With and without CI/lock
 
-| | Without CI/lock | With CI/lock |
+| Scenario | Without CI/lock | With CI/lock |
 |---|---|---|
 | Compromised action runs | CI executes blindly | Layer 1 policy denies, unpinned/unapproved ref |
 | Encoded credential stealer in stdout | Credentials exfiltrated; no record | Layer 2 `secretscan` recursive decoder catches the payload |

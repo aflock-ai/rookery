@@ -43,7 +43,7 @@ To override, pass `--attestations "<comma-separated names>"`.
 
 ## Default vs. builder opt-in
 
-Every attestor below ships in the default `cilock` binary unless its page says "**builder opt-in only**" — those exist in rookery but aren't blank-imported in the default. To add one, [build a custom CI/lock](../getting-started/installation.md#5-build-from-source).
+Every attestor below ships in the default `cilock` binary unless its page says "**builder opt-in only**" — those exist in rookery but aren't blank-imported in the default. To add one, [build a custom CI/lock](../getting-started/installation.md#build-from-source).
 
 ## Naming gotcha
 

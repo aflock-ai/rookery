@@ -22,7 +22,7 @@ The surrounding DSSE envelope adds:
 
 ## Logs vs. attestations
 
-| | Logs | Attestations |
+| Property | Logs | Attestations |
 |---|---|---|
 | **Format** | Free text | Structured (typed predicate) |
 | **Trust** | Whatever the CI UI shows you | Cryptographically signed |

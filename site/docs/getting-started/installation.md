@@ -145,7 +145,7 @@ permissions:
   contents: read
 
 steps:
-  - uses: aflock-ai/cilock-action@v1.0.4   # pin to an exact tag or commit SHA
+  - uses: aflock-ai/cilock-action@v1.0.4   # example tag; use a reviewed full commit SHA for an immutable reference
     with:
       step: build
       command: "go build -o myapp ./cmd/myapp"
@@ -155,7 +155,7 @@ steps:
       trace: "true"      # ptrace network egress + file ops; required by hermetic Rego gates
 ```
 
-`attestations` defaults to `environment git github` when omitted. Pinning the action to an exact tag (or, better, a 40-character commit SHA) is consistent with the SHA-pinning advice in [Layer 1 of the intro](../intro#layer-1-prevention-dont-run-untrusted-code), the float-tag pattern is what the March 2026 Trivy attack exploited.
+`attestations` defaults to `environment git github` when omitted. The example uses a version tag, which can move. For an immutable action reference, review and pin the full 40-character commit SHA. An exact version tag is not equivalent to a SHA pin. See [GitHub's guidance](https://docs.github.com/en/actions/reference/security/secure-use#using-third-party-actions).
 
 **Dogfood pattern:** CI/lock's own release pipeline uses this Action twice per platform — once to attest `go mod vendor` (step name `vendor-cilock-deps`), once to attest `go build -mod=vendor` (step name `release-build`). The policy declares `release-build.artifactsFrom = ["vendor-cilock-deps"]`, so the build's materials are checked digest-for-digest against the vendor's products. You can apply the same source→vendor→build chain pattern to your own releases — see [`.github/workflows/release.yml`](https://github.com/aflock-ai/rookery/blob/main/.github/workflows/release.yml) for the canonical example.
 
@@ -177,6 +177,11 @@ build:
 ```
 
 See the [GitLab component reference](../reference/gitlab-component) for the full variable list.
+
+<span id="4-build-from-source" />
+<span id="5-build-from-source" />
+
+<span id="build-from-source"></span>
 
 ## 5. Build from source
 

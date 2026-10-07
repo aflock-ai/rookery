@@ -53,8 +53,8 @@ function FromWitnessInner(): React.ReactElement {
         From the team that built Witness.
       </Heading>
       <p className={dl.lede}>
-        CI/lock is TestifySec's second in-toto implementation — it speaks the exact same
-        DSSE/in-toto envelopes, so either tool verifies the other's evidence.
+        CI/lock builds on the in-toto™ specification and the Witness attestation foundation.
+        Record your workflows with CI/lock, and check compatibility before migrating existing policies.
       </p>
 
       {/* Primary CTA — install command (fires the primary conversion on copy). */}
@@ -82,8 +82,8 @@ function FromWitnessInner(): React.ReactElement {
             onClick={() => fireConversion('githubOutbound', 5)}>
             View on GitHub →
           </a>
-          <Link className={styles.tertiaryCta} to="/download">
-            All download options
+          <Link className={styles.tertiaryCta} to="/ecosystem/witness">
+            Witness compatibility
           </Link>
         </div>
       </section>
@@ -96,9 +96,9 @@ function FromWitnessInner(): React.ReactElement {
               Same evidence
             </Heading>
             <p className={styles.blockBody}>
-              Drop-in compatible with what you already produce. CI/lock reads and writes the same
-              DSSE/in-toto envelopes as Witness, so there's no re-tooling your attestations — either
-              tool verifies the other's evidence.
+              CI/lock can verify legacy Witness collections. Witness does not verify all CI/lock-native
+              predicates. Check your evidence format, signer trust, and policy requirements in the
+              compatibility guide before switching tools.
             </p>
           </div>
 
@@ -109,9 +109,8 @@ function FromWitnessInner(): React.ReactElement {
             <p className={styles.blockBody}>
               CI/lock wraps any CI/CD command and records <em>what actually ran</em> — source, env,
               argv, and input/output digests. Keyless signing with Fulcio + an RFC&nbsp;3161 TSA,
-              verifiable fully offline. And a <strong>human-signed policy gate</strong> that blocks
-              the release until a human signs off — the thing cosign and the SLSA generators don't
-              give you.
+              verifiable fully offline. Use signed policies to check the evidence your workflow requires.
+              Pushgate applies requirements at the Git push boundary; the platform manages gates across repositories.
             </p>
           </div>
 
@@ -140,7 +139,7 @@ function FromWitnessInner(): React.ReactElement {
       {/* Trust / optics line — Witness is our donated CNCF project; CI/lock
           complements it, it does not replace it. */}
       <p className={styles.optics}>
-        Witness is our donated CNCF project — CI/lock complements it, it doesn't replace it.
+        Witness is an open-source project within in-toto. CI/lock adds TestifySec’s enterprise attestation tooling. See the Witness compatibility guide before migrating.
       </p>
     </div>
   );
@@ -150,19 +149,19 @@ export default function FromWitnessPage(): React.ReactElement {
   return (
     <Layout
       title="CI/lock — from the team that built Witness"
-      description="CI/lock is TestifySec's second in-toto implementation. It speaks the same DSSE/in-toto envelopes as Witness, so either tool verifies the other's evidence — plus keyless Fulcio + RFC 3161 signing and a human-signed release gate.">
+      description="Move from Witness to CI/lock with a clear view of evidence, policy, and signer compatibility.">
       <Head>
         <meta property="og:title" content="CI/lock — from the team that built Witness" />
         <meta
           property="og:description"
-          content="The same DSSE/in-toto envelopes as Witness, so either tool verifies the other's evidence — plus a human-signed release gate that cosign and SLSA generators don't give you."
+          content="Understand compatibility when moving from Witness to CI/lock, TestifySec’s enterprise attestation tooling."
         />
         <meta property="og:type" content="website" />
         <meta name="twitter:card" content="summary_large_image" />
         <meta name="twitter:title" content="CI/lock — from the team that built Witness" />
         <meta
           name="twitter:description"
-          content="The same DSSE/in-toto envelopes as Witness, so either tool verifies the other's evidence — plus a human-signed release gate."
+          content="Understand compatibility when moving from Witness to CI/lock, TestifySec’s enterprise attestation tooling."
         />
       </Head>
       <FromWitnessInner />
