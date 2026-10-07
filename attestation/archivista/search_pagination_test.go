@@ -191,6 +191,35 @@ func TestGitoidSearchRefusesUnprogressablePagination(t *testing.T) {
 	}
 }
 
+// A gateway timeout is a failure on every page, never an empty or partial
+// answer: an empty gitoid list reads to the verifier as "no evidence exists"
+// (testifysec/judge#11518, run 37609620602 — the 504 must stay an error).
+func TestGitoidSearchGatewayTimeoutIsAnErrorNotAnEmptyAnswer(t *testing.T) {
+	for _, failOn := range []int32{1, 2} {
+		t.Run(fmt.Sprintf("504 on page %d", failOn), func(t *testing.T) {
+			var requests atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if requests.Add(1) == failOn {
+					http.Error(w, "upstream request timeout", http.StatusGatewayTimeout)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(graphqlResponse{Data: json.RawMessage(
+					`{"dsses":{"edges":[{"node":{"gitoidSha256":"a"}}],"pageInfo":{"hasNextPage":true,"endCursor":"c1"}}}`)})
+			}))
+			defer srv.Close()
+
+			got, err := New(srv.URL).SearchGitoids(context.Background(), SearchGitoidVariables{
+				CollectionName: "image", SubjectDigests: []string{"abc"},
+			})
+			require.Error(t, err)
+			require.Nil(t, got, "a timed-out search must not hand back the pages read before it")
+			var statusErr *StatusError
+			require.ErrorAs(t, err, &statusErr)
+			require.Equal(t, http.StatusGatewayTimeout, statusErr.StatusCode)
+		})
+	}
+}
+
 // The pagination variables travel alongside the caller's own search variables
 // in one JSON object, and the query declares them.
 func TestGitoidSearchSendsPaginationVariables(t *testing.T) {
