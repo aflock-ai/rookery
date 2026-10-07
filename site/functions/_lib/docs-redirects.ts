@@ -7,7 +7,7 @@ const routes: Readonly<Record<string, string>> = documentationRoutes;
 export function documentationDestination(source: URL): URL | null {
   const path = source.pathname.replace(/\/index(?:\.html)?\/?$/, '')
     .replace(/\.html$/, '').replace(/\/$/, '');
-  const target = path === '/docs' ? '/docs' :
+  const target = path === '/docs' ? '/docs/cilock' :
     Object.hasOwn(routes, path) ? routes[path] : null;
   if (!target) return null;
 

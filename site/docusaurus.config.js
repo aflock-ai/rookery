@@ -343,7 +343,7 @@ const config = {
           srcDark: 'img/logo-dark.svg',
         },
         items: [
-          {href: 'https://testifysec.com/docs', position: 'left', label: 'Docs'},
+          {href: 'https://testifysec.com/docs/cilock', position: 'left', label: 'Docs'},
           {
             href: 'https://testifysec.com/docs/cilock/tools',
             position: 'left',

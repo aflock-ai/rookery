@@ -29,6 +29,11 @@ export function routeContext(property, pathname) {
   const match = path.match(/^\/solutions\/(agent-code|platform-teams|technical-controls|private-deployment)$/);
   let journey = match?.[1] || 'unassigned';
   let product = property === 'cilock.dev' ? 'cilock' : property === 'pushgate.dev' ? 'pushgate' : 'platform';
+  if (['testifysec.com', 'www.testifysec.com'].includes(property)) {
+    if (path === '/cilock' || path === '/docs/cilock' || path.startsWith('/docs/cilock/')) { product = 'cilock'; journey = 'developer-start'; }
+    if (path === '/pushgate' || path === '/docs/pushgate' || path.startsWith('/docs/pushgate/')) { product = 'pushgate'; journey = 'agent-code'; }
+    if (path === '/product' || path === '/docs/platform' || path.startsWith('/docs/platform/')) journey = 'platform-teams';
+  }
   if (journey === 'private-deployment') product = 'appliance';
   if (property === 'cilock.dev' && /^\/(install|getting-started|quickstart|free|download)/.test(path)) journey = 'developer-start';
   const page_type = path.startsWith('/blog/') ? 'article' : path === '/blog' ? 'blog' : path.includes('pricing') ? 'pricing' : path.includes('docs') || property === 'cilock.dev' && !['/', '/free', '/from-witness'].includes(path) ? 'docs' : match ? 'solution' : path === '/' ? 'home' : 'marketing';
