@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aflock-ai/rookery/attestation/archivista"
+	"github.com/aflock-ai/rookery/attestation/log"
 	"github.com/aflock-ai/rookery/cilock/internal/auth"
 	platformconfig "github.com/aflock-ai/rookery/cilock/internal/config"
 	"github.com/spf13/cobra"
@@ -144,6 +145,8 @@ func applyAgentKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL str
 		return nil, nil, fmt.Errorf("installing the agent signing token: %w", err)
 	}
 	principal := &agentPrincipal{spiffeID: id.SPIFFEID, uploadToken: id.UploadToken}
+	log.Infof("agent credential exchange (initial) at %s: upload token [%s]",
+		time.Now().UTC().Format(time.RFC3339), archivista.TokenSummary(id.UploadToken))
 
 	// CARRY THE PIN INTO THE REFRESH, or the run defeats its own pin.
 	//
@@ -173,6 +176,8 @@ func applyAgentKeylessFulcioToken(cmd *cobra.Command, platformURL, fulcioURL str
 		}
 		principal.spiffeID = fresh.SPIFFEID
 		principal.uploadToken = fresh.UploadToken
+		log.Infof("agent credential exchange (refresh) at %s: upload token [%s]",
+			time.Now().UTC().Format(time.RFC3339), archivista.TokenSummary(fresh.UploadToken))
 		return nil
 	}
 	return principal, refresh, nil

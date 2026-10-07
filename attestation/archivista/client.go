@@ -222,12 +222,19 @@ func (c *Client) storeOnce(ctx context.Context, body []byte) (string, error) {
 		return "", err
 	}
 
+	bearer := bearerOf(req)
+	log.Infof("archivista upload attempt: %d bytes, token fp=%s", len(body), tokenFingerprint(bearer))
+
 	resp, err := c.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("archivista store: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	if resp.StatusCode == http.StatusUnauthorized {
+		log.Warnf("archivista upload refused 401: %d bytes, token sent [%s], response headers [%s]",
+			len(body), TokenSummary(bearer), responseDiagnostics(resp.Header))
+	}
 	if resp.StatusCode != http.StatusOK {
 		return "", &StatusError{
 			Op:         "store",
