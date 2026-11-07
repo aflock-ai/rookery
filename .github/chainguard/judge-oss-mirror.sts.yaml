@@ -1,0 +1,15 @@
+# octo-sts trust policy (B1, docs/design/planned/ci-credential-brokers.md §4, #17400).
+# Rules: jade check octo-sts-policies. Callers: jade/cmd/check_octo_sts_policies_test.go.
+# Install as aflock-ai/rookery .github/chainguard/judge-oss-mirror.sts.yaml.
+# oss-mirror.yml mirror job, environment production. Replaces ROOKERY_MIRROR_KEY.
+issuer: https://token.actions.githubusercontent.com
+audience: sts.platform.testifysec.com
+subject: repo:testifysec/judge:environment:production
+claim_pattern:
+  repository_id: "648234269"
+  job_workflow_ref: testifysec/judge/\.github/workflows/oss-mirror\.yml@refs/heads/main
+  environment: production # jade:allow the GitHub Deployment Environment oss-mirror.yml runs in
+  event_name: workflow_dispatch
+permissions:
+  contents: write
+  workflows: write
