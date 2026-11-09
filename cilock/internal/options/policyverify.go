@@ -32,6 +32,17 @@ type PlatformEvaluation struct {
 	Reasons         []string `json:"reasons"`
 	VsaGitoidSha256 string   `json:"vsaGitoidSha256"`
 	CommitHash      string   `json:"commitHash"`
+	// StepResults is the door's per-step answer. Command is the cilock
+	// command that produces a failed step's evidence, set by the platform
+	// when it knows one; an older platform omits it.
+	StepResults map[string]PlatformStepResult `json:"stepResults"`
+}
+
+// PlatformStepResult is one policy step in the door's answer.
+type PlatformStepResult struct {
+	Passed  bool     `json:"passed"`
+	Reasons []string `json:"reasons,omitempty"`
+	Command string   `json:"command,omitempty"`
 }
 
 // Passed reports the terminal-success status. PENDING (evidence not arrived)
@@ -47,6 +58,7 @@ const verifyComplianceSyncMutation = `mutation CilockVerify($bindingID: ID!, $co
     reasons
     vsaGitoidSha256
     commitHash
+    stepResults
   }
 }`
 
