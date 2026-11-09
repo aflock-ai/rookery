@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -197,6 +198,8 @@ type platformVerdictJSON struct {
 	VsaGitoidSha256 string               `json:"vsaGitoidSha256,omitempty"`
 	EvaluationID    string               `json:"evaluationId,omitempty"`
 	CommitHash      string               `json:"commitHash,omitempty"`
+	NextSteps       []string             `json:"nextSteps,omitempty"`
+	DetailsURL      string               `json:"detailsUrl,omitempty"`
 	Bindings        []bindingVerdictJSON `json:"bindings"`
 }
 
@@ -213,10 +216,12 @@ type bindingVerdictJSON struct {
 	VsaGitoidSha256 string   `json:"vsaGitoidSha256,omitempty"`
 	EvaluationID    string   `json:"evaluationId,omitempty"`
 	CommitHash      string   `json:"commitHash,omitempty"`
+	NextSteps       []string `json:"nextSteps,omitempty"`
+	DetailsURL      string   `json:"detailsUrl,omitempty"`
 	Error           string   `json:"error,omitempty"`
 }
 
-func (o bindingOutcome) toJSON() bindingVerdictJSON {
+func (o bindingOutcome) toJSON(platformURL string) bindingVerdictJSON {
 	bj := bindingVerdictJSON{
 		BindingID:    o.Binding.BindingID,
 		Policy:       o.Binding.DefinitionName,
@@ -233,15 +238,17 @@ func (o bindingOutcome) toJSON() bindingVerdictJSON {
 		bj.VsaGitoidSha256 = o.Eval.VsaGitoidSha256
 		bj.EvaluationID = o.Eval.ID
 		bj.CommitHash = o.Eval.CommitHash
+		bj.NextSteps = nextSteps(o.Eval)
+		bj.DetailsURL = detailsURL(platformURL, o.Eval.VsaGitoidSha256)
 	}
 	return bj
 }
 
-func (g *platformGate) toJSON() platformVerdictJSON {
+func (g *platformGate) toJSON(platformURL string) platformVerdictJSON {
 	out := platformVerdictJSON{Passed: g.accepted(), Status: g.status()}
 	out.Bindings = make([]bindingVerdictJSON, 0, len(g.Outcomes))
 	for _, o := range g.Outcomes {
-		out.Bindings = append(out.Bindings, o.toJSON())
+		out.Bindings = append(out.Bindings, o.toJSON(platformURL))
 	}
 
 	if len(out.Bindings) == 1 {
@@ -251,6 +258,8 @@ func (g *platformGate) toJSON() platformVerdictJSON {
 		out.VsaGitoidSha256 = one.VsaGitoidSha256
 		out.EvaluationID = one.EvaluationID
 		out.CommitHash = one.CommitHash
+		out.NextSteps = one.NextSteps
+		out.DetailsURL = one.DetailsURL
 		if one.Error != "" {
 			out.Reasons = append(out.Reasons, "could not evaluate: "+one.Error)
 		}
@@ -258,6 +267,9 @@ func (g *platformGate) toJSON() platformVerdictJSON {
 	}
 	out.Reasons = aggregateReasons(out.Bindings)
 	out.CommitHash = sharedCommit(out.Bindings)
+	for _, b := range out.Bindings {
+		out.NextSteps = append(out.NextSteps, b.NextSteps...)
+	}
 	return out
 }
 
@@ -320,16 +332,16 @@ func bindingLabel(policy, bindingID string) string {
 // VSA is exactly what an auditor wants.
 func renderPlatformGate(vo options.VerifyOptions, g *platformGate, stdout, stderr io.Writer) error {
 	if vo.OutputJSON() {
-		if err := json.NewEncoder(stdout).Encode(g.toJSON()); err != nil {
+		if err := json.NewEncoder(stdout).Encode(g.toJSON(vo.PlatformURL)); err != nil {
 			return fmt.Errorf("encode platform verdict: %w", err)
 		}
 	} else {
-		writeHumanGate(stderr, g)
+		writeHumanGate(stderr, g, vo.PlatformURL)
 	}
 	return gateExitError(g)
 }
 
-func writeHumanGate(w io.Writer, g *platformGate) {
+func writeHumanGate(w io.Writer, g *platformGate, platformURL string) {
 	n := len(g.Outcomes)
 	for i, o := range g.Outcomes {
 		head := fmt.Sprintf("[%d/%d] policy %q release %s (binding %s):", i+1, n,
@@ -349,6 +361,12 @@ func writeHumanGate(w io.Writer, g *platformGate) {
 			for _, r := range o.Eval.Reasons {
 				_, _ = fmt.Fprintf(w, "  reason: %s\n", r)
 			}
+			for _, c := range nextSteps(o.Eval) {
+				_, _ = fmt.Fprintf(w, "  Run: %s\n", c)
+			}
+			if u := detailsURL(platformURL, o.Eval.VsaGitoidSha256); u != "" {
+				_, _ = fmt.Fprintf(w, "  Details: %s\n", u)
+			}
 		}
 	}
 	if g.accepted() {
@@ -356,6 +374,33 @@ func writeHumanGate(w io.Writer, g *platformGate) {
 		return
 	}
 	_, _ = fmt.Fprintf(w, "%s: %s\n", g.status(), gateSummary(g))
+}
+
+// nextSteps is the command for each step that did not pass, in step order,
+// as the platform named it. A step the platform gave no command for is left
+// out: a guessed command that produces the wrong evidence costs a CI cycle.
+func nextSteps(e *options.PlatformEvaluation) []string {
+	names := make([]string, 0, len(e.StepResults))
+	for name, s := range e.StepResults {
+		if !s.Passed && s.Command != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		out = append(out, e.StepResults[name].Command)
+	}
+	return out
+}
+
+// detailsURL is the signed verdict's page on the platform the caller asked,
+// or "" when either is unknown: a guessed host would mislead.
+func detailsURL(platformURL, vsaGitoid string) string {
+	if platformURL == "" || vsaGitoid == "" {
+		return ""
+	}
+	return strings.TrimRight(platformURL, "/") + "/attestations/" + vsaGitoid
 }
 
 func errOrMissing(o bindingOutcome) error {
